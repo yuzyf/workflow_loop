@@ -119,7 +119,7 @@ def cmd_align(args) -> None:
     """align 命令：加载场景对齐提示词，打印问题给 AI 拿去问用户。
     和 discuss 同构——都是"加载提示词 → 打印给 AI → AI 和用户交互"。"""
     # 加载场景对齐提示词
-    prompt = load_doc_content("Template_Repository/align/prompt.md")
+    prompt = load_doc_content("Template_Repository/align/align.md")
     # 打印提示词
     print("═══ 场景对齐 ═══\n")
     print(prompt)
