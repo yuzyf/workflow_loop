@@ -17,7 +17,7 @@ stages.py：所有具体环节策略实现。
         def artifact_paths(self): return ["review/<主题>.md"]
         def role_doc_path(self): return None
         def prompt_doc_path(self): return "Template_Repository/review_prompt.md"
-        def standard_doc_path(self): return "Standardized_Repository/review_规范.md"
+        def standard_doc_path(self): return "Standardized_Repository/review_standard.md"
         def instruction(self): return "评审阶段：产出 review/<主题>.md"
     然后在对应 scenario 的 stages() 列表里插入。完事，零改动 workflow.py。
 """
@@ -56,7 +56,7 @@ class SpecStage(StageStrategy):
 
     def standard_doc_path(self) -> str | None:
         # 规范词文档路径（相对 .workflow_loop/）
-        return "Standardized_Repository/spec_规范.md"
+        return "Standardized_Repository/spec_standard.md"
 
     def instruction(self) -> str:
         # 打印给 AI 的指令：这个 stage 干啥、产出什么
@@ -89,7 +89,7 @@ class SpikeStage(StageStrategy):
         return "Template_Repository/spike_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/spike_规范.md"
+        return "Standardized_Repository/spike_standard.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         """重写 code_validate：spike stage 的校验逻辑特殊。
@@ -140,7 +140,7 @@ class PlanStage(StageStrategy):
         return "Template_Repository/plan_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/plan_规范.md"
+        return "Standardized_Repository/plan_standard.md"
 
     def instruction(self) -> str:
         return "计划阶段：产出 plan/<主题>.md + plan/index.md（主题在这里定下，后面 stage 复用）"
@@ -164,10 +164,10 @@ class 验收Stage(StageStrategy):
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/验收_prompt.md"
+        return "Template_Repository/acceptance_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/验收_规范.md"
+        return "Standardized_Repository/acceptance_standard.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         """重写：验收 stage 检查 验收/ 目录下有 .md 文件。"""
@@ -206,7 +206,7 @@ class QaStage(StageStrategy):
         return "Template_Repository/qa_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/qa_规范.md"
+        return "Standardized_Repository/qa_standard.md"
 
     def instruction(self) -> str:
         return "测试阶段：产出 qa/<主题>.md + qa/index.md（和 plan/验收 同主题，测试检查清单）"
@@ -231,7 +231,7 @@ class ImplStage(StageStrategy):
         return "Template_Repository/impl_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/impl_规范.md"
+        return "Standardized_Repository/impl_standard.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         """重写：impl stage 检查 impl/ 目录下有 .md 文件。"""
@@ -264,10 +264,10 @@ class 生成代码设计Stage(StageStrategy):
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/生成代码设计_prompt.md"
+        return "Template_Repository/generate_code_design_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/生成代码设计_规范.md"
+        return "Standardized_Repository/generate_code_design_standard.md"
 
     def instruction(self) -> str:
         return "生成代码设计阶段：产出 spec/architecture_code_design.md（第一次写代码架构设计文档）"
@@ -292,10 +292,10 @@ class 代码设计Stage(StageStrategy):
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/代码设计_prompt.md"
+        return "Template_Repository/code_design_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/代码设计_规范.md"
+        return "Standardized_Repository/code_design_standard.md"
 
     def instruction(self) -> str:
         return "代码设计阶段：看代码 + 能跑就跑，产出 spec/architecture_code_design.md（从代码反推架构）"
@@ -315,10 +315,10 @@ class 更新代码设计Stage(StageStrategy):
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/更新代码设计_prompt.md"
+        return "Template_Repository/更新code_design_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/更新代码设计_规范.md"
+        return "Standardized_Repository/更新code_design_standard.md"
 
     def instruction(self) -> str:
         return "更新代码设计阶段：更新 spec/architecture_code_design.md（把实施过程中的新理解写回去）"
@@ -341,7 +341,7 @@ class ReproduceStage(StageStrategy):
         return "Template_Repository/reproduce_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/reproduce_规范.md"
+        return "Standardized_Repository/reproduce_standard.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         """重写：reproduce stage 检查 bug/ 目录下有 .md 文件。"""
@@ -374,7 +374,7 @@ class FixPlanStage(StageStrategy):
         return "Template_Repository/fix_plan_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/fix_plan_规范.md"
+        return "Standardized_Repository/fix_plan_standard.md"
 
     def instruction(self) -> str:
         return "修复计划阶段：和用户讨论修复方案，产出 plan/<主题>.md + 更新 plan/index.md（主题从 bug 反推）"
@@ -397,7 +397,7 @@ class RequirementStage(StageStrategy):
         return "Template_Repository/requirement_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/requirement_规范.md"
+        return "Standardized_Repository/requirement_standard.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         """重写：requirement stage 检查 spec/ 下有 requirement_ 开头的 .md 文件。"""
@@ -431,7 +431,7 @@ class ProductUpdateStage(StageStrategy):
         return "Template_Repository/product_update_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/product_update_规范.md"
+        return "Standardized_Repository/product_update_standard.md"
 
     def instruction(self) -> str:
         return "产品更新阶段：和用户讨论怎么改 product.md，更新 spec/product.md（不是新建，是修改）"
@@ -455,7 +455,7 @@ class FeatureSplitStage(StageStrategy):
         return "Template_Repository/feature_split_prompt.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/feature_split_规范.md"
+        return "Standardized_Repository/feature_split_standard.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         """重写：feature_split stage 检查 spec/ 下有新的功能 .md 文件。"""
