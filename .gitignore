@@ -1,0 +1,16 @@
+# Python 字节码缓存
+__pycache__/
+*.pyc
+
+# 运行时状态（不提交，每次 start 重新生成）
+.workflow_loop/state.json
+.workflow_loop/journal.jsonl
+
+# spike stage 的 throwaway 代码（不提交）
+.workflow_loop/spike_tmp/
+
+# PyCharm
+.idea/
+
+# macOS
+.DS_Store
