@@ -125,21 +125,8 @@ def cmd_align(args) -> None:
     print(prompt)
     # 写 journal
     journal_mod.append_entry(PROJECT_ROOT, "场景对齐", "workflow.py")
-    # 打印下一步：分两步问用户，因为项目状态和工作类型是两个不同维度
-    # 第 1 步问项目状态，第 2 步（仅已接入时）问工作类型
-    print_next_step(
-        "按以下决策树问用户，确定 entry 后调 `python3 workflow.py start --entry <entry>`\n"
-        "  第 1 步：项目状态\n"
-        "    问：'这是新空项目吗？'\n"
-        "    - 是 → start --entry new-project\n"
-        "    - 否 → 问：'项目接入 workflow_loop 了吗？'\n"
-        "      - 没接入 → start --entry existing-no-workflow\n"
-        "      - 已接入 → 进入第 2 步\n"
-        "  第 2 步：工作类型（仅项目已接入 workflow_loop 时）\n"
-        "    问：'这次要做什么？'\n"
-        "    - 修 bug → start --entry bugfix\n"
-        "    - 改产品设计/加需求 → start --entry product-mod"
-    )
+    # 打印下一步：只说下一步调啥命令，提示词内容（决策树）在 align.md 里
+    print_next_step("拿提示词里的决策树问用户，确定 entry 后调 `python3 workflow.py start --entry <entry>`")
 
 
 def cmd_start(args) -> None:
