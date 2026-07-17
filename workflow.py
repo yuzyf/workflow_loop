@@ -125,14 +125,20 @@ def cmd_align(args) -> None:
     print(prompt)
     # 写 journal
     journal_mod.append_entry(PROJECT_ROOT, "场景对齐", "workflow.py")
-    # 打印下一步：必须列出 entry 合法值 + 自然语言映射，让 AI 能把用户的回答翻译成 CLI 参数
+    # 打印下一步：分两步问用户，因为项目状态和工作类型是两个不同维度
+    # 第 1 步问项目状态，第 2 步（仅已接入时）问工作类型
     print_next_step(
-        "拿这些问题问用户，根据用户回答调 `python3 workflow.py start --entry <entry>`\n"
-        "  合法 entry 值（用户回答 → entry 参数）：\n"
-        "    new-project          ← 用户说'新项目/空项目/从零开始'\n"
-        "    existing-no-workflow ← 用户说'已有项目/有代码没接 workflow_loop'\n"
-        "    bugfix              ← 用户说'修 bug/出问题了/复现问题'\n"
-        "    product-mod          ← 用户说'改设计/加需求/改产品设计'"
+        "按以下决策树问用户，确定 entry 后调 `python3 workflow.py start --entry <entry>`\n"
+        "  第 1 步：项目状态\n"
+        "    问：'这是新空项目吗？'\n"
+        "    - 是 → start --entry new-project\n"
+        "    - 否 → 问：'项目接入 workflow_loop 了吗？'\n"
+        "      - 没接入 → start --entry existing-no-workflow\n"
+        "      - 已接入 → 进入第 2 步\n"
+        "  第 2 步：工作类型（仅项目已接入 workflow_loop 时）\n"
+        "    问：'这次要做什么？'\n"
+        "    - 修 bug → start --entry bugfix\n"
+        "    - 改产品设计/加需求 → start --entry product-mod"
     )
 
 
