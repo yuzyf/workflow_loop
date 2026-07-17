@@ -9,7 +9,7 @@ workflow.py：CLI 入口 + 命令 dispatch + stdout 驱动。
   overview / align / start / discuss / gate(--discuss-done/--confirmed) / status / done
 
 AI 调用流程：
-  agent.md（3 行）→ "先调 overview"
+  AGENT.md（3 行）→ "先调 overview"
   → overview stdout 末尾 → "下一步：调 align"
   → align stdout 末尾 → "下一步：问用户，调 start --entry <回答>"
   → start stdout 末尾 → "下一步：调 discuss"
@@ -125,8 +125,15 @@ def cmd_align(args) -> None:
     print(prompt)
     # 写 journal
     journal_mod.append_entry(PROJECT_ROOT, "场景对齐", "workflow.py")
-    # 打印下一步
-    print_next_step("拿这些问题问用户，用户回答后调 `python3 workflow.py start --entry <回答>`")
+    # 打印下一步：必须列出 entry 合法值 + 自然语言映射，让 AI 能把用户的回答翻译成 CLI 参数
+    print_next_step(
+        "拿这些问题问用户，根据用户回答调 `python3 workflow.py start --entry <entry>`\n"
+        "  合法 entry 值（用户回答 → entry 参数）：\n"
+        "    new-project          ← 用户说'新项目/空项目/从零开始'\n"
+        "    existing-no-workflow ← 用户说'已有项目/有代码没接 workflow_loop'\n"
+        "    bugfix              ← 用户说'修 bug/出问题了/复现问题'\n"
+        "    product-mod          ← 用户说'改设计/加需求/改产品设计'"
+    )
 
 
 def cmd_start(args) -> None:
