@@ -113,10 +113,10 @@ workflow.py 每次调用都是新进程，state 必须 persist 到磁盘。state
     },
     "spike": { "status": "pending", "artifact_paths": ["spec/spike_<临时名>.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} },
     "plan": { "status": "pending", "artifact_paths": ["plan/<主题>.md", "plan/index.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} },
-    "验收": { "status": "pending", "artifact_paths": ["验收/<主题>.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} },
+    "acceptance": { "status": "pending", "artifact_paths": ["acceptance/<主题>.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} },
     "qa": { "status": "pending", "artifact_paths": ["qa/<主题>.md", "qa/index.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} },
     "impl": { "status": "pending", "artifact_paths": ["impl/<主题>.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} },
-    "生成代码设计": { "status": "pending", "artifact_paths": ["spec/architecture_code_design.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} }
+    "generate_code_design": { "status": "pending", "artifact_paths": ["spec/architecture_code_design.md"], "artifact_produced_at": null, "gate": {"discussion_complete": false, "code_validated": false, "user_confirmed": false} }
   },
   "meta": {
     "hooks": {}
@@ -128,7 +128,7 @@ workflow.py 每次调用都是新进程，state 必须 persist 到磁盘。state
 - `workflow_id`：启动时生成，`YYYY-MM-DD-HHmm-<entry>` 格式
 - `entry`：入口策略名（`new_project` / `existing_no_workflow` / `bugfix` / `product_mod`）
 - `scenario`：场景策略名（穿刺中和 entry 相同）
-- `current_stage`：当前 stage 名（`spec` / `spike` / `plan` / `验收` / `qa` / `impl` / `生成代码设计` / `更新代码设计` / `代码设计` / `reproduce` / `fix_plan` / `requirement` / `product_update` / `feature_split` / `completed`）
+- `current_stage`：当前 stage 名（`spec` / `spike` / `plan` / `acceptance` / `qa` / `impl` / `generate_code_design` / `update_code_design` / `code_design` / `reproduce` / `fix_plan` / `requirement` / `product_update` / `feature_split` / `completed`）
 - `topic`：主题字符串，**在 plan/fix_plan stage 定下后写入**，之前的 stage 为 null
 - `started_at` / `completed_at`：ISO 8601 UTC
 - `stages.<name>`：每个 stage 的细粒度状态
@@ -313,12 +313,12 @@ class StageStrategy(ABC):
 - **spec**：`spec/product.md` + `spec/功能*.md`（功能数量由功能拆分决定）
 - **spike**：`spec/spike_<临时名>.md`（结论文档）+ throwaway 代码（进 spike_tmp/，on_advance 时删）
 - **plan**：`plan/<主题>.md` + `plan/index.md`（主题在这里定）
-- **验收**：`验收/<主题>.md`（复用主题）
+- **acceptance**：`acceptance/<主题>.md`（复用主题）
 - **qa**：`qa/<主题>.md` + `qa/index.md`（复用主题）
 - **impl**：`impl/<主题>.md`（复用主题）
-- **生成代码设计**：`spec/architecture_code_design.md`（第一次写）
-- **更新代码设计**：更新 `spec/architecture_code_design.md`（已存在，追加/修改）
-- **代码设计**（场景 B）：`spec/architecture_code_design.md`（从读代码反推）
+- **generate_code_design**：`spec/architecture_code_design.md`（第一次写）
+- **update_code_design**：更新 `spec/architecture_code_design.md`（已存在，追加/修改）
+- **code_design**（场景 B）：`spec/architecture_code_design.md`（从读代码反推）
 - **reproduce**：`bug/<YYYY-MM-DD_HHmm-<bug描述>>.md` + 更新 `bug/index.md`
 - **fix_plan**：`plan/<主题>.md` + 更新 `plan/index.md`（主题在这里定）
 - **requirement**：`spec/requirement_<临时名>.md`
@@ -345,8 +345,7 @@ class StageStrategy(ABC):
 
 | 当前命令 | stdout 末尾的"下一步" |
 |---|---|
-| `overview` | "调 `python3 workflow.py align` 对齐场景" |
-| `align` | "拿这些问题问用户，用户回答后调 `python3 workflow.py start --entry <回答>`" |
+| `start`（不带 --entry） | "根据用户提问确定场景，调 `python3 workflow.py start --entry <场景>`" |
 | `start --entry <entry>` | "调 `python3 workflow.py discuss` 加载第一个 stage 提示词" |
 | `discuss` | "用这个提示词和用户讨论。讨论完用户说'完毕'后，调 `python3 workflow.py gate <stage> --discuss-done`" |
 | `gate <stage> --discuss-done` | "写产出文件 `<artifact_paths>`。写完调 `python3 workflow.py gate <stage>`" |
@@ -361,11 +360,11 @@ class StageStrategy(ABC):
 
 | 层 | 形式 | 强制度 |
 |---|---|---|
-| agent.md（3 行） | 文字 | 弱：AI 可能不看，但不看就不知道入口 |
+| agent.md（2 行） | 文字 | 弱：AI 可能不看，但不看就不知道入口 |
 | workflow.py stdout 下一步 | 代码生成 | 中：AI 大概率跟着走，但不强制 |
 | workflow.py 门禁 | 代码强制 | 强：跳步直接报错，过不去 |
 
-**根本边界（无法突破）**：代码能强制"不调 gate 过不去"，但不能强制"AI 主动调命令"。最薄一层 agent.md 无法消除——AI 必须有入口知道"先调 overview"。
+**根本边界（无法突破）**：代码能强制"不调 gate 过不去"，但不能强制"AI 主动调命令"。最薄一层 agent.md 无法消除——AI 必须有入口知道"调 start"。
 
 ---
 
@@ -389,7 +388,7 @@ class ScenarioStrategy(ABC):
 
 ### 5.2 场景 A：新项目（new_project）
 
-**环节序列**：`spec → spike → plan → 验收 → qa → impl → 生成代码设计`
+**环节序列**：`spec → spike → plan → acceptance → qa → impl → generate_code_design`
 
 **详细流程**：
 
@@ -418,28 +417,28 @@ class ScenarioStrategy(ABC):
 | A.4.4 | plan | （AI 写 plan/<主题>.md + plan/index.md） | plan/<主题>.md + plan/index.md | **定主题** |
 | A.4.5 | plan | `gate plan` | 校验文件存在 | - |
 | A.4.6 | plan | （用户确认） | - | - |
-| A.4.7 | plan | `gate plan --confirmed` | 推进到验收 + 写 state.topic | - |
-| A.5 | 验收 | （同 7 步模式） | 验收/<主题>.md | 复用 |
+| A.4.7 | plan | `gate plan --confirmed` | 推进到acceptance + 写 state.topic | - |
+| A.5 | acceptance | （同 7 步模式） | acceptance/<主题>.md | 复用 |
 | A.6 | qa | （同 7 步模式） | qa/<主题>.md + qa/index.md | 复用 |
 | A.7 | impl | （同 7 步模式） | impl/<主题>.md | 复用 |
-| A.8 | 生成代码设计 | （同 7 步模式） | spec/architecture_code_design.md | - |
+| A.8 | generate_code_design | （同 7 步模式） | spec/architecture_code_design.md | - |
 | A.9 | （完成） | `done` | 标记 completed | - |
 
 **注意**：
 - spec stage 不定主题（spec 是整体设计，可能含多个主题）
 - plan stage 定主题（state.topic 写入）
-- 验收/qa/impl 复用主题做文件名
-- 生成代码设计 stage 不需要主题（它是文档级产出，不属于某个功能主题）
+- acceptance/qa/impl 复用主题做文件名
+- generate_code_design stage 不需要主题（它是文档级产出，不属于某个功能主题）
 
 ### 5.3 场景 B：存量无 workflow_loop（existing_no_workflow）
 
-**环节序列**：`代码设计 → spec → spike → plan → 验收 → qa → impl → 更新代码设计`
+**环节序列**：`code_design → spec → spike → plan → acceptance → qa → impl → update_code_design`
 
 **和场景 A 的差异**：
-- 开头多一个 `代码设计` stage（看代码 + 能跑就跑 + 反推 architecture_code_design.md）
+- 开头多一个 `code_design` stage（看代码 + 能跑就跑 + 反推 architecture_code_design.md）
 - spec stage 的 product.md 是根据 architecture_code_design.md 反推的（不是从零设计）
 - product.md 里有路由链接到 architecture_code_design.md（此时已存在）
-- 结尾是 `更新代码设计`（不是 `生成代码设计`，因为 architecture_code_design.md 在开头已生成）
+- 结尾是 `update_code_design`（不是 `generate_code_design`，因为 architecture_code_design.md 在开头已生成）
 
 **详细流程**：
 
@@ -448,24 +447,24 @@ class ScenarioStrategy(ABC):
 | B.0.1 | （进入前） | `overview` 打印文档概览 | 同 A |
 | B.0.2 | （进入前） | `align` 确定场景 | 用户说"已有项目没接 workflow_loop" |
 | B.1 | （启动） | `start --entry existing-no-workflow` | 初始化 state |
-| B.2.1 | 代码设计 | `discuss` 加载代码设计提示词 | 教 AI 怎么看代码 |
-| B.2.2 | 代码设计 | AI 看代码 + 能跑就跑 | 看目录结构、入口、依赖；运行看脉络 |
-| B.2.3-B.2.7 | 代码设计 | 7 步模式走完 | 产出 `spec/architecture_code_design.md` |
+| B.2.1 | code_design | `discuss` 加载code_design提示词 | 教 AI 怎么看代码 |
+| B.2.2 | code_design | AI 看代码 + 能跑就跑 | 看目录结构、入口、依赖；运行看脉络 |
+| B.2.3-B.2.7 | code_design | 7 步模式走完 | 产出 `spec/architecture_code_design.md` |
 | B.3 | spec | 7 步模式 | 产出 `spec/product.md` + `spec/功能*.md`（根据 architecture_code_design.md 反推，product.md 有路由链接） |
 | B.4 | spike | 同 A | |
 | B.5 | plan | 同 A，定主题 | |
-| B.6-B.8 | 验收/qa/impl | 复用主题 | |
-| B.9 | 更新代码设计 | 7 步模式，产出更新 `spec/architecture_code_design.md` | impl 后把新理解更新回去 |
+| B.6-B.8 | acceptance/qa/impl | 复用主题 | |
+| B.9 | update_code_design | 7 步模式，产出更新 `spec/architecture_code_design.md` | impl 后把新理解更新回去 |
 | B.10 | （完成） | `done` | |
 
 ### 5.4 场景 C：修 bug（bugfix，存量有 workflow_loop）
 
-**环节序列**：`reproduce → fix_plan → 验收 → qa → impl → 更新代码设计`
+**环节序列**：`reproduce → fix_plan → acceptance → qa → impl → update_code_design`
 
 **和场景 A 的差异**：
 - 没有 spec / spike / plan，换成 reproduce / fix_plan
 - 主题在 fix_plan 定（从 bug 反推）
-- 结尾是更新代码设计（不是生成代码设计）
+- 结尾是update_code_design（不是generate_code_design）
 - done 时沉淀 bug 到 bug/index.md
 
 **详细流程**：
@@ -477,21 +476,21 @@ class ScenarioStrategy(ABC):
 | C.1 | （启动） | `start --entry bugfix` | - |
 | C.2 | reproduce | 7 步模式 | `bug/<YYYY-MM-DD_HHmm-<bug描述>>.md` + 更新 `bug/index.md` | 无（用 bug 描述） |
 | C.3 | fix_plan | 7 步模式 | `plan/<主题>.md` + 更新 `plan/index.md` | **定主题**（从 bug 反推） |
-| C.4 | 验收 | 7 步模式 | `验收/<主题>.md` | 复用 |
+| C.4 | acceptance | 7 步模式 | `acceptance/<主题>.md` | 复用 |
 | C.5 | qa | 7 步模式 | `qa/<主题>.md` + 更新 `qa/index.md` | 复用 |
 | C.6 | impl | 7 步模式 | `impl/<主题>.md` | 复用 |
-| C.7 | 更新代码设计 | 7 步模式 | 更新 `spec/architecture_code_design.md` | - |
+| C.7 | update_code_design | 7 步模式 | 更新 `spec/architecture_code_design.md` | - |
 | C.8 | （完成） | `done` + 沉淀 bug 到 `bug/index.md` | - |
 
 ### 5.5 场景 D：改产品设计（product_mod，存量有 workflow_loop）
 
-**环节序列**：`requirement → product_update → feature_split → spike → plan → 验收 → qa → impl → 更新代码设计`
+**环节序列**：`requirement → product_update → feature_split → spike → plan → acceptance → qa → impl → update_code_design`
 
 **和场景 A 的差异**：
 - spec 拆成 requirement + product_update + feature_split 三步
 - spike 在 feature_split 之后
 - 主题在 plan 定
-- 结尾是更新代码设计
+- 结尾是update_code_design
 
 **详细流程**：
 
@@ -505,8 +504,8 @@ class ScenarioStrategy(ABC):
 | D.4 | feature_split | 7 步模式 | `spec/功能<新>.md`（可能多个） | 无 |
 | D.5 | spike | 同 A | `spec/spike_<临时名>.md` + throwaway 代码 | 无 |
 | D.6 | plan | 7 步模式 | `plan/<主题>.md` + `plan/index.md` | **定主题** |
-| D.7-D.9 | 验收/qa/impl | 复用主题 | |
-| D.10 | 更新代码设计 | 7 步模式 | 更新 `spec/architecture_code_design.md` | - |
+| D.7-D.9 | acceptance/qa/impl | 复用主题 | |
+| D.10 | update_code_design | 7 步模式 | 更新 `spec/architecture_code_design.md` | - |
 | D.11 | （完成） | `done` | - |
 
 ---
@@ -559,7 +558,7 @@ spike stage 和普通 stage 的 7 步模式略有不同，S2 和 S4 有额外动
 例：workflow 是做"用户认证系统"，则：
 ```
 plan/2026-07-16_1438-用户认证系统.md
-验收/2026-07-16_1438-用户认证系统.md
+acceptance/2026-07-16_1438-用户认证系统.md
 qa/2026-07-16_1438-用户认证系统.md
 impl/2026-07-16_1438-用户认证系统.md
 ```
@@ -571,7 +570,7 @@ impl/2026-07-16_1438-用户认证系统.md
 定主题的时机：plan/fix_plan 的 S4（写产出）时，AI 和用户讨论决定主题字符串，写入 `state.topic` 和文件名。
 
 ### 7.3 如何复用
-- plan/fix_plan 之后的 stage（验收/qa/impl）强制复用 `state.topic` 做文件名
+- plan/fix_plan 之后的 stage（acceptance/qa/impl）强制复用 `state.topic` 做文件名
 - 文件名格式：`<folder>/<YYYY-MM-DD_HHmm-<topic>>.md`
 - 日期时间用 workflow 启动时间（不是 stage 时间），保证整个 workflow 的文件名时间一致
 
@@ -584,7 +583,7 @@ plan 之前的 stage（spec/spike/reproduce/requirement/product_update/feature_s
 - feature_split：`spec/功能<新>.md`
 
 ### 7.5 不需要主题的 stage
-- 代码设计 / 更新代码设计 / 生成代码设计：产出 `spec/architecture_code_design.md`，是文档级产出，不属于某个功能主题
+- code_design / update_code_design / generate_code_design：产出 `spec/architecture_code_design.md`，是文档级产出，不属于某个功能主题
 - reproduce：用自己的 bug 描述做文件名
 
 ---
@@ -597,8 +596,8 @@ plan 之前的 stage（spec/spike/reproduce/requirement/product_update/feature_s
 ### 8.2 何时生成
 | 场景 | 何时生成 | stage 名 |
 |---|---|---|
-| A 新项目 | impl 之后 | `生成代码设计` stage（第一次写） |
-| B 存量接入 | 开头 | `代码设计` stage（从读+跑反推） |
+| A 新项目 | impl 之后 | `generate_code_design` stage（第一次写） |
+| B 存量接入 | 开头 | `code_design` stage（从读+跑反推） |
 | C bugfix | 已存在（之前生成过） | 无生成 stage |
 | D product_mod | 已存在 | 无生成 stage |
 
@@ -606,13 +605,13 @@ plan 之前的 stage（spec/spike/reproduce/requirement/product_update/feature_s
 | 场景 | 何时更新 | stage 名 |
 |---|---|---|
 | A 新项目 | 不更新（第一次生成就是最终版） | - |
-| B 存量接入 | impl 之后 | `更新代码设计` stage |
-| C bugfix | impl 之后 | `更新代码设计` stage |
-| D product_mod | impl 之后 | `更新代码设计` stage |
+| B 存量接入 | impl 之后 | `update_code_design` stage |
+| C bugfix | impl 之后 | `update_code_design` stage |
+| D product_mod | impl 之后 | `update_code_design` stage |
 
 ### 8.4 路由链接
-- `spec/product.md` 里始终有 markdown 链接 `[代码设计](./architecture_code_design.md)`
-- 场景 A：链接先指向不存在的文件，impl 后的 `生成代码设计` stage 才创建该文件
+- `spec/product.md` 里始终有 markdown 链接 `[code_design](./architecture_code_design.md)`
+- 场景 A：链接先指向不存在的文件，impl 后的 `generate_code_design` stage 才创建该文件
 - 场景 B/C/D：链接指向已存在的文件
 
 ### 8.5 内容结构（穿刺不强制，后面 Standardized_Repository 里定）
@@ -657,35 +656,32 @@ bug/
 
 > **设计约束**：每条命令的 stdout 末尾必须以 `───── 下一步：xxx ─────` 结尾（见第 4.6 节）。下面每条命令的"stdout 末尾"字段就是这个下一步。
 
-### 10.1 `overview`
-- **干啥**：打印文档概览（spec/plan/bug/qa/验收/impl 各是啥、文件命名规则、index.md 角色、architecture_code_design.md 角色）
-- **何时调**：进入工作流前，AI 给用户讲解
-- **stdout 内容**：结构化文本，AI 自己消化 + 转述给用户
-- **stdout 末尾**：`下一步：调 python3 workflow.py align 对齐场景`
-- **写 journal**：文档概览加载
+### 10.1 `start`（两种模式）
 
-### 10.2 `align`
-- **干啥**：加载场景对齐提示词，打印问题给 AI 拿去问用户
-- **何时调**：进入工作流前，对齐场景
-- **流程**：
-  1. py 加载 `Template_Repository/align_prompt.md`
-  2. 打印问题（"这是新空项目吗？有代码吗？要修 bug 吗？要改产品设计吗？"）
-  3. AI 拿问题问用户
-  4. 用户回答
-  5. AI 直接调 `start --entry <回答>`（不需要单独的 confirm 步骤）
-- **stdout 末尾**：`下一步：拿这些问题问用户，用户回答后调 python3 workflow.py start --entry <回答>`
-- **写 journal**：场景对齐
-- **注意**：`align` 和 `discuss` 同构——都是"加载提示词 → 打印给 AI → AI 和用户交互"。`align` 不带 `--confirm`，用户回答直接成为 `start --entry` 的参数。
+**模式 1：不带 `--entry`（替代原 align）**
+- **干啥**：打印合法场景值，让 AI 根据用户提问确定场景
+- **何时调**：用户提问后，AI 需要知道有哪些合法场景
+- **stdout 内容**：
+  ```
+  可选场景：
+    new-project          ← 新项目/空项目
+    existing-no-workflow ← 已有项目接入 workflow_loop
+    bugfix              ← 修 bug
+    product-mod          ← 加功能/改设计
+  ```
+- **stdout 末尾**：`下一步：根据用户提问确定场景，调 python3 workflow.py start --entry <场景>`
+- **写 journal**：无（纯只读提示）
 
-### 10.3 `start --entry <name>`
-- **干啥**：初始化 state、加载 scenario、打印路线图
-- **何时调**：场景确定后
+**模式 2：带 `--entry <场景>`（替代原 overview + start）**
+- **干啥**：初始化 state、加载 scenario、打印文档概览 + 路线图
+- **何时调**：AI 从用户提问确定场景后
 - **流程**：
   1. 实例化对应 ScenarioStrategy
   2. 调 `scenario.stages()` 拿 stage 列表
   3. 初始化 state.json（所有 stage pending）
-  4. 打印 `scenario.entry_instruction()`（路线图）
-  5. 写 journal：工作流启动 / 场景进入
+  4. 打印文档概览（原 overview 的内容：spec/plan/bug/qa/acceptance/impl 各是啥、命名规则）
+  5. 打印 `scenario.entry_instruction()`（路线图）
+  6. 写 journal：工作流启动 / 场景进入 / 文档概览加载
 - **entry 取值**：`new-project` / `existing-no-workflow` / `bugfix` / `product-mod`
 - **stdout 末尾**：`下一步：调 python3 workflow.py discuss 加载第一个 stage 提示词`
 
@@ -808,27 +804,28 @@ class ReviewStage(StageStrategy):
 
 ### 13.1 设计原则：压到最薄
 agent.md 只写**入口 + "跟着 stdout 走"**，不写完整流程。流程步骤由 workflow.py 的 stdout 驱动（第 4.6 节）。这样：
-- AI 不用记 8 条命令清单
+- AI 不用记命令清单
 - 流程改动只改 workflow.py 的 stdout 逻辑（代码），不用改 agent.md（文字）
-- agent.md 永远只有 3 行，不会随流程演进膨胀
+- agent.md 永远只有 2 行，不会随流程演进膨胀
 
-### 13.2 内容（3 行）
+### 13.2 内容（2 行）
 ```markdown
 # Agent 契约
 
-本项目由 workflow_loop 管理。先调 `python3 workflow.py overview`，
+本项目由 workflow_loop 管理。用户提出需求后，调 `python3 workflow.py start`，
 之后严格按每条命令 stdout 打印的"下一步"执行。
-不调代码就过不了下一阶段——门禁是关卡，不是唠叨。
 ```
 
 ### 13.3 AI 怎么用
-1. AI 读 agent.md，知道入口是 `python3 workflow.py overview`
-2. AI 调 `overview`，读 stdout 末尾的"下一步"
-3. AI 按"下一步"指令调下一条命令
-4. 循环：调命令 → 读 stdout → 按"下一步"调下一条
-5. 直到 `done` 的 stdout 说"工作流完成"
+1. AI 读 agent.md，知道入口是 `python3 workflow.py start`
+2. AI 调 `start`（不带 --entry），读 stdout 看合法场景值
+3. AI 从用户提问确定场景，调 `start --entry <场景>`
+4. 读 stdout 末尾的"下一步"
+5. 循环：调命令 → 读 stdout → 按"下一步"调下一条
+6. 直到 `done` 的 stdout 说"工作流完成"
 
 **AI 不需要记流程**——流程在 workflow.py 的 stdout 里，AI 只需"调命令 + 读下一步"。
+**AI 不需要记场景清单**——`start`（不带 --entry）会打印合法值。
 
 ### 13.4 根本边界（无法消除的）
 | 能强制 | 不能强制 |
@@ -837,7 +834,7 @@ agent.md 只写**入口 + "跟着 stdout 走"**，不写完整流程。流程步
 | 文件不存在就过不了 code_validate | AI 真去和用户讨论 |
 | gate 顺序错了报错 | AI 读 stdout 后真跟着走 |
 
-**最薄一层 agent.md 无法消除**——AI 必须有入口知道"先调 overview"。但这层只有 3 行，不是 8 条命令清单。剩下的全在代码里。
+**最薄一层 agent.md 无法消除**——AI 必须有入口知道"调 start"。但这层只有 2 行，不是命令清单。剩下的全在代码里。
 
 ---
 
@@ -856,9 +853,9 @@ agent.md 只写**入口 + "跟着 stdout 走"**，不写完整流程。流程步
 - [x] 主题规则：plan/fix_plan 定，后面复用（第 7 节）
 - [x] architecture_code_design.md 生成/更新规则（第 8 节）
 - [x] bug 册被动沉淀（第 9 节）
-- [x] 8 条 CLI 命令 + 每条 stdout 末尾的"下一步"（第 10 节）
+- [x] 5 条 CLI 命令（start 两种模式 + discuss + gate + status + done）+ 每条 stdout 末尾的"下一步"（第 10 节）
 - [x] 扩展点：stage/scenario/gate/on_advance/路由/hooks（第 11 节）
 - [x] 穿刺不做清单（第 12 节）
-- [x] agent.md 契约压到 3 行（第 13 节）
+- [x] agent.md 契约压到 2 行（第 13 节）
 
-**等待用户审查。审查通过后按第 2.4 节的文件夹结构写代码。**
+**等待用户审查。审查通过后改代码：删 align/overview 命令，合并进 start。**

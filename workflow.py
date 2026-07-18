@@ -9,7 +9,7 @@ workflow.py：CLI 入口 + 命令 dispatch + stdout 驱动。
   overview / align / start / discuss / gate(--discuss-done/--confirmed) / status / done
 
 AI 调用流程：
-  AGENT.md（3 行）→ "先调 overview"
+  AGENTS.md（3 行）→ "先调 overview"
   → overview stdout 末尾 → "下一步：调 align"
   → align stdout 末尾 → "下一步：问用户，调 start --entry <回答>"
   → start stdout 末尾 → "下一步：调 discuss"
@@ -102,37 +102,20 @@ def get_scenario_stages(state: state_mod.WorkflowState) -> list:
 
 # ── 命令 handler ─────────────────────────────────────────
 
-def cmd_overview(args) -> None:
-    """overview 命令：打印文档概览给 AI 和用户看。
-    AI 读完理解项目文档全貌，后面每个 stage 都基于这个理解工作。"""
-    # 从 role_doc 拿文档概览文本
-    overview = role_doc_mod.get_overview()
-    # 打印概览
-    print(overview)
-    # 写 journal
-    journal_mod.append_entry(PROJECT_ROOT, "文档概览加载", "workflow.py")
-    # 打印下一步
-    print_next_step("调 `python3 workflow.py align` 对齐场景")
-
-
-def cmd_align(args) -> None:
-    """align 命令：加载场景对齐提示词，打印问题给 AI 拿去问用户。
-    和 discuss 同构——都是"加载提示词 → 打印给 AI → AI 和用户交互"。"""
-    # 加载场景对齐提示词
-    prompt = load_doc_content("Template_Repository/align/align.md")
-    # 打印提示词
-    print("═══ 场景对齐 ═══\n")
-    print(prompt)
-    # 写 journal
-    journal_mod.append_entry(PROJECT_ROOT, "场景对齐", "workflow.py")
-    # 打印下一步：只说下一步调啥命令，提示词内容（决策树）在 align.md 里
-    print_next_step("拿提示词里的决策树问用户，确定 entry 后调 `python3 workflow.py start --entry <entry>`")
-
-
 def cmd_start(args) -> None:
-    """start 命令：初始化 state、加载 scenario、打印路线图。
-    entry 参数来自用户在 align 阶段的回答。"""
-    entry = args.entry  # 用户传入的 entry（如 new-project）
+    """start 命令：两种模式。
+    不带 --entry → 打印合法场景值（替代原 align）
+    带 --entry → 打印文档概览 + 初始化 + 路线图（替代原 overview + start）"""
+    # 模式 1：不带 --entry → 打印合法场景值
+    if args.entry is None:
+        print("可选场景：")
+        for key, cls in SCENARIO_REGISTRY.items():
+            scenario = cls()
+            print(f"  {key:20s} ← {scenario.entry_instruction()}")
+        print_next_step("根据用户提问确定场景，调 `python3 workflow.py start --entry <场景>`")
+        return
+    # 模式 2：带 --entry → 打印文档概览 + 初始化 + 路线图
+    entry = args.entry  # AI 传入的场景（如 new-project）
     # 查 SCENARIO_REGISTRY 找对应场景类
     scenario_cls = SCENARIO_REGISTRY.get(entry)
     # 场景没注册 → 报错
@@ -147,10 +130,12 @@ def cmd_start(args) -> None:
     if not stages:
         print(f"错误：场景 '{entry}' 还没实现，stages() 返回空。穿刺只支持 new-project。")
         sys.exit(1)
+    # 先打印文档概览（原 overview 的内容）
+    overview = role_doc_mod.get_overview()
+    print(overview)
     # 生成 workflow_id：YYYY-MM-DD-HHmm-<entry>
     now = state_mod.now_iso()
     # 从 ISO 时间戳提取日期+时间部分作为 id
-    # ISO 格式 "2026-07-16T14:38:00+00:00" → "2026-07-16-1438"
     date_part = now[:10]  # "2026-07-16"
     time_part = now[11:16]  # "1438"
     workflow_id = f"{date_part}-{time_part}-{entry.replace('-', '_')}"
@@ -185,8 +170,9 @@ def cmd_start(args) -> None:
                             workflow_id=workflow_id, entry=wf_state.entry)
     journal_mod.append_entry(PROJECT_ROOT, "场景进入", "workflow.py",
                              scenario=wf_state.scenario)
+    journal_mod.append_entry(PROJECT_ROOT, "文档概览加载", "workflow.py")
     # 打印路线图
-    print(f"═══ 工作流启动 ═══")
+    print(f"\n═══ 工作流启动 ═══")
     print(f"workflow_id: {workflow_id}")
     print(f"场景: {scenario.name()}")
     print(f"路线图: {scenario.entry_instruction()}")
@@ -479,17 +465,12 @@ def main() -> None:
     # 子命令（positional argument）
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
-    # overview 命令：无参数
-    subparsers.add_parser("overview", help="打印文档概览")
-
-    # align 命令：无参数
-    subparsers.add_parser("align", help="加载场景对齐提示词")
-
-    # start 命令：需要 --entry 参数
-    start_parser = subparsers.add_parser("start", help="启动工作流")
-    start_parser.add_argument("--entry", required=True,
+    # start 命令：--entry 可选（不带时打印合法值，带时初始化）
+    start_parser = subparsers.add_parser("start", help="启动工作流（不带 --entry 时打印合法场景）")
+    start_parser.add_argument("--entry",
                              choices=list(SCENARIO_REGISTRY.keys()),
-                             help="入口场景名")
+                             default=None,
+                             help="入口场景名（不带时打印合法值）")
 
     # discuss 命令：无参数（读 state.current_stage）
     subparsers.add_parser("discuss", help="加载当前 stage 提示词")
@@ -516,12 +497,8 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
-    # 分发到对应 handler
-    if args.command == "overview":
-        cmd_overview(args)
-    elif args.command == "align":
-        cmd_align(args)
-    elif args.command == "start":
+    # 分发到对应 handler（overview/align 已合并进 start）
+    if args.command == "start":
         cmd_start(args)
     elif args.command == "discuss":
         cmd_discuss(args)

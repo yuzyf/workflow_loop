@@ -2,7 +2,7 @@
 role_doc.py：文档概览硬编码模块。
 
 职责：
-- 给 AI 和用户讲解项目文档结构（spec/plan/bug/qa/验收/impl 各是啥、命名规则、index.md 角色）
+- 给 AI 和用户讲解项目文档结构（spec/plan/bug/qa/acceptance/impl 各是啥、命名规则、index.md 角色）
 - 给每个 stage 提供角色定义（该 stage AI 该干啥、产出什么文件）
 - 穿刺阶段：硬编码在代码里；后面可做成 .workflow_loop/roles/<stage>.md 配置文件
 
@@ -42,14 +42,14 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
   - YYYY-MM-DD_HHmm-主题.md：单个测试计划
   - index.md：测试索引表
 
-【验收/】验收标准
-  - YYYY-MM-DD_HHmm-主题.md：单个验收标准
+【acceptance/】acceptance criteria
+  - YYYY-MM-DD_HHmm-主题.md：单个 acceptance criteria
 
 【impl/】实施计划
   - YYYY-MM-DD_HHmm-主题.md：单个实施计划
 
 文件命名规则：YYYY-MM-DD_HHmm-<主题>.md
-主题在 plan stage 定下，验收/qa/impl 复用。"""
+主题在 plan stage 定下，acceptance/qa/impl 复用。"""
 
 
 # ── 每个 stage 的角色定义 ────────────────────────────────
@@ -73,33 +73,33 @@ ROLE_DOC_MAP = {
         "role": "计划制定者",
         "description": "和用户讨论怎么拆分计划。产出 plan/<主题>.md + plan/index.md。主题在这里定下，后面 stage 复用。",
     },
-    # 验收 stage：验收标准制定者角色，产出验收文档，复用 plan 的主题
-    "验收": {
-        "role": "验收标准制定者",
-        "description": "和用户讨论验收标准（什么算完成）。产出 验收/<主题>.md（和 plan 同主题）。",
+    # acceptance stage：acceptance criteria 制定者角色，产出acceptance文档，复用 plan 的主题
+    "acceptance": {
+        "role": "acceptance criteria 制定者",
+        "description": "和用户讨论acceptance criteria（什么算完成）。产出 acceptance/<主题>.md（和 plan 同主题）。",
     },
     # qa stage：测试计划制定者角色，产出测试清单，复用主题
     "qa": {
         "role": "测试计划制定者",
-        "description": "和用户讨论测试清单。产出 qa/<主题>.md + qa/index.md（和 plan/验收 同主题）。",
+        "description": "和用户讨论测试清单。产出 qa/<主题>.md + qa/index.md（和 plan/acceptance 同主题）。",
     },
     # impl stage：实施计划制定者角色，产出实施计划，复用主题
     "impl": {
         "role": "实施计划制定者",
-        "description": "和用户讨论实施方案。产出 impl/<主题>.md（和 plan/验收/qa 同主题）。",
+        "description": "和用户讨论实施方案。产出 impl/<主题>.md（和 plan/acceptance/qa 同主题）。",
     },
-    # 生成代码设计 stage：架构文档撰写者角色，第一次写 architecture_code_design.md
-    "生成代码设计": {
+    # generate_code_design stage：架构文档撰写者角色，第一次写 architecture_code_design.md
+    "generate_code_design": {
         "role": "架构文档撰写者",
         "description": "impl 完成后，第一次写 spec/architecture_code_design.md（代码架构设计文档）。product.md 里的路由链接这时才指向有效文件。",
     },
-    # 更新代码设计 stage：架构文档更新者角色，更新已存在的 architecture_code_design.md
-    "更新代码设计": {
+    # update_code_design stage：架构文档更新者角色，更新已存在的 architecture_code_design.md
+    "update_code_design": {
         "role": "架构文档更新者",
         "description": "impl 完成后，更新 spec/architecture_code_design.md，把实施过程中的新理解写回去。",
     },
-    # 代码设计 stage（场景 B 专用）：代码阅读者角色，看代码+跑项目，反推 architecture_code_design.md
-    "代码设计": {
+    # code_design stage（场景 B 专用）：代码阅读者角色，看代码+跑项目，反推 architecture_code_design.md
+    "code_design": {
         "role": "代码阅读者",
         "description": "看项目代码 + 能跑就跑。产出 spec/architecture_code_design.md（从代码反推架构）。",
     },

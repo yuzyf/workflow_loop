@@ -25,8 +25,8 @@ class ScenarioStrategy(ABC):
     """场景策略基类。
     
     一个场景 = 一条完整的 stage 序列 + 进入时给 AI 的指令。
-    例：新项目场景的 stage 序列 = [spec, spike, plan, 验收, qa, impl, 生成代码设计]
-        修 bug 场景的 stage 序列 = [reproduce, fix_plan, 验收, qa, impl, 更新代码设计]
+    例：新项目场景的 stage 序列 = [spec, spike, plan, acceptance, qa, impl, generate_code_design]
+        修 bug 场景的 stage 序列 = [reproduce, fix_plan, acceptance, qa, impl, update_code_design]
     
     加新场景 = 加一个子类，实现 name() / stages() / entry_instruction() 即可。
     这是扩展点之一，但用户说扩展性主轴是环节（stages），不是场景。
@@ -55,7 +55,7 @@ class ScenarioStrategy(ABC):
 class StageStrategy(ABC):
     """环节策略基类。
     
-    一个 stage = 一个工作流环节（spec / plan / 验收 / qa / impl / spike / 代码设计 / ...）。
+    一个 stage = 一个工作流环节（spec / plan / acceptance / qa / impl / spike / code_design / ...）。
     
     每个 stage 知道：
     - 自己叫什么（name）
@@ -72,7 +72,7 @@ class StageStrategy(ABC):
 
     @abstractmethod
     def name(self) -> str:
-        """环节名，存到 state.json 的 stage 标识。如 'spec' / 'plan' / '验收'。"""
+        """环节名，存到 state.json 的 stage 标识。如 'spec' / 'plan' / 'acceptance'。"""
         ...
 
     @abstractmethod

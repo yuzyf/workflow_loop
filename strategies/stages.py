@@ -5,10 +5,10 @@ stages.py：所有具体环节策略实现。
 
 分两组：
 1. 场景 A（新项目）的 7 个 stage：完全实现
-   - SpecStage / SpikeStage / PlanStage / 验收Stage / QaStage / ImplStage / 生成代码设计Stage
+   - SpecStage / SpikeStage / PlanStage / acceptanceStage / QaStage / ImplStage / generate_code_designStage
 
 2. 场景 B/C/D 的 7 个 stage：stub（留口子，后面填）
-   - 代码设计Stage / 更新代码设计Stage / ReproduceStage / FixPlanStage
+   - code_designStage / update_code_designStage / ReproduceStage / FixPlanStage
    - RequirementStage / ProductUpdateStage / FeatureSplitStage
 
 加新 stage 的姿势（用户说的"还可能加环节"）：
@@ -146,19 +146,19 @@ class PlanStage(StageStrategy):
         return "计划阶段：产出 plan/<主题>.md + plan/index.md（主题在这里定下，后面 stage 复用）"
 
 
-class 验收Stage(StageStrategy):
-    """验收标准阶段：产出 验收/<主题>.md。
+class acceptanceStage(StageStrategy):
+    """acceptance标准阶段：产出 acceptance/<主题>.md。
     
-    AI 和用户讨论验收标准（什么算完成）。
+    AI 和用户讨论acceptance标准（什么算完成）。
     复用 plan stage 定下的主题做文件名。"""
 
     def name(self) -> str:
-        return "验收"
+        return "acceptance"
 
     def artifact_paths(self) -> list[str]:
-        # 验收文档路径（主题复用 plan 的）
-        # 穿刺简化：只检查 验收/ 目录存在
-        return ["验收/"]
+        # acceptance文档路径（主题复用 plan 的）
+        # 穿刺简化：只检查 acceptance/ 目录存在
+        return ["acceptance/"]
 
     def role_doc_path(self) -> str | None:
         return None
@@ -170,21 +170,21 @@ class 验收Stage(StageStrategy):
         return "Standardized_Repository/qa/acceptance.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        """重写：验收 stage 检查 验收/ 目录下有 .md 文件。"""
-        # 验收目录路径
-        dir_path = os.path.join(project_root, "验收")
+        """重写：acceptance stage 检查 acceptance/ 目录下有 .md 文件。"""
+        # acceptance目录路径
+        dir_path = os.path.join(project_root, "acceptance")
         # 目录不存在 → 不通过
         if not os.path.exists(dir_path):
-            return (False, "验收/ 目录不存在")
+            return (False, "acceptance/ 目录不存在")
         # 检查有没有 .md 文件
         md_files = [f for f in os.listdir(dir_path) if f.endswith(".md")]
         # 没有 → 不通过
         if not md_files:
-            return (False, "验收/ 下没有 .md 文件")
-        return (True, f"验收文档存在: {md_files}")
+            return (False, "acceptance/ 下没有 .md 文件")
+        return (True, f"acceptance文档存在: {md_files}")
 
     def instruction(self) -> str:
-        return "验收阶段：产出 验收/<主题>.md（和 plan 同主题，定义什么算完成）"
+        return "acceptance阶段：产出 acceptance/<主题>.md（和 plan 同主题，定义什么算完成）"
 
 
 class QaStage(StageStrategy):
@@ -209,7 +209,7 @@ class QaStage(StageStrategy):
         return "Standardized_Repository/qa/qa.md"
 
     def instruction(self) -> str:
-        return "测试阶段：产出 qa/<主题>.md + qa/index.md（和 plan/验收 同主题，测试检查清单）"
+        return "测试阶段：产出 qa/<主题>.md + qa/index.md（和 plan/acceptance 同主题，测试检查清单）"
 
 
 class ImplStage(StageStrategy):
@@ -244,17 +244,17 @@ class ImplStage(StageStrategy):
         return (True, f"实施计划文档存在: {md_files}")
 
     def instruction(self) -> str:
-        return "实施阶段：产出 impl/<主题>.md（和 plan/验收/qa 同主题，实施方案）"
+        return "实施阶段：产出 impl/<主题>.md（和 plan/acceptance/qa 同主题，实施方案）"
 
 
-class 生成代码设计Stage(StageStrategy):
-    """生成代码设计阶段：产出 spec/architecture_code_design.md（第一次写）。
+class generate_code_designStage(StageStrategy):
+    """generate_code_design阶段：产出 spec/architecture_code_design.md（第一次写）。
     
     impl 完成后，第一次写代码架构设计文档。
     product.md 里的路由链接这时才指向有效文件。"""
 
     def name(self) -> str:
-        return "生成代码设计"
+        return "generate_code_design"
 
     def artifact_paths(self) -> list[str]:
         # architecture_code_design.md 是第一次生成
@@ -270,7 +270,7 @@ class 生成代码设计Stage(StageStrategy):
         return "Standardized_Repository/code_design/generate_code_design.md"
 
     def instruction(self) -> str:
-        return "生成代码设计阶段：产出 spec/architecture_code_design.md（第一次写代码架构设计文档）"
+        return "generate_code_design阶段：产出 spec/architecture_code_design.md（第一次写代码架构设计文档）"
 
 
 # ════════════════════════════════════════════════════════
@@ -278,12 +278,12 @@ class 生成代码设计Stage(StageStrategy):
 # 这些 stage 的 stages() 列表在对应 scenario 里返回 []，后面实现时填上
 # ════════════════════════════════════════════════════════
 
-class 代码设计Stage(StageStrategy):
-    """代码设计阶段（场景 B 专用）：看代码+跑项目，反推 architecture_code_design.md。
+class code_designStage(StageStrategy):
+    """code_design阶段（场景 B 专用）：看代码+跑项目，反推 architecture_code_design.md。
     TODO: 后面实现具体的看代码/跑项目逻辑。"""
 
     def name(self) -> str:
-        return "代码设计"
+        return "code_design"
 
     def artifact_paths(self) -> list[str]:
         return ["spec/architecture_code_design.md"]
@@ -298,15 +298,15 @@ class 代码设计Stage(StageStrategy):
         return "Standardized_Repository/code_design/code_design.md"
 
     def instruction(self) -> str:
-        return "代码设计阶段：看代码 + 能跑就跑，产出 spec/architecture_code_design.md（从代码反推架构）"
+        return "code_design阶段：看代码 + 能跑就跑，产出 spec/architecture_code_design.md（从代码反推架构）"
 
 
-class 更新代码设计Stage(StageStrategy):
-    """更新代码设计阶段（场景 B/C/D）：impl 后更新 architecture_code_design.md。
+class update_code_designStage(StageStrategy):
+    """update_code_design阶段（场景 B/C/D）：impl 后更新 architecture_code_design.md。
     TODO: 后面实现具体的更新逻辑。"""
 
     def name(self) -> str:
-        return "更新代码设计"
+        return "update_code_design"
 
     def artifact_paths(self) -> list[str]:
         return ["spec/architecture_code_design.md"]
@@ -321,7 +321,7 @@ class 更新代码设计Stage(StageStrategy):
         return "Standardized_Repository/code_design/update_code_design.md"
 
     def instruction(self) -> str:
-        return "更新代码设计阶段：更新 spec/architecture_code_design.md（把实施过程中的新理解写回去）"
+        return "update_code_design阶段：更新 spec/architecture_code_design.md（把实施过程中的新理解写回去）"
 
 
 class ReproduceStage(StageStrategy):

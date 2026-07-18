@@ -41,7 +41,7 @@ class WorkflowState:
     workflow_id: str                              # 启动时生成，格式 YYYY-MM-DD-HHmm-<entry>
     entry: str                                    # 入口策略名（new_project / bugfix 等）
     scenario: str                                 # 场景策略名（穿刺中和 entry 相同）
-    current_stage: str                            # 当前 stage 名（spec / plan / 验收 / qa / impl / ... / completed）
+    current_stage: str                            # 当前 stage 名（spec / plan / acceptance / qa / impl / ... / completed）
     started_at: str                               # 启动时间 ISO 8601 UTC
     completed_at: str | None = None              # 完成时间，未完成时为 None
     topic: str | None = None                     # 主题字符串，plan/fix_plan stage 定下后写入
