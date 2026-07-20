@@ -9,7 +9,7 @@
 _Avoid_: Session, job, task, 场景实例
 
 **Project Asset State** (项目资产状态):
-开工时由代码探测（必要时再确认）得到的事实状态，用来和 Work Intent 一起生成 Stage Path。主信号是当前项目是否已经安装 Workflow Loop；产品说明、架构文档等是安装之后的缺口信号，不是互斥“项目身份”。
+开工时由代码读取的事实状态，用来和 Work Intent 一起生成 Stage Path。日常开工的主信号是 `state.json` 中是否存在 active Run，以及产品说明、架构文档等资产是否存在。项目安装是官方安装脚本负责收敛的硬前置，不再作为用户提问后的正常分流。
 _Avoid_: Scenario, entry, 项目类型, maturity alone
 
 **Workflow Loop Project Installation** (项目安装状态):
@@ -26,24 +26,25 @@ _Avoid_: greenfield（那是意图，不是接入状态）
 
 
 **Installation Prerequisite** (安装硬前置):
-未安装项目不能初始化带意图的 Workflow Run。必须先由官方安装脚本完成当前项目安装，使项目根下存在完整 `.workflow_loop/`，然后才能 `start --intent`。若项目已有代理契约且用户拒绝覆盖，则取消整个安装，项目保持未安装。项目安装不是三种工作意图之一，也不是旧四场景里的可选项。
+未安装项目不能初始化带意图的 Workflow Run。必须先由官方安装脚本完成当前项目安装，使项目根下存在完整 `.workflow_loop/`，然后才能 `start --intent`。项目安装不是三种工作意图之一，也不是旧四场景里的可选项。全局 CLI 内部仍须把“找不到完整 `.workflow_loop/` 与安装版本标记”作为异常保护并立即停止，但不把它画成日常开工的正常业务分支。
 _Avoid_: 在 start --intent 里静默安装并直接开跑；把未安装当成与修 bug 并列的菜单项
 
 
 **Official Install Command** (官方安装命令):
 用户先进入目标项目根目录，只执行一条官方终端安装脚本命令（例如 `curl -fsSL <安装地址>/install.sh | bash`，发布地址待实现时确定）。该脚本在一次运行里完成两件事：电脑尚无 `workflow` 时安装全局命令；随后安装当前项目。面向用户不再提供 `workflow attach` 第二步。
 
-安装脚本必须在任何写操作前，先打印当前目录的绝对路径，以及将检查或修改的 `AGENTS.md` / `AGENT.md` 和 `.workflow_loop/`，在终端等待用户确认并处理代理契约选择。只要用户在任一处取消，整个安装立即结束：不安装全局 `workflow`、不修改代理契约、不创建 `.workflow_loop/`。所有确认通过后才开始全局命令安装和项目文件写入。
+安装脚本必须在任何写操作前，先打印当前目录的绝对路径，以及将检查或修改的 `AGENTS.md` 和 `.workflow_loop/`，在终端只等待用户确认项目目录。用户取消时，整个安装立即结束：不安装全局 `workflow`、不修改代理契约、不创建 `.workflow_loop/`。目录确认通过后不再询问代理契约冲突，未安装项目直接新建或覆盖 `AGENTS.md`，然后完成全局命令安装和项目文件写入。
 
 安装时严格把当前目录当作项目根，不自动向上猜 `.git`；目录不对时用户取消、切到正确目录后重跑。安装完成后的日常 `workflow` 命令才从当前目录向上查找 `.workflow_loop/`。
 
 **瘦骨架（仅这些）**：
 1. 创建 `.workflow_loop/`
 2. 复制系统默认 `Template_Repository` 与 `Standardized_Repository` 进项目 `.workflow_loop/`
-3. 按 Agent Contract 规则新建或经用户明确同意后覆盖薄契约（默认文件名 **`AGENTS.md`**；检测同时认 `AGENT.md`）
+3. 新建或直接覆盖薄契约，文件名固定为 **`AGENTS.md`**
 4. 写入很小的安装版本标记
+5. 创建 `.workflow_loop/project.json`，初始写入 `project_design_initialized=false`，用于记录项目级设计架构初始化状态
 **明确不做**：不创建 `state.json`（那是 `start --intent`）；不预建空的项目根 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/`（首次写产物时再建）；不下发 role 说明文件（角色说明暂时留在代码/`role_doc`，与提示词仓库分离）。安装成功后才允许 `start --intent`。
-_Avoid_: 要求目标项目里先有 workflow.py, 全局命令安装与项目安装要求用户执行两条命令, 安装时猜错项目根, start 时静默安装, 把安装做成带三道闸的正式 Stage, 安装时创建 state.json, 静默覆盖 AGENT.md, 预建空产物目录, 下发 role 文档仓库
+_Avoid_: 要求目标项目里先有 workflow.py, 全局命令安装与项目安装要求用户执行两条命令, 安装时猜错项目根, start 时静默安装, 把安装做成带三道闸的正式 Stage, 安装时创建 state.json, 使用非 AGENTS.md 的契约文件名, 预建空产物目录, 下发 role 文档仓库
 
 
 **Template Seeding** (模板与规范下发):
@@ -52,13 +53,12 @@ _Avoid_: 要求目标项目里先有 workflow.py, 全局命令安装与项目安
 清场从不删除项目内两套仓库；系统升级默认不覆盖项目已改内容。
 _Avoid_: 安装只建空模板目录, 运行时只读系统目录导致项目无法定制, 清场删掉模板/规范仓库, 全局 CLI 从本机 spike 源码树读模板, 仅主目录松散模板无包装内资源
 **Agent Contract File** (代理契约文件):
-项目根的代理契约。**检测**：`AGENTS.md` 与 `AGENT.md` 任一存在即视为「已有契约」。**新建默认文件名：`AGENTS.md`**（不用 `AGENT.md` 作默认新建名）。
+项目根的代理契约，文件名只使用 **`AGENTS.md`**。
 安装策略：
-- 若无任一代理契约：安装程序写入最小 workflow 薄契约到 **`AGENTS.md`** 并完成安装
-- 若已有任一：安装程序在写任何文件前，于终端直接让用户选择「覆盖并继续安装」或「取消安装」；同意后才覆盖并完成安装，拒绝则不写 `AGENTS.md`、不写 `.workflow_loop/`，整个项目保持未安装
-- **覆盖写入目标**：写入/覆盖为 **`AGENTS.md`**。若项目里还存在旧的 `AGENT.md`，stdout 提示可删除以免双份漂移（穿刺可不强制自动删旧名）
-- 不自动合并原契约，不提供「不改契约却半安装」；安装脚本由用户直接在终端执行，因此允许并要求阻塞等待该次选择
-_Avoid_: 静默覆盖契约, 自动合并契约, 已有契约时仍半安装, 让后续智能体代替安装程序询问, 默认新建 AGENT.md, 长期维护 AGENTS.md 与 AGENT.md 双份正文
+- 当前项目未安装时：无论 `AGENTS.md` 是否存在，安装程序都写入固定的最小 workflow 薄契约；存在则直接整份覆盖，不询问、不合并、不备份
+- 当前项目已有完整骨架和有效安装版本标记时：按 Repeat Installation 直接退出，保持零修改，不覆盖项目已有 `AGENTS.md`
+- 安装开始时仍须先让用户确认当前目录；直接覆盖只发生在目录已经确认正确之后
+_Avoid_: 自动合并契约, 目录未确认就写入, 使用非 AGENTS.md 的契约文件名, 长期维护双份契约正文, 重复安装重写 AGENTS.md
 
 **Repeat Installation** (重复安装):
 若当前项目已有完整 `.workflow_loop/` 和有效安装版本标记，安装脚本判定该项目已经安装，直接退出且不修改任何文件：不覆盖 `AGENTS.md`，不重新复制模板和规范，不重建运行状态。安装输出只说明「当前项目已经安装，未修改任何文件」，不要求用户手动执行 `workflow start`。
@@ -105,6 +105,10 @@ _Avoid_: greenfield, new-project（旧场景名，易与是否接入混淆）
 在已有产品上修改设计或增加功能的工作意图。
 _Avoid_: product-mod（旧场景名）, feature request alone
 
+**Project Design Initialized** (项目设计架构已初始化):
+项目级持久事实，记录在 `.workflow_loop/project.json` 的 `project_design_initialized` 字段中，不放进会被新 Run 覆盖的 `state.json`。安装时初始为 `false`。首次处理已有代码项目时，`product_change` / `bugfix` 共享前置 `project_design_init` Stage；它根据代码建立 `spec/product.md`、多个 `spec/功能<名>.md` 与 `spec/architecture_code_design.md`，三类产物通过门禁并由用户确认后才写为 `true`。若在该 Stage 完成前作废，字段保持 `false`。`from_scratch` 不走该前置 Stage，但在 `spec` 与初步 `code_design` 均确认完成后同样写为 `true`。
+_Avoid_: 用架构文件是否存在代替初始化状态, 把字段放进单轮 state.json, 只生成架构文档就视为项目设计已初始化, 安装时直接写 true
+
 **Bugfix Intent** (修 bug):
 定位并修复一个具体缺陷的工作意图。
 _Avoid_: bugfix scenario（旧四选一场景）
@@ -114,13 +118,13 @@ _Avoid_: bugfix scenario（旧四选一场景）
 _Avoid_: Scenario stages, pipeline template（若暗示四条平行流水线）
 
 **Stage Path Composition** (路径拼法):
-- 未安装：必须先在项目根执行官方安装脚本；安装程序处理代理契约选择，拒绝覆盖则取消整个安装
-- **from_scratch（从零做）**：先清场（删除旧设计/过程产物；保留规范与模板仓库）→ `spec` → `code_design`（初步，不可因旧文件跳过）→ `spike`（可选）→ `plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细落地，强制；与其它意图末环同名）
-- **product_change（改产品）**：（无架构文件则先 `code_design` 初步；有则跳过反推）→ `requirement` → `product_update` → `feature_split` → `revise_code_design`（设计期：按新设计改架构图）→ `spike`（可选）→ `plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细落地，强制）
-- **bugfix（修 bug）**：（无架构文件则先 `code_design` 初步；有则跳过反推）→ `reproduce` → `fix_plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细强制；无结构变化须在该 stage 显式确认，不可省略）
-- 已有架构文件：仅改产品/修 bug 跳过前段 `code_design`；从零做先清场再强制初步；任何意图不得跳过末段详细架构 stage
+- 未安装：必须先在项目根执行官方安装脚本；日常 CLI 只做异常保护，不在 `start` 状态检查中提供安装分支
+- **from_scratch（从零做）**：先清场（删除旧设计/过程产物；保留规范与模板仓库）→ `spec`（产品设计 + 功能拆分）→ `code_design`（初步，不可因旧文件跳过）→ `spike`（可选）→ `plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细落地，强制；与其它意图末环同名）
+- **product_change（改产品）**：若 `project_design_initialized=false`，先走 `project_design_init`；之后统一走 `spec`（重新设计产品 + 功能拆分）→ `revise_code_design`（设计期：按新设计改架构图）→ `spike`（可选）→ `plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细落地，强制）
+- **bugfix（修 bug）**：若 `project_design_initialized=false`，先走 `project_design_init`；之后走 `reproduce` → `fix_plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细强制；无结构变化须在该 stage 显式确认，不可省略）
+- `project_design_initialized=true`：改产品/修 bug 跳过共享初始化阶段；文件是否存在不能单独决定跳过。任何意图不得跳过末段详细架构 Stage
 - 共享后半截：`plan` → `acceptance` → `qa` → `impl` → 详细架构收尾
-_Avoid_: 修 bug 可无架构文档, 仅末尾才第一次写架构, 旧四场景平行流水线, 改产品合并掉 requirement 三步（当前不采用）
+_Avoid_: 修 bug 可无设计基线, 仅末尾才第一次写架构, 旧四场景平行流水线, 改产品保留 requirement/product_update/feature_split 三段式流程
 
 **Architecture Document** (架构文档):
 固定产物 `spec/architecture_code_design.md`（code_design）。已经安装 Workflow Loop 并进入正式开发路径的项目，必须有该文档；不是可有可无的附件。
@@ -128,14 +132,14 @@ _Avoid_: 可长期缺失的架构说明, 仅口头架构
 
 **Architecture Doc Phases** (架构文档双阶段):
 同一份架构文档的两种完成度，不是两个无关文件：
-1. **初步架构**（前期设计）：路径前段产出或补齐，服务计划与实施前的共同理解。从零做时顺序固定为**先产品说明、后初步架构**（先定做什么，再定怎么搭）；有代码可读时从代码反推补齐。
+1. **初步架构**（前期设计）：路径前段产出或补齐，服务计划与实施前的共同理解。从零做时顺序固定为**先产品设计与功能拆分、后初步架构**（先定做什么，再定怎么搭）；首次接入已有代码项目时由 `project_design_init` 与产品、功能基线一起从代码反推建立。
 2. **详细架构**（代码改完后）：impl 之后强制更新/写全，反映落地后的真实结构
-Stage 命名：前段初步一律 `code_design`；改产品设计期 `revise_code_design`；**所有意图** impl 后详细收尾一律 `update_code_design`。废弃 `generate_code_design`（初步阶段已可能创建同文件，末环不是“首次生成”语义）。
+Stage 命名：从零做的前段初步架构为 `code_design`；存量项目首次初始化为 `project_design_init`；改产品设计期为 `revise_code_design`；**所有意图** impl 后详细收尾一律 `update_code_design`。废弃 `generate_code_design`（初步阶段已可能创建同文件，末环不是“首次生成”语义）。
 _Avoid_: 只在 impl 后才第一次写架构, 有初步无详细收尾, 有详细却声称前期不需要图
 
-**Existing Architecture Skip** (已有架构则跳过反推):
-仅对 `product_change` / `bugfix`：若架构文件已存在，跳过「从代码反推第一份架构」的前段 `code_design`，并在 start 时视 `preliminary_done=true`。这不表示本轮可以不改架构图。改产品在功能拆分后必须有设计期 `update_code_design`；任何意图在 impl 后必须有详细 `update_code_design`。不适用于 `from_scratch`。
-_Avoid_: 从零做也跳过初步架构, 跳过反推被理解成整轮不改架构, 因已有架构而跳过末尾详细更新
+**Project Design Init Skip** (项目设计架构初始化跳过):
+仅对 `product_change` / `bugfix`：读取 `.workflow_loop/project.json` 的 `project_design_initialized`。为 `true` 时跳过共享前置 `project_design_init`；为 `false` 时必须执行。不得再用 `spec/architecture_code_design.md` 或其它单个文件是否存在决定跳过。这不表示本轮可以不改架构图：改产品在 `spec` 后必须有 `revise_code_design`，任何意图在 impl 后必须有详细 `update_code_design`。不适用于 `from_scratch`。
+_Avoid_: 用架构文件存在代替项目初始化标记, 从零做进入存量初始化, 跳过初始化被理解成整轮不改架构, 因已有架构而跳过末尾详细更新
 
 
 **Architecture Gate Marks** (架构门禁标记):
@@ -178,14 +182,14 @@ _Avoid_: 三条路径合并后丢失差异, 共享通用循环代替逐 Stage �
 
 **Draw.io Page Architecture** (流程图页面结构):
 最终流程图按四张大画布组织。页面按真实流程的大环节拆分，不按“架构规则”“状态文件”等知识主题拆分：
-1. `00 用户从安装到一次工作结束，完整经过什么`：画真实端到端主流程，不做只有页面标题的目录。必须串起安装、启动 Codex / OpenCode、用户提问、智能体读取 `AGENTS.md`、`workflow start`、继续旧 Run 或选择新 intent、逐 Stage 执行、`done` / `abort`、等待下一次需求。
-2. `01 安装脚本怎样把 workflow 和当前项目一次装好`：放大安装脚本的全部判断、用户选择、全局命令安装和项目文件写入。
-3. `02 用户提问后，智能体怎样决定继续旧工作还是开始新工作`：放大智能体读取薄契约、通过 Shell / PATH 调用全局命令、`start` 探路、active Run 分支和三种工作意图选择。
+1. `00 用户从安装到一次工作结束，完整经过什么`：画真实端到端主流程，不做只有页面标题的目录。入口直接经过 `01` 官方安装脚本，由安装脚本处理重复安装并收敛到已安装状态；总览不再预先判断项目是否安装。之后串起启动 Codex / OpenCode、用户提问、智能体读取 `AGENTS.md`、`workflow start`、继续旧 Run 或选择新 intent、逐 Stage 执行、`done` / `abort`、等待下一次需求。
+2. `01 安装脚本怎样把 workflow 和当前项目一次装好`：放大目录确认、重复安装判断、全局命令安装和项目文件写入。未安装项目直接新建或覆盖 `AGENTS.md`，不画契约冲突确认分支。
+3. `02 用户提问后怎样继续旧工作或新开工作`：放大智能体读取薄契约、自动调用 `workflow start`、读取 `state.json`、active Run 分支和三种工作意图选择。不再展开 Shell / PATH 查找命令、项目根定位或项目安装判断。
 4. `03 三种工作意图怎样走完所有阶段并结束`：同一张核心大画布中完整展开三种意图、每个独立 Stage 的全部细节、所有门禁与失败返回、`done`、`abort` 和下一次开工条件。
 
 `03` 核心页采用同页上下两层：页面顶部用三条完整路线缩略带分别列出从零做、改产品、修缺陷从 `start --intent` 到 `done` / `abort` 的全部 Stage 顺序；下方再按从零做、改产品、修缺陷分成三块超大详细区，分别展开每一个 Stage。缩略带只用于在缩小视图时看清整体位置，不代替任何详细节点。
 
-顶部缩略带与下方详细节点使用相同的稳定编号和名称，例如 `FS-03 初步架构`、`PC-05 设计期架构修订`。缩小时可看三条完整路线，放大时可读每个 Stage 的全部流程；画布初始可按约 22000×13000 规划，不够时继续扩展，不能为固定尺寸压缩节点。
+顶部缩略带与下方详细节点使用相同的稳定编号和名称，例如 `FS-03 初步架构`、`PC-03 设计期架构修订`。缩小时可看三条完整路线，放大时可读每个 Stage 的全部流程；画布初始可按约 22000×13000 规划，不够时继续扩展，不能为固定尺寸压缩节点。
 
 `01`–`03` 都是 `00` 中某一段的原位放大，不是另起话题。每张放大图顶部保留同一条端到端路线缩略条并高亮本页位置；跨页入口和出口使用与 `00` 相同的编号和状态名称，使四页可以重新组成一个整体。
 
@@ -211,7 +215,7 @@ _Avoid_: 详细区用长线贯穿多个模块, 为了视觉连续而穿越节点
 _Avoid_: 多条分支直接叠成一根线, 没有汇合节点却突然变成单线, 状态未收敛就强行汇合, 汇合节点不说明收敛结果
 
 **Draw.io Branch Coverage** (流程图分支编号覆盖范围):
-分支编号覆盖所有产生两个或更多结果的判断，不只覆盖三种 Work Intent（工作意图）。安装时的覆盖/取消、探路时的未安装/active/无 active、架构文件有/无、spike 执行/跳过、门禁校验通过/失败、修缺陷时有结构变化/无结构变化等，都必须为每个结果建立自己的 `…A.0`、`…B.0` 分支入口，并在分支内继续顺序编号。
+分支编号覆盖所有产生两个或更多结果的判断，不只覆盖三种 Work Intent（工作意图）。安装时的目录正确/不正确、重复安装/首次安装，状态检查时的 active/无 active，`project_design_initialized` 为 true/false、spike 执行/跳过、门禁校验通过/失败、修缺陷时有结构变化/无结构变化等，都必须为每个结果建立自己的 `…A.0`、`…B.0` 分支入口，并在分支内继续顺序编号。
 
 分支含义写在 `.0` 入口节点内；判断节点到分支入口的短线上可重复写简短条件，但禁止只在线上悬挂“是/否”而没有可定位的分支节点。新增第三种结果时继续使用 `C.0`，不能把它塞进已有分支的说明文字。
 _Avoid_: 只给三种意图编号, 门禁失败没有独立分支, 只在线上写是或否, 多个结果共用一个分支入口
@@ -280,7 +284,8 @@ _Avoid_: State  alone without distinguishing journal
 
 **State Intent Fields** (状态中的意图字段):
 State Snapshot 以 `intent` 记录本次工作意图（`from_scratch` / `product_change` / `bugfix`），以 **`run_status`** 记录 Run 生命周期（`active` / `completed` / `aborted`），并展开本次 Stage Path 上的各 stage 状态与架构门禁标记（如 `architecture.preliminary_done` / `detailed_done`）。`workflow_id` 可含时间与 intent，不再使用旧主模型字段 `scenario` / `entry` 表示四选一场景（穿刺允许直接删除，不做双写兼容）。
-_Avoid_: scenario/entry 作为场景主键, 双写旧四场景字段, 无 run_status 仅靠猜测 completed_at
+项目级字段 `project_design_initialized` 不属于 State Snapshot，固定存放在 `.workflow_loop/project.json`，不能随新 Run 覆盖。
+_Avoid_: scenario/entry 作为场景主键, 双写旧四场景字段, 无 run_status 仅靠猜测 completed_at, 把项目级初始化字段放进 state.json
 
 **Stdout Drive** (stdout 驱动):
 智能体调用的每条 CLI 命令都在输出末尾用“下一步”指令驱动智能体继续调用或询问用户；流程真相在代码与 stdout，不在长篇 agent 契约。用户不手动执行 `workflow start` 来启动一局。
@@ -288,18 +293,16 @@ _Avoid_: Prompt injection, hook nagging
 
 **Start Command** (开工命令):
 项目安装完成后，用户启动 Codex / OpenCode 并直接提出需求；智能体读取薄 `AGENTS.md`，通过 Shell 工具自动调用全局 CLI `workflow …`，不是让用户手动输入命令，也不是调用目标项目内的 `python3 workflow.py`。项目首次安装由官方安装脚本完成，不属于 `workflow` 日常子命令。
-**不带 `--intent`（探路模式）**：只探测与指路，不初始化 Run、不清场。stdout 按序回答：
-1. 当前项目是否已安装（`.workflow_loop/` 与安装版本标记是否完整）
-2. **未安装** → 明确停止，并指示用户回到项目根执行官方安装脚本；**不**列出三种意图冒充可直接开工，也不由 start 处理代理契约冲突
-3. **已安装且有进行中 Run** → 说明须 `status` 继续原流程（或先 `done`/`abort`）；禁止提示开新 Run
-4. **已安装且无进行中 Run** → 列出三种意图及一句话说明；下一步：`workflow start --intent from_scratch|product_change|bugfix`
-清场清单仅在选定 `from_scratch` 且探测到过程产物时出现，不在探路总览里删除。
+**不带 `--intent`（只读状态检查）**：只读取工作状态并指路，不初始化 Run、不清场。正常流程已由官方安装脚本保证项目安装完成，stdout 按序回答：
+1. **有进行中 Run** → 说明须 `status` 继续原流程（或先 `done`/`abort`）；禁止提示开新 Run
+2. **无进行中 Run** → 列出三种意图及一句话说明；下一步：`workflow start --intent from_scratch|product_change|bugfix`
+全局 CLI 仍须在内部解析项目根并校验完整 `.workflow_loop/` 与安装版本标记；校验失败时立即报错，禁止读取或创建 `state.json`。这是异常保护，不作为第 `00`、`02` 页的正常分支。清场清单仅在选定 `from_scratch` 且检查到过程产物时出现，不在状态检查总览里删除。
 **带 `--intent`**：PathComposer 生成 Stage Path 并初始化 Workflow Run（`from_scratch` 另循 Clean Confirm）。`AGENTS.md` 保持薄契约；`discuss` 加载提示词/规范机制不变。
-_Avoid_: start --entry 旧四场景菜单, 未安装时列出意图像能直接 start, start 内补做项目安装或处理代理契约, 探路模式初始化 Run 或清场, 目标项目内 python3 workflow.py 作为唯一入口, 在 AGENTS.md 背诵完整 stage 列表
+_Avoid_: start --entry 旧四场景菜单, start 内补做项目安装, 状态检查初始化 Run 或清场, 把异常安装校验画成正常业务分支, 目标项目内 python3 workflow.py 作为唯一入口, 在 AGENTS.md 背诵完整 stage 列表
 
 **Start Success Output** (带意图开工成功时的 stdout):
 `workflow start --intent …` 真正初始化 Run 成功后，stdout 先打印**路径向开工摘要**（这局怎么走），不是提示词正文：
-- `workflow_id`、`intent`、本局 Stage 路线图、当前 stage、清场/跳过反推等标记
+- `workflow_id`、`intent`、本局 Stage 路线图、当前 stage、清场/项目设计初始化跳过等标记
 **下一步**：`workflow discuss` —— 由 discuss **完整打印**当前 stage 的提示词与规范（见 Prompt Full Print）。
 「精简开工摘要」**仅**指 start 不倾倒文档百科、不代替 discuss；**绝不**表示提示词可以摘要、截断或不打印。
 _Avoid_: 把开工摘要理解成精简提示词, start 不打印路线图, 用摘要替代 discuss 的完整提示词加载
@@ -351,19 +354,19 @@ _Avoid_: 全局安装仍依赖仓库根 workflow.py, 模板只放开发树不进
 安装阶段：官方安装脚本严格把当前终端所在目录作为项目根，先打印绝对路径和待修改对象并等待用户确认，不自动向上猜 `.git`。日常阶段：项目已经安装后，全局 CLI 以当前工作目录为起点向上查找 `.workflow_loop/`，因此可以在项目子目录调用。
 _Avoid_: 安装时静默猜项目根, 安装前不展示目标路径, 日常每次必须传绝对项目路径, 仅靠环境变量定位项目根
 **Bootstrap Paradox** (首次安装悖论，已消除方向):
-安装前还没有 `workflow` 命令，因此不能要求用户先执行 `workflow install` 或项目内 `workflow.py`。官方安装脚本作为唯一首次入口：先完成项目路径与代理契约确认；用户未取消时，再安装或复用全局命令，并在同一次运行中安装当前项目。
+安装前还没有 `workflow` 命令，因此不能要求用户先执行 `workflow install` 或项目内 `workflow.py`。官方安装脚本作为唯一首次入口：先完成项目路径确认；用户未取消时，再安装或复用全局命令，并在同一次运行中直接写入项目薄契约和安装骨架。
 _Avoid_: 项目内本地 workflow.py 作为首次入口, 安装前调用尚不存在的 workflow 命令
 
 **Thin Agent Contract** (薄契约):
-`AGENTS.md`（薄契约；检测亦认旧名 `AGENT.md`）只约定：「本项目由 workflow_loop 管理；用户提出需求后，智能体先调用全局 `workflow start`；之后严格跟随 stdout 的下一步」。用户不需要知道或手动执行 `workflow start`。不在契约里展开 stage 序列与门禁细节。提示词加载仍由 `discuss`（或等价命令）在对应 Stage 完成。
+`AGENTS.md`（唯一薄契约文件名）只约定：「本项目由 workflow_loop 管理；用户提出需求后，智能体先调用全局 `workflow start`；之后严格跟随 stdout 的下一步」。用户不需要知道或手动执行 `workflow start`。不在契约里展开 stage 序列与门禁细节。提示词加载仍由 `discuss`（或等价命令）在对应 Stage 完成。
 _Avoid_: 把完整流程写进 AGENTS.md, 因改全局 CLI 而取消提示词加载
 
 **From Scratch Clean Start** (从零做清场):
-选择 `from_scratch` 表示真的重新做，不能沿用旧设计产物凑合。开工前清场后，固定走：`spec` → `code_design`（初步，不可跳过）→ … → 末段详细架构。从零做不适用「已有架构则跳过前段」；该跳过仅适用于 `product_change` / `bugfix`。
+选择 `from_scratch` 表示真的重新做，不能沿用旧设计产物凑合。初始化 `from_scratch` Run 时，无论是否发现并删除旧设计产物，都把 `.workflow_loop/project.json` 的 `project_design_initialized` 置为 `false`；之后固定走：`spec` → `code_design`（初步，不可跳过）→ … → 末段详细架构。`spec` 与 `code_design` 均经用户确认后再写回 `true`。从零做不进入存量项目的 `project_design_init`。
 
 **Clean Scope** (清场范围):
 - **删除**（仅项目根产物侧）：`spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 等目录下由 workflow 约定写出的设计/过程文档（如 `spec/product.md`、`spec/architecture_code_design.md`、`spec/功能*.md`、`plan/*` 等）。
-- **不删除**：`.workflow_loop/Template_Repository/` 与 `.workflow_loop/Standardized_Repository/` 全部内容（含其中的 `spec/`、`plan/` 等**提示词/规范**子目录）；源代码、`.git`、与设计产物无关的项目文件；`.workflow_loop/` 运行时骨架本身（仅重建本次 Run 的 state，不拆模板仓库）。
+- **不删除**：`.workflow_loop/Template_Repository/` 与 `.workflow_loop/Standardized_Repository/` 全部内容（含其中的 `spec/`、`plan/` 等**提示词/规范**子目录）；`.workflow_loop/project.json` 文件本身（只更新初始化字段）；源代码、`.git`、与设计产物无关的项目文件；`.workflow_loop/` 运行时骨架本身（仅重建本次 Run 的 state，不拆模板仓库）。
 - **确认**：有可删过程产物时才走清场确认；无则跳过（见 Clean Confirm）。
 _Avoid_: 从零做复用旧架构并跳过初步, 删除 Template/Standardized 仓库或其下 stage 子目录, 把模板 spec 当产物删, 默认删除源代码, 静默清场不确认, 无过程产物仍强制 --confirm-clean
 
@@ -383,7 +386,7 @@ _Avoid_: 宽扫全仓库 md, 只认 state/journal 漏掉手写 spec, 监测 Temp
 _Avoid_: 无过程产物仍强制确认, start 内阻塞 y/n, 静默删, --confirm-clean 绕过活跃 Run, 独立 clean 作为 from_scratch 必经主命令
 
 **Design-Time Architecture Update** (设计期改架构):
-`product_change` 在 `feature_split` 之后、`plan` 之前必须经过 `revise_code_design`：按变更后的产品设计改架构图。impl 之后另走 `update_code_design` 做详细落地。两次强制，名称分开以免 state 主键冲突。
+`product_change` 在 `spec`（产品设计与功能拆分）之后、`plan` 之前必须经过 `revise_code_design`：按变更后的产品设计改架构图。impl 之后另走 `update_code_design` 做详细落地。两次强制，名称分开以免 state 主键冲突。
 _Avoid_: 改产品只在末尾改一次架构, 路径上两个同名 update_code_design, 改设计却不改架构图
 
 **Bugfix Architecture Update** (修 bug 时的架构):
@@ -391,23 +394,29 @@ _Avoid_: 改产品只在末尾改一次架构, 路径上两个同名 update_code
 _Avoid_: 修 bug 默认跳过架构收尾, 无结构变化就不跑 stage
 
 **Revise Code Design Stage** (`revise_code_design`):
-改产品路径上、功能拆分之后的设计期改架构 Stage。与末段 `update_code_design`（详细落地）名称分离，避免同一 Run 内 stage 名冲突。
+改产品路径上、`spec` 产品设计与功能拆分之后的设计期改架构 Stage。与末段 `update_code_design`（详细落地）名称分离，避免同一 Run 内 stage 名冲突。
 _Avoid_: 与 update_code_design 共用同一 stage 名当主键
+
+**Project Design Init Stage** (`project_design_init`):
+首次处理已有代码项目时，为 `product_change` / `bugfix` 共享的前置 Stage，中文名“项目设计架构初始化”。角色为“存量产品与架构分析师”；同时加载 `spec/spec.md` 与 `code_design/code_design.md` 两组提示词和规范。根据现有代码及可运行行为一次建立：`spec/product.md`、多个 `spec/功能<名>.md`、`spec/architecture_code_design.md`。门2必须同时校验三类产物，门3确认后写 `project_design_initialized=true` 与 `architecture.preliminary_done=true`。该 Stage 完成前作废不得写 true。
+_Avoid_: 只生成 architecture_code_design.md, 拆成彼此可能不一致的产品反推和架构反推两轮, 用旧文档存在冒充本次初始化完成
+
+**Product Spec Stage** (`spec`):
+统一负责“产品设计 + 功能拆分”。角色为产品设计师；加载 `.workflow_loop/Template_Repository/spec/spec.md` 与 `.workflow_loop/Standardized_Repository/spec/spec.md`；产物为 `spec/product.md` 与多个 `spec/功能<名>.md`。`from_scratch` 中负责从零建立；`product_change` 中负责基于现状重新设计，可新增、修改或删除功能文档。门2必须证明产物属于本 Run：阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化。`from_scratch` 要求新建 product.md 且至少新建一个功能文档；`product_change` 要求 product.md 有变化且至少一个功能文档新增、修改或删除。
+_Avoid_: 只校验 product.md, 独立生成 requirement_<临时名>.md, 把产品更新与功能拆分拆成两个后续 Stage, 旧功能文件冒充本 Run 产物
 
 **Update Code Design Stage** (`update_code_design`):
 所有工作意图在 `impl` 之后的详细架构收尾 Stage。写入/更新同一文件 `spec/architecture_code_design.md`，用户确认后置 `architecture.detailed_done`。从零做、改产品、修 bug 末环同名；不再使用 `generate_code_design`。
 _Avoid_: generate_code_design 作为从零做末环, 三种意图末环不同名, 因文件已存在而跳过本 stage
 
-**Installer Agent Contract Choice** (安装时的代理契约选择):
-已有 `AGENTS.md` 或 `AGENT.md` 时，安装脚本在落任何文件前直接在终端显示冲突，并等待用户选择：
-1. 覆盖并继续安装：把薄契约写入 **`AGENTS.md`**，然后完成当前项目安装。
-2. 取消安装：不改代理契约，不写 `.workflow_loop/`，整个项目保持未安装。
+**Installer Agent Contract Write** (安装时写入代理契约):
+项目目录确认正确且当前项目尚未安装后，安装脚本把薄契约直接写入 **`AGENTS.md`**：文件不存在则新建，文件存在则整份覆盖。这里不再提供契约冲突选择、不自动合并、不生成备份。项目已有完整安装标记时按重复安装规则直接退出，不改现有契约。
 
-不提供自动合并，也不再提供 `--overwrite-agent` 或 `workflow attach`。安装程序由用户亲自运行，因此这里的终端交互是设计行为，不交给之后的智能体代问。
-_Avoid_: 静默覆盖, 自动合并, 取消后仍写半套骨架, 让智能体事后询问, 保留 attach 或 overwrite-agent 兼容入口
+不再提供 `--overwrite-agent` 或 `workflow attach`。安装程序唯一需要阻塞等待的是项目目录确认。
+_Avoid_: 自动合并, 同时维护双份契约, 目录未确认就覆盖, 重复安装重写契约, 保留 attach 或 overwrite-agent 兼容入口
 
 **Path Composer** (路径编排):
-根据 `intent` 与项目事实（是否已有架构文档、是否从零做清场等）生成本次 Stage 列表的机制。正式形态：`build_stage_path(intent, project_root) -> list[Stage]`（函数或专用模块均可，不强制类层次）。取代旧的四个 Scenario 类并行流水线与 `SCENARIO_REGISTRY`。Stage 策略类（各 Stage 的产出与门禁行为）仍保留；被删除的是「场景枚举 = 路径」的旧模型。
+根据 `intent` 与项目事实（`project_design_initialized`、是否从零做清场等）生成本次 Stage 列表的机制。正式形态：`build_stage_path(intent, project_root) -> list[Stage]`（函数或专用模块均可，不强制类层次）。取代旧的四个 Scenario 类并行流水线与 `SCENARIO_REGISTRY`。Stage 策略类（各 Stage 的产出与门禁行为）仍保留；被删除的是「场景枚举 = 路径」的旧模型。
 _Avoid_: NewProject/Existing/Bugfix/ProductMod 四场景类作为主模型, 用 scenario registry 四选一取路径, 把路径硬编码进 CLI 命令分支而不经统一编排
 **Legacy CLI Removal** (旧 CLI 删除):
 第一版实现**直接删除**旧入口，不做双写兼容：
@@ -415,6 +424,6 @@ _Avoid_: NewProject/Existing/Bugfix/ProductMod 四场景类作为主模型, 用 
 - 不保留 `align` 式场景菜单；不把旧 entry 名映射到新 intent
 - 删除面向用户的 `workflow attach` 与 `--overwrite-agent`；项目首次安装只走官方安装脚本
 - `overview` 第一版**可不做**（文档百科非开工阻塞；需要时后置）
-误用旧参数时：明确报错并用说人话提示正确入口（未安装项目先在项目根执行官方安装脚本；已安装项目由智能体调用 `workflow start` 探路或 `start --intent …` 开工）。
+误用旧参数时：明确报错并用说人话提示正确入口（未安装项目先在项目根执行官方安装脚本；已安装项目由智能体调用 `workflow start` 检查状态或 `start --intent …` 开工）。
 正式日常命令面：`start`、`discuss`、`gate`、`status`、`done`、`abort`（及已定参数：`--confirm-clean`、`gate spike --skip` 等）。安装脚本是日常 CLI 之外的首次入口。
 _Avoid_: entry 映射兼容层, 保留四场景菜单, 第一版强制实现 overview
