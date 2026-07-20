@@ -9,8 +9,19 @@ __pycache__/
 # spike stage 的 throwaway 代码（不提交）
 .workflow_loop/spike_tmp/
 
+# 项目产物（spec/plan/qa/acceptance/impl/bug/ 由 workflow 管理，按需提交或忽略）
+# 这些目录下是设计文档，通常应该提交到 git
+
 # PyCharm
 .idea/
 
 # macOS
 .DS_Store
+
+# Python 虚拟环境
+.venv/
+
+# pipx editable install 元数据（如果有）
+*.egg-info/
+dist/
+build/

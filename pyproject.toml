@@ -1,5 +1,29 @@
 [project]
-name = "workflow-loop-spike"
+name = "workflow-loop"
 version = "0.1.0"
-requires-python = ">=3.13"
+description = "把 AI 驱动的软件开发从读 markdown 自觉遵守变成不过代码门禁就不能推进的流程约束系统"
+requires-python = ">=3.11"
 dependencies = []
+
+[project.scripts]
+workflow = "workflow_loop.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+workflow_loop = ["data/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
