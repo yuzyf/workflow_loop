@@ -114,17 +114,17 @@ _Avoid_: 用架构文件是否存在代替初始化状态, 把字段放进单轮
 _Avoid_: bugfix scenario（旧四选一场景）
 
 **Stage Path** (阶段路径):
-本次 Workflow Run 将顺序经过的 stage 列表。项目安装是开工硬前置；安装完成后，路径由「工作意图」与架构文件等项目事实组合生成，而不是从固定四场景枚举取出。
+本次 Workflow Run 将顺序经过的 stage 列表。项目安装是开工硬前置；安装完成后，路径由「工作意图」与 `project_design_initialized`（项目设计已初始化）等项目事实组合生成，而不是从固定四场景枚举取出。
 _Avoid_: Scenario stages, pipeline template（若暗示四条平行流水线）
 
 **Stage Path Composition** (路径拼法):
 - 未安装：必须先在项目根执行官方安装脚本；日常 CLI 只做异常保护，不在 `start` 状态检查中提供安装分支
-- **from_scratch（从零做）**：先清场（删除旧设计/过程产物；保留规范与模板仓库）→ `spec`（产品设计 + 功能拆分）→ `code_design`（初步，不可因旧文件跳过）→ `spike`（可选）→ `plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细落地，强制；与其它意图末环同名）
-- **product_change（改产品）**：若 `project_design_initialized=false`，先走 `project_design_init`；之后统一走 `spec`（重新设计产品 + 功能拆分）→ `revise_code_design`（设计期：按新设计改架构图）→ `spike`（可选）→ `plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细落地，强制）
-- **bugfix（修 bug）**：若 `project_design_initialized=false`，先走 `project_design_init`；之后走 `reproduce` → `fix_plan` → `acceptance` → `qa` → `impl` → `update_code_design`（详细强制；无结构变化须在该 stage 显式确认，不可省略）
+- **from_scratch（从零做）**：先清场（删除旧设计/过程产物；保留规范与模板仓库）→ `spec`（产品设计 + 功能拆分）→ `code_design`（初步，不可因旧文件跳过）→ `spike`（可选）→ `plan`（制定实施计划）→ `acceptance_plan`（制定验收计划）→ `test_plan`（制定测试计划）→ `impl`（执行实施）→ `test`（执行测试）→ `acceptance`（最终验收）→ `update_code_design`（详细落地，强制；与其它意图末环同名）
+- **product_change（改产品）**：若 `project_design_initialized=false`，先走 `project_design_init`；之后统一走 `spec`（重新设计产品 + 功能拆分）→ `revise_code_design`（设计期：按新设计改架构图）→ `spike`（可选）→ `plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design`
+- **bugfix（修 bug）**：若 `project_design_initialized=false`，先走 `project_design_init`；之后走 `reproduce` → `fix_plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design`（详细强制；无结构变化须在该 stage 显式确认，不可省略）
 - `project_design_initialized=true`：改产品/修 bug 跳过共享初始化阶段；文件是否存在不能单独决定跳过。任何意图不得跳过末段详细架构 Stage
-- 共享后半截：`plan` → `acceptance` → `qa` → `impl` → 详细架构收尾
-_Avoid_: 修 bug 可无设计基线, 仅末尾才第一次写架构, 旧四场景平行流水线, 改产品保留 requirement/product_update/feature_split 三段式流程
+- 共享后半截：实施/修复计划 → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design`
+_Avoid_: 修 bug 可无设计基线, 写完测试计划就视为测试通过, 写完验收计划就视为验收通过, impl 后直接更新架构而不执行测试和验收, 旧四场景平行流水线, 改产品保留 requirement/product_update/feature_split 三段式流程
 
 **Architecture Document** (架构文档):
 固定产物 `spec/architecture_code_design.md`（code_design）。已经安装 Workflow Loop 并进入正式开发路径的项目，必须有该文档；不是可有可无的附件。
@@ -133,17 +133,17 @@ _Avoid_: 可长期缺失的架构说明, 仅口头架构
 **Architecture Doc Phases** (架构文档双阶段):
 同一份架构文档的两种完成度，不是两个无关文件：
 1. **初步架构**（前期设计）：路径前段产出或补齐，服务计划与实施前的共同理解。从零做时顺序固定为**先产品设计与功能拆分、后初步架构**（先定做什么，再定怎么搭）；首次接入已有代码项目时由 `project_design_init` 与产品、功能基线一起从代码反推建立。
-2. **详细架构**（代码改完后）：impl 之后强制更新/写全，反映落地后的真实结构
-Stage 命名：从零做的前段初步架构为 `code_design`；存量项目首次初始化为 `project_design_init`；改产品设计期为 `revise_code_design`；**所有意图** impl 后详细收尾一律 `update_code_design`。废弃 `generate_code_design`（初步阶段已可能创建同文件，末环不是“首次生成”语义）。
-_Avoid_: 只在 impl 后才第一次写架构, 有初步无详细收尾, 有详细却声称前期不需要图
+2. **详细架构**（代码通过测试与最终验收后）：`acceptance` 之后强制更新/写全，反映最终被验证和接受的真实结构
+Stage 命名：从零做的前段初步架构为 `code_design`；存量项目首次初始化为 `project_design_init`；改产品设计期为 `revise_code_design`；**所有意图** 最终验收后详细收尾一律 `update_code_design`。废弃 `generate_code_design`（初步阶段已可能创建同文件，末环不是“首次生成”语义）。
+_Avoid_: 只在 impl 后才第一次写架构, 未测试验收就写最终详细架构, 有初步无详细收尾, 有详细却声称前期不需要图
 
 **Project Design Init Skip** (项目设计架构初始化跳过):
-仅对 `product_change` / `bugfix`：读取 `.workflow_loop/project.json` 的 `project_design_initialized`。为 `true` 时跳过共享前置 `project_design_init`；为 `false` 时必须执行。不得再用 `spec/architecture_code_design.md` 或其它单个文件是否存在决定跳过。这不表示本轮可以不改架构图：改产品在 `spec` 后必须有 `revise_code_design`，任何意图在 impl 后必须有详细 `update_code_design`。不适用于 `from_scratch`。
+仅对 `product_change` / `bugfix`：读取 `.workflow_loop/project.json` 的 `project_design_initialized`。为 `true` 时跳过共享前置 `project_design_init`；为 `false` 时必须执行。不得再用 `spec/architecture_code_design.md` 或其它单个文件是否存在决定跳过。这不表示本轮可以不改架构图：改产品在 `spec` 后必须有 `revise_code_design`，任何意图在测试与最终验收后必须有详细 `update_code_design`。不适用于 `from_scratch`。
 _Avoid_: 用架构文件存在代替项目初始化标记, 从零做进入存量初始化, 跳过初始化被理解成整轮不改架构, 因已有架构而跳过末尾详细更新
 
 
 **Architecture Gate Marks** (架构门禁标记):
-State Snapshot 中记录架构完成度，至少区分 `architecture.preliminary_done`（初步架构完成）与 `architecture.detailed_done`（详细架构完成）。前段架构 Stage 用户确认后置 preliminary；impl 后的架构 Stage 确认后置 detailed。文件存在只是必要条件；**不得**因 `spec/architecture_code_design.md` 已存在而自动跳过详细架构收尾。
+State Snapshot 中记录架构完成度，至少区分 `architecture.preliminary_done`（初步架构完成）与 `architecture.detailed_done`（详细架构完成）。前段架构 Stage 用户确认后置 preliminary；最终 `acceptance`（验收执行）通过后的架构 Stage 确认后置 detailed。文件存在只是必要条件；**不得**因 `spec/architecture_code_design.md` 已存在而自动跳过详细架构收尾。
 _Avoid_: 仅用文件存在判定详细完成, 初步与详细共用一个模糊 done 位
 
 
@@ -157,7 +157,7 @@ _Avoid_: 继续用 scenario 指“本次要做什么”
 _Avoid_: 把 entry 当场景主键
 
 **Stage**:
-路径上的一个具名环节（如 spec、spike、plan、impl）；内部走讨论与门禁循环。
+路径上的一个具名环节（如 spec、spike、plan、impl、test、acceptance）；内部走讨论与门禁循环。
 _Avoid_: Step（易与 stage 内 7 步混淆）, phase（除非明确同义）
 
 **Gate** (门禁):
@@ -169,8 +169,8 @@ _Avoid_: Checkpoint（若不含强制）, validation alone
 1. 讨论完毕：`gate <stage> --discuss-done`
 2. 代码/产物校验：`gate <stage>`
 3. 用户确认：`gate <stage> --confirmed`
-入口与路径模型重做时**不砍门禁协议**。可选 spike 的 `gate spike --skip` 是额外跳过动作，不取消其它 stage 的三道门，也不把三道门合并或改成“校验过即当用户确认”。
-_Avoid_: 第一版砍掉讨论完毕闸, 合并校验与用户确认, 因入口重做而弱化用户确认
+入口与路径模型重做时**不砍门禁协议**。可选 spike 的 `gate spike --skip` 是额外跳过动作，不取消其它 stage 的三道门，也不把三道门合并或改成“校验过即当用户确认”。`test`（测试执行）与 `acceptance`（验收执行）是三种意图的强制 Stage，不提供 `--skip`；自动测试不可用时可执行人工测试并记录证据，环境阻塞或用户未验收不得按通过处理。
+_Avoid_: 第一版砍掉讨论完毕闸, 合并校验与用户确认, 因入口重做而弱化用户确认, 跳过测试或最终验收, AI 自动替用户验收
 
 **Core Diagram MECE Rule** (核心流程图完整展开规则):
 核心 Draw.io 大画布必须分别完整展开 `from_scratch`、`product_change`、`bugfix` 三种互斥工作意图，并覆盖从 `start --intent`、全部 Stage、正常 `done`、中途 `abort` 到允许下一次开工的全部结果。
@@ -254,7 +254,7 @@ _Avoid_: 菱形多个结果共用出口, 结果线先重叠再散开, 直接从�
 _Avoid_: 自动布线后不检查, 共用线槽, 线穿节点, 用颜色或跨线桥掩盖交叉, 固定画布导致压缩
 
 **Topic** (主题):
-本局功能/修复的命名字符串，供 `plan/`、`acceptance/`、`qa/` 等产物文件名与 index 使用。**写入时机（维持现状）**：
+本局功能/修复的命名字符串，供 `plan/`、`acceptance/`、`qa/` 等产物文件名与 index 使用。计划与结果分别命名为 `acceptance/<topic>_plan.md`、`acceptance/<topic>_result.md`、`qa/<topic>_plan.md`、`qa/<topic>_result.md`。**写入时机（维持现状）**：
 - `from_scratch` / `product_change`：在 **`plan`** stage 用户确认通过（或该 stage 推进落盘）时写入 `state.topic`
 - `bugfix`：在 **`fix_plan`** stage 同样时机写入
 `start` **不**强制 `--topic`；spec / reproduce / 前段架构等可以尚无 topic。未定时门禁与路径不因缺 topic 而假装已有；需要主题的 stage 在讨论/产出中定下后再写入。
@@ -283,7 +283,7 @@ _Avoid_: State  alone without distinguishing journal
 
 
 **State Intent Fields** (状态中的意图字段):
-State Snapshot 以 `intent` 记录本次工作意图（`from_scratch` / `product_change` / `bugfix`），以 **`run_status`** 记录 Run 生命周期（`active` / `completed` / `aborted`），并展开本次 Stage Path 上的各 stage 状态与架构门禁标记（如 `architecture.preliminary_done` / `detailed_done`）。`workflow_id` 可含时间与 intent，不再使用旧主模型字段 `scenario` / `entry` 表示四选一场景（穿刺允许直接删除，不做双写兼容）。
+State Snapshot 以 `intent` 记录本次工作意图（`from_scratch` / `product_change` / `bugfix`），以 **`run_status`** 记录 Run 生命周期（`active` / `completed` / `aborted`），并展开本次 Stage Path 上的各 stage 状态、架构门禁标记（如 `architecture.preliminary_done` / `detailed_done`）以及验证绑定信息（当前代码/实施记录、测试计划、验收计划、测试结果的内容哈希）。`workflow_id` 可含时间与 intent，不再使用旧主模型字段 `scenario` / `entry` 表示四选一场景（穿刺允许直接删除，不做双写兼容）。
 项目级字段 `project_design_initialized` 不属于 State Snapshot，固定存放在 `.workflow_loop/project.json`，不能随新 Run 覆盖。
 _Avoid_: scenario/entry 作为场景主键, 双写旧四场景字段, 无 run_status 仅靠猜测 completed_at, 把项目级初始化字段放进 state.json
 
@@ -386,11 +386,11 @@ _Avoid_: 宽扫全仓库 md, 只认 state/journal 漏掉手写 spec, 监测 Temp
 _Avoid_: 无过程产物仍强制确认, start 内阻塞 y/n, 静默删, --confirm-clean 绕过活跃 Run, 独立 clean 作为 from_scratch 必经主命令
 
 **Design-Time Architecture Update** (设计期改架构):
-`product_change` 在 `spec`（产品设计与功能拆分）之后、`plan` 之前必须经过 `revise_code_design`：按变更后的产品设计改架构图。impl 之后另走 `update_code_design` 做详细落地。两次强制，名称分开以免 state 主键冲突。
+`product_change` 在 `spec`（产品设计与功能拆分）之后、`plan` 之前必须经过 `revise_code_design`：按变更后的产品设计改架构图。代码实施、测试和最终验收完成后另走 `update_code_design` 做详细落地。两次强制，名称分开以免 state 主键冲突。
 _Avoid_: 改产品只在末尾改一次架构, 路径上两个同名 update_code_design, 改设计却不改架构图
 
 **Bugfix Architecture Update** (修 bug 时的架构):
-`bugfix` 在 impl 之后必须经过 `update_code_design`。若 fix_plan/实施判定不涉及结构变更，仍须走该 Stage，并在门禁中显式确认「无结构变化」；涉及结构则必须改架构图。不可因“只是小 bug”省略架构 Stage。
+`bugfix` 在 `test` 与最终 `acceptance` 通过之后必须经过 `update_code_design`。若 fix_plan/实施判定不涉及结构变更，仍须走该 Stage，并在门禁中显式确认「无结构变化」；涉及结构则必须改架构图。不可因“只是小 bug”省略测试、验收或架构 Stage。
 _Avoid_: 修 bug 默认跳过架构收尾, 无结构变化就不跑 stage
 
 **Revise Code Design Stage** (`revise_code_design`):
@@ -405,9 +405,33 @@ _Avoid_: 只生成 architecture_code_design.md, 拆成彼此可能不一致的�
 统一负责“产品设计 + 功能拆分”。角色为产品设计师；加载 `.workflow_loop/Template_Repository/spec/spec.md` 与 `.workflow_loop/Standardized_Repository/spec/spec.md`；产物为 `spec/product.md` 与多个 `spec/功能<名>.md`。`from_scratch` 中负责从零建立；`product_change` 中负责基于现状重新设计，可新增、修改或删除功能文档。门2必须证明产物属于本 Run：阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化。`from_scratch` 要求新建 product.md 且至少新建一个功能文档；`product_change` 要求 product.md 有变化且至少一个功能文档新增、修改或删除。
 _Avoid_: 只校验 product.md, 独立生成 requirement_<临时名>.md, 把产品更新与功能拆分拆成两个后续 Stage, 旧功能文件冒充本 Run 产物
 
+**Acceptance Plan Stage** (`acceptance_plan`):
+制定“什么算完成”的验收计划，不执行最终验收。角色为验收计划制定者；提示词与规范分别为 `.workflow_loop/Template_Repository/qa/acceptance_plan.md`、`.workflow_loop/Standardized_Repository/qa/acceptance_plan.md`；产物为 `acceptance/<topic>_plan.md`。门2校验文件属于当前 Run、文件名与 `state.topic` 一致、每条验收条件可判定且覆盖本次实施计划。
+_Avoid_: 继续用 acceptance 名称表示计划制定, 写完验收计划就视为已验收, 只检查 acceptance 目录任意 md
+
+**Test Plan Stage** (`test_plan`):
+把验收条件转换为可执行测试范围、步骤、回归项、边界与证据要求，不实际执行测试。角色为测试计划制定者；提示词与规范分别为 `.workflow_loop/Template_Repository/qa/test_plan.md`、`.workflow_loop/Standardized_Repository/qa/test_plan.md`；产物为 `qa/<topic>_plan.md` 并更新 `qa/index.md`。门2必须校验测试计划属于当前 Run、文件名与 topic 一致，并证明每条验收条件至少被一个测试项或明确的人工验收项覆盖。
+_Avoid_: 继续用 qa 名称混淆计划与执行, 测试计划不覆盖验收条件, 只硬校验 qa/index.md
+
+**Implementation Stage** (`impl`):
+执行已经确认的实施/修复计划并修改真实代码，不再承担“再制定一份实施计划”的职责。角色为实施执行者；提示词与规范保持 `.workflow_loop/Template_Repository/impl/impl.md`、`.workflow_loop/Standardized_Repository/impl/impl.md`；产物为实际代码修改及 `impl/<topic>.md` 实施记录。门2校验实施记录与当前 Run/topic 对应，并记录当前代码与实施记录内容哈希。门3通过后进入 `test`，不得直接进入 `update_code_design`。
+_Avoid_: impl 仍只写计划不改代码, plan 与 impl 重复制定计划, impl 后直接收工或更新详细架构
+
+**Test Execution Stage** (`test`):
+按照 `qa/<topic>_plan.md` 执行全部必要测试并记录证据。角色为测试执行者；提示词与规范分别为 `.workflow_loop/Template_Repository/qa/test.md`、`.workflow_loop/Standardized_Repository/qa/test.md`；产物为 `qa/<topic>_result.md` 并更新 `qa/index.md`。结果必须绑定当前代码/实施记录哈希与测试计划哈希，逐项记录 pass / fail / blocked 及命令、日志、截图或人工测试证据。门2要求当前 Run 的所有必测项通过且无未解决 fail/blocked；门3仍由用户确认。失败必须回到 `impl`，修改后旧测试与验收状态失效并重新完整测试。该 Stage 强制，不提供 `--skip`。
+_Avoid_: 写测试计划冒充测试执行, 只写“测试通过”无逐项证据, 修代码后沿用旧测试结果, blocked 当通过, 跳过测试
+
+**Acceptance Execution Stage** (`acceptance`):
+在测试通过后，按照 `acceptance/<topic>_plan.md` 执行最终验收。角色为验收执行者；提示词与规范分别为 `.workflow_loop/Template_Repository/qa/acceptance.md`、`.workflow_loop/Standardized_Repository/qa/acceptance.md`；产物为 `acceptance/<topic>_result.md`。结果必须绑定验收计划哈希与最新测试结果哈希，并逐项给出可复核证据。门2要求全部适用验收项通过且无阻塞；门3必须由用户明确确认，AI 不得自动代验收。实现不符合计划时回到 `impl`，之后重新走 `test` 与 `acceptance`；验收计划错误、遗漏或不可判定时回到 `acceptance_plan`，修改后重新检查 `test_plan` 并使旧结果失效。该 Stage 强制，不提供 `--skip`。
+_Avoid_: AI 自动替用户验收, 测试未通过就验收, 验收失败只改结果文件, 修改验收标准后沿用旧测试或验收结果, 跳过最终验收
+
+**Verification Invalidation** (验证结果自动失效):
+通过状态只对绑定的上游内容有效。`impl` 的代码或实施记录变化时，清零 `test` 与 `acceptance` 的门禁状态；`test_plan` 变化时，清零测试与验收状态；`acceptance_plan` 变化时，清零验收状态并把 `test_plan` 退回待检查。新测试结果绑定当前代码/实施记录及测试计划哈希；新验收结果绑定当前测试结果及验收计划哈希。失效动作写入 State Snapshot 与 Journal，不能只靠 AI 记忆。
+_Avoid_: 上游变化后下游仍显示 done, 仅比较文件存在不比较内容, 失败重试沿用旧结果, 不记录失效原因
+
 **Update Code Design Stage** (`update_code_design`):
-所有工作意图在 `impl` 之后的详细架构收尾 Stage。写入/更新同一文件 `spec/architecture_code_design.md`，用户确认后置 `architecture.detailed_done`。从零做、改产品、修 bug 末环同名；不再使用 `generate_code_design`。
-_Avoid_: generate_code_design 作为从零做末环, 三种意图末环不同名, 因文件已存在而跳过本 stage
+所有工作意图在 `test` 通过且最终 `acceptance` 经用户确认之后的详细架构收尾 Stage。写入/更新同一文件 `spec/architecture_code_design.md`，用户确认后置 `architecture.detailed_done`。从零做、改产品、修 bug 末环同名；不再使用 `generate_code_design`。
+_Avoid_: generate_code_design 作为从零做末环, 三种意图末环不同名, 因文件已存在而跳过本 stage, 未通过测试验收就写最终架构
 
 **Installer Agent Contract Write** (安装时写入代理契约):
 项目目录确认正确且当前项目尚未安装后，安装脚本把薄契约直接写入 **`AGENTS.md`**：文件不存在则新建，文件存在则整份覆盖。这里不再提供契约冲突选择、不自动合并、不生成备份。项目已有完整安装标记时按重复安装规则直接退出，不改现有契约。
