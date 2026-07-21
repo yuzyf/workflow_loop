@@ -43,10 +43,10 @@ ROLE_DOC_MAP = {
         "role": "产品设计师",
         "description": "和用户讨论产品要做什么、功能路由、功能拆分。产出 spec/product.md 和每个功能的 spec/feature_<english-name>.md。",
     },
-    # 从零做的初步架构阶段：先产品设计与功能拆分、后初步架构
+    # 从零做的初步代码架构阶段：从已确认产品设计推导代码设计
     "code_design": {
-        "role": "架构文档撰写者（初步）",
-        "description": "从零做时产出初步架构 spec/architecture_code_design.md。先产品设计与功能拆分、后初步架构。",
+        "role": "代码架构设计师（初步）",
+        "description": "从已确认的产品设计推导代码分层、架构关键节点和各功能的完整代码过程，产出 spec/architecture_code_design.md。",
     },
     # 穿刺阶段：验证设计风险，throwaway 代码进 spike_tmp/
     "spike": {
@@ -56,7 +56,7 @@ ROLE_DOC_MAP = {
     # 存量项目首次初始化：一次建立产品+功能+架构三类产物
     "project_design_init": {
         "role": "存量产品与架构分析师",
-        "description": "首次处理已有代码项目时，一次建立 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md。",
+        "description": "首次处理已有代码项目时，必须查看代码和测试，具备安全条件时实际运行，一次建立相互一致的 spec/product.md、spec/feature_*.md 和 spec/architecture_code_design.md。",
     },
     # 改产品设计期架构修订：按新设计改架构图
     "revise_code_design": {

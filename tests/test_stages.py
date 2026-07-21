@@ -46,3 +46,15 @@ def test_project_design_init_rejects_legacy_chinese_feature_filename(tmp_path):
 
     assert ok is False
     assert "spec/feature_*.md" in detail
+
+
+def test_project_design_init_loads_specialized_and_shared_documents():
+    stage = ProjectDesignInitStage()
+
+    assert stage.prompt_doc_path() == "Template_Repository/code_design/project_design_init.md"
+    assert stage.standard_doc_path() == "Standardized_Repository/code_design/project_design_init.md"
+    assert stage.additional_doc_paths() == [
+        ("Template_Repository/spec/spec.md", "Standardized_Repository/spec/spec.md"),
+        ("Template_Repository/code_design/code_design.md", "Standardized_Repository/code_design/code_design.md"),
+    ]
+    assert "必须查看代码和测试" in stage.instruction()

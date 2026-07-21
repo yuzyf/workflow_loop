@@ -107,6 +107,46 @@ def test_install_project_copies_product_background_and_bugfix_rules(tmp_path):
     assert "需要改变产品行为时改走修改产品流程" in standard_content
 
 
+def test_install_project_copies_product_driven_code_design_rules(tmp_path):
+    install_project(str(tmp_path))
+    workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
+
+    code_template_path = os.path.join(
+        workflow_dir, "Template_Repository", "code_design", "code_design.md",
+    )
+    code_standard_path = os.path.join(
+        workflow_dir, "Standardized_Repository", "code_design", "code_design.md",
+    )
+    init_template_path = os.path.join(
+        workflow_dir, "Template_Repository", "code_design", "project_design_init.md",
+    )
+    init_standard_path = os.path.join(
+        workflow_dir, "Standardized_Repository", "code_design", "project_design_init.md",
+    )
+
+    with open(code_template_path) as f:
+        code_template = f.read()
+    with open(code_standard_path) as f:
+        code_standard = f.read()
+    with open(init_template_path) as f:
+        init_template = f.read()
+    with open(init_standard_path) as f:
+        init_standard = f.read()
+
+    assert "产品设计决定代码设计" in code_template
+    assert "架构图只表达代码分层" in code_template
+    assert "每个程序处理节点必须直接标出对应文件和符号" in code_template
+    assert "各产品功能的代码设计" in code_template
+    assert "由产品职责推导代码架构" in code_standard
+    assert "只列函数名不算完成" in code_standard
+    assert "不能脱离流程单独列一个看不懂的字段" in code_standard
+    assert "一次建立相互一致的三类文档" in init_template
+    assert "具备安全的本地运行条件时，必须实际运行" in init_standard
+    assert "运行确认" in init_standard
+    assert "场景B" not in code_template
+    assert "场景B" not in code_standard
+
+
 # 测试 install_project 覆盖 AGENTS.md（首次安装写入 workflow_loop 契约）
 def test_install_project_writes_agents_md(tmp_path):
     # 准备一个旧的 AGENTS.md 内容

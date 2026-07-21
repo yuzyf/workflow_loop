@@ -406,13 +406,41 @@ _Avoid_: 改产品只在末尾改一次架构, 路径上两个同名 update_code
 `bugfix` 在 `test` 与最终 `acceptance` 通过之后必须经过 `update_code_design`。若 fix_plan/实施判定不涉及结构变更，仍须走该 Stage，并在门禁中显式确认「无结构变化」；涉及结构则必须改架构图。不可因“只是小 bug”省略测试、验收或架构 Stage。
 _Avoid_: 修 bug 默认跳过架构收尾, 无结构变化就不跑 stage
 
+**Code Design Stage** (`code_design`):
+只用于 `from_scratch`（从零创建项目）的前段初步架构设计。它读取已经确认的产品总说明和功能文档，设计准备采用的模块、职责、接口、依赖、主要调用过程、数据处理位置和测试位置，并写入 `spec/architecture_code_design.md`。它描述“准备怎样实现”，不承担查看已有代码和运行项目反推当前架构的任务。架构文档结构可以与存量项目共用，但流程规范必须按实际情况分支：从零设计以已确认的产品设计和用户决定为依据，不强制运行尚不存在的项目；存量项目反推必须查看代码，具备安全运行条件时必须运行，并用实际表现校准代码理解。
+_Avoid_: 把 code_design 写成已有代码反推流程, 用“场景B”等未定义名称代替实际适用条件, 产品设计未确认就开始搭架构
+
+**Code Design Document Template**（代码设计文档模板）:
+规定 `spec/architecture_code_design.md` 的内容结构。文档面向项目维护者，固定从产品设计出发，依次说明产品概览、产品怎样决定架构、代码分层、架构关键节点、每个产品功能的完整代码过程、多个功能共用的代码，以及产品设计与代码实现的差异。已有实现使用真实代码位置；从零设计使用明确标记为“计划”的代码位置。每个程序处理节点必须落到文件、类、函数、类型或接口，并说明具体判断、调用、状态或数据结果、失败结果和验证位置。
+_Avoid_: 把架构文档写成目录清单, 只列模块或函数名不写逻辑, 产品功能与代码设计互不对应, 把计划代码写成已有实现
+
+**Architecture Layer**（代码架构层）:
+一组承担同类代码职责、具有明确调用边界和依赖方向的代码。每层必须说明它承接的产品职责、负责与不负责的内容、关键代码位置、对外约定、上下层依赖和验证位置。架构图只表达分层和依赖，不表达某个功能的执行顺序。
+_Avoid_: 按目录机械分层, 用“表现层/业务层/数据层”等名称代替实际职责, 在架构图中混画执行顺序
+
+**Architecture Key Node**（架构关键节点）:
+多个功能共同经过，或者行为改变会影响产品规则、阶段推进、状态一致性或外部交互的代码位置。它必须写清产品责任、代码位置、上游触发、关键处理、下游调用、状态和数据、失败结果及验证位置。普通工具函数不属于关键节点。
+_Avoid_: 把所有函数都列成关键节点, 只写节点名称不写实际代码和逻辑
+
+**Feature Code Flow**（功能代码过程）:
+一个产品功能中某个明确场景的完整实现过程，从用户动作或系统事件开始，到用户或调用方得到明确结果结束。流程图中的每个程序节点直接标出文件、函数或类型和关键处理；图后逐步说明输入、判断、调用、状态或数据结果、失败结果和验证。一个场景可以多次进入程序，不预设只有一个代码入口。
+_Avoid_: 只有角色交互没有代码映射, 把多个场景和函数内部流程混在同一张图, 用孤立的“状态变化”字段代替发生步骤
+
+**Code Evidence Status**（代码证据状态）:
+已有项目的关键结论区分为运行确认、测试确认、代码确认、文档或用户确认、未确认和冲突。代码确认表示已经阅读真实调用链和关键逻辑，但不等于已经实际运行。无法运行时必须说明原因和未验证范围。
+_Avoid_: 读过代码就写成运行验证, 隐藏或不可达代码直接写成正式产品功能, 证据冲突仍选一个写成事实
+
+**Code Design Process Standard**（代码设计流程规范）:
+规定 AI 怎样从已确认产品设计形成代码覆盖清单，推导架构层和关键节点，逐个功能设计完整代码过程，落实产品规则与异常，设计共享代码和验证方式，并在用户确认后生成正式文档。`code_design` 形成计划设计；`project_design_init` 还必须遵守存量项目调查和运行规范。
+_Avoid_: 从代码目录开始拼架构, 产品设计未确认就生成文档, 只设计成功路径不落实规则和异常, 不经用户确认直接写正式产物
+
 **Revise Code Design Stage** (`revise_code_design`):
 改产品路径上、`spec` 产品设计与功能拆分之后的设计期改架构 Stage。与末段 `update_code_design`（详细落地）名称分离，避免同一 Run 内 stage 名冲突。
 _Avoid_: 与 update_code_design 共用同一 stage 名当主键
 
 **Project Design Init Stage** (`project_design_init`):
-首次处理已有代码项目时，为 `product_change` / `bugfix` 共享的前置 Stage，中文名“项目设计架构初始化”。角色为“存量产品与架构分析师”；同时加载 `spec/spec.md` 与 `code_design/code_design.md` 两组提示词和规范。根据现有代码及可运行行为一次建立：`spec/product.md`、多个 `spec/feature_<english-name>.md`、`spec/architecture_code_design.md`。门2必须同时校验三类产物，门3确认后写 `project_design_initialized=true` 与 `architecture.preliminary_done=true`。该 Stage 完成前作废不得写 true。
-_Avoid_: 只生成 architecture_code_design.md, 拆成彼此可能不一致的产品反推和架构反推两轮, 用旧文档存在冒充本次初始化完成
+首次处理已有代码项目时，为 `product_change` / `bugfix` 共享的前置 Stage，中文名“项目设计架构初始化”。角色为“存量产品与架构分析师”。它使用专门的存量项目调查提示词：必须查看现有代码；具备安全运行条件时必须运行项目，用真实表现校准代码理解；无法运行时写清原因和未确认内容。它可以共用产品文档与架构文档的结构规范，但不能复用 `code_design` 的从零设计调查流程。根据现有代码及可运行行为一次建立：`spec/product.md`、多个 `spec/feature_<english-name>.md`、`spec/architecture_code_design.md`。门2必须同时校验三类产物，门3确认后写 `project_design_initialized=true` 与 `architecture.preliminary_done=true`。该 Stage 完成前作废不得写 true。
+_Avoid_: 只生成 architecture_code_design.md, 拆成彼此可能不一致的产品反推和架构反推两轮, 用旧文档存在冒充本次初始化完成, 把从零设计提示词当成代码反推提示词
 
 **Product Spec Stage** (`spec`):
 统一负责“产品设计 + 功能拆分”。角色为产品设计师；加载 `.workflow_loop/Template_Repository/spec/spec.md` 与 `.workflow_loop/Standardized_Repository/spec/spec.md`；产物为 `spec/product.md` 与多个 `spec/feature_<english-name>.md`。`from_scratch` 中负责从零建立；`product_change` 中负责基于现状重新设计，可新增、修改或删除功能文档。门2必须证明产物属于本 Run：阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化。`from_scratch` 要求新建 product.md 且至少新建一个功能文档；`product_change` 要求 product.md 有变化且至少一个功能文档新增、修改或删除。

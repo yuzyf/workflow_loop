@@ -926,25 +926,25 @@
         <mxCell id="03-FS03-BG" value="" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="8050" y="2100" width="3700" height="3740" as="geometry"/>
         </mxCell>
-        <mxCell id="03-FS03-H" value="FS-03  code_design（初步架构）" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#2563EB;strokeColor=#2563EB;fontColor=#FFFFFF;fontSize=18;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
+        <mxCell id="03-FS03-H" value="FS-03  code_design（初步代码架构）" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#2563EB;strokeColor=#2563EB;fontColor=#FFFFFF;fontSize=18;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="8090" y="2135" width="3620" height="105" as="geometry"/>
         </mxCell>
         <mxCell id="03-FS03-IN" value="FS-03.IN　来自 FS-02.A.OUT；从零做不得因旧文件跳过。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#E8F2FF;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=13;fontStyle=1;align=left;verticalAlign=middle;spacing=10;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="8130" y="2265" width="3540" height="100" as="geometry"/>
         </mxCell>
-        <mxCell id="03-FS03-MAT" value="&lt;b&gt;FS03.M 材料与产物&lt;/b&gt;&lt;br&gt;角色：目标角色待重定义；当前 role_doc 为代码阅读者&lt;br&gt;提示词：&lt;code&gt;.workflow_loop/Template_Repository/code_design/code_design.md&lt;/code&gt;&lt;br&gt;规范：&lt;code&gt;.workflow_loop/Standardized_Repository/code_design/code_design.md&lt;/code&gt;&lt;br&gt;Artifact（产物）：spec/architecture_code_design.md&lt;br&gt;&lt;b&gt;校验现状/缺口：&lt;/b&gt;当前材料偏已有代码反推，不完全适合从零做前期设计；校验主要看文件存在。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#334155;fontSize=12;align=left;verticalAlign=top;spacing=10;strokeWidth=2;" parent="1" vertex="1">
+        <mxCell id="03-FS03-MAT" value="&lt;b&gt;FS03.M 材料与产物&lt;/b&gt;&lt;br&gt;角色：代码架构设计师（初步）&lt;br&gt;提示词：&lt;code&gt;.workflow_loop/Template_Repository/code_design/code_design.md&lt;/code&gt;&lt;br&gt;规范：&lt;code&gt;.workflow_loop/Standardized_Repository/code_design/code_design.md&lt;/code&gt;&lt;br&gt;Artifact（产物）：spec/architecture_code_design.md&lt;br&gt;&lt;b&gt;内容要求：&lt;/b&gt;从已确认产品设计推导代码分层、架构关键节点和各功能完整代码过程；程序节点必须映射文件、符号、逻辑、状态或数据、失败结果和验证位置。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#334155;fontSize=12;align=left;verticalAlign=top;spacing=10;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="8130" y="2385" width="3540" height="405" as="geometry"/>
         </mxCell>
         <mxCell id="03-FS03-S1" value="FS03.1　AI 调 &lt;code&gt;workflow discuss&lt;/code&gt;：完整 stdout：角色全文、全局写作规范全文、阶段提示词全文、阶段规范全文、产出路径、下一步；Journal 记提示词/角色加载。可重复，不回滚门禁。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="8130" y="2810" width="3540" height="155" as="geometry"/>
         </mxCell>
-        <mxCell id="03-FS03-S2" value="FS03.2　AI 按本 Stage 材料与用户讨论；CLI 不参与聊天；用户明确讨论完毕。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
+        <mxCell id="03-FS03-S2" value="FS03.2　AI 对照 product.md 和全部 feature_*.md，形成代码覆盖清单，逐项确认代码分层、关键节点、功能代码过程、共享代码和验证方式；用户明确讨论完毕。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="8130" y="2985" width="3540" height="140" as="geometry"/>
         </mxCell>
         <mxCell id="03-FS03-S3" value="FS03.3【门1】&lt;code&gt;workflow gate code_design --discuss-done&lt;/code&gt; → discussion_complete=true；Journal“门禁讨论完毕”。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF8E5;strokeColor=#F59E0B;fontColor=#92400E;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="8130" y="3145" width="3540" height="165" as="geometry"/>
         </mxCell>
-        <mxCell id="03-FS03-S4" value="FS03.4　AI 写本 Stage 产物：基于已确认产品说明设计初步架构，写同一份架构文档。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
+        <mxCell id="03-FS03-S4" value="FS03.4　AI 写 spec/architecture_code_design.md：架构图只画分层和依赖；每个产品功能按场景画完整执行过程，并把每个程序节点映射到具体文件、符号和逻辑。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="8130" y="3330" width="3540" height="175" as="geometry"/>
         </mxCell>
         <mxCell id="03-FS03-RIN" value="FS03.RETRY.IN&lt;br&gt;来自 FS03.B.RETRY.OUT：重新执行门2" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#F97316;fontColor=#9A3412;fontSize=11;fontStyle=1;align=center;verticalAlign=middle;spacing=7;dashed=1;strokeWidth=3;" parent="1" vertex="1">
@@ -2000,13 +2000,13 @@
         <mxCell id="03-PC01-IN" value="PC-01.IN-B　来自 PC-00.B.B.OUT；project_design_initialized=true 时整段不进入。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F0EAFF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=12;fontStyle=1;align=left;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="3520" y="6435" width="2860" height="95" as="geometry"/>
         </mxCell>
-        <mxCell id="03-PC01-MAT" value="&lt;b&gt;PC01.M 材料与产物&lt;/b&gt;&lt;br&gt;角色：存量产品与架构分析师&lt;br&gt;产品提示词/规范：&lt;code&gt;.workflow_loop/Template_Repository/spec/spec.md&lt;/code&gt; + &lt;code&gt;.workflow_loop/Standardized_Repository/spec/spec.md&lt;/code&gt;&lt;br&gt;架构提示词/规范：&lt;code&gt;.workflow_loop/Template_Repository/code_design/code_design.md&lt;/code&gt; + &lt;code&gt;.workflow_loop/Standardized_Repository/code_design/code_design.md&lt;/code&gt;&lt;br&gt;Artifact：spec/product.md + 多个 spec/feature_&amp;lt;english-name&amp;gt;.md + spec/architecture_code_design.md&lt;br&gt;&lt;b&gt;本 Run 校验：&lt;/b&gt;三类产物必须一起生成或按代码重建。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#334155;fontSize=10;align=left;verticalAlign=top;spacing=8;strokeWidth=2;" parent="1" vertex="1">
+        <mxCell id="03-PC01-MAT" value="&lt;b&gt;PC01.M 材料与产物&lt;/b&gt;&lt;br&gt;角色：存量产品与架构分析师&lt;br&gt;专用调查提示词/规范：&lt;code&gt;code_design/project_design_init.md&lt;/code&gt;&lt;br&gt;附加加载：产品文档模板与规范 + 代码架构文档模板与规范&lt;br&gt;Artifact：spec/product.md + 多个 spec/feature_&amp;lt;english-name&amp;gt;.md + spec/architecture_code_design.md&lt;br&gt;&lt;b&gt;本 Run 校验：&lt;/b&gt;三类产物必须一起建立并保持功能、规则、边界、流程和异常一致。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#334155;fontSize=10;align=left;verticalAlign=top;spacing=8;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="3520" y="6550" width="2860" height="430" as="geometry"/>
         </mxCell>
         <mxCell id="03-PC01-S1" value="PC01.1　workflow discuss 完整 stdout：角色/全局写作规范/阶段提示词/阶段规范/产出/下一步；Journal 记提示词/角色加载；可重复，不回滚门禁。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=10;align=left;verticalAlign=middle;spacing=8;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="3520" y="7000" width="2860" height="165" as="geometry"/>
         </mxCell>
-        <mxCell id="03-PC01-S2" value="PC01.2　AI 阅读代码、能运行就运行，并与用户核对当前产品行为、功能边界和架构；用户明确讨论完毕。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=10;align=left;verticalAlign=middle;spacing=8;strokeWidth=2;" parent="1" vertex="1">
+        <mxCell id="03-PC01-S2" value="PC01.2　AI 必须查看说明、配置、入口、关键调用链、状态和测试；具备安全条件时必须运行测试、构建和主要入口。区分运行确认、测试确认、代码确认、未确认和冲突，再与用户核对。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=10;align=left;verticalAlign=middle;spacing=8;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="3520" y="7185" width="2860" height="140" as="geometry"/>
         </mxCell>
         <mxCell id="03-PC01-S3" value="PC01.3【门1】&lt;code&gt;workflow gate project_design_init --discuss-done&lt;/code&gt; → discussion_complete=true + Journal。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF8E5;strokeColor=#F59E0B;fontColor=#92400E;fontSize=10;align=left;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
@@ -3329,13 +3329,13 @@
         <mxCell id="03-BF01-IN" value="BF-01.IN-B　来自 BF-00.B.B.OUT；project_design_initialized=true 时整段不进入。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#E11D48;fontColor=#881337;fontSize=13;fontStyle=1;align=left;verticalAlign=middle;spacing=10;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="5030" y="11105" width="4240" height="100" as="geometry"/>
         </mxCell>
-        <mxCell id="03-BF01-MAT" value="&lt;b&gt;BF01.M 材料与产物&lt;/b&gt;&lt;br&gt;角色：存量产品与架构分析师&lt;br&gt;产品提示词/规范：&lt;code&gt;.workflow_loop/Template_Repository/spec/spec.md&lt;/code&gt; + &lt;code&gt;.workflow_loop/Standardized_Repository/spec/spec.md&lt;/code&gt;&lt;br&gt;架构提示词/规范：&lt;code&gt;.workflow_loop/Template_Repository/code_design/code_design.md&lt;/code&gt; + &lt;code&gt;.workflow_loop/Standardized_Repository/code_design/code_design.md&lt;/code&gt;&lt;br&gt;Artifact：spec/product.md + 多个 spec/feature_&amp;lt;english-name&amp;gt;.md + spec/architecture_code_design.md&lt;br&gt;&lt;b&gt;本 Run 校验：&lt;/b&gt;三类产物必须一起生成或按代码重建。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#334155;fontSize=12;align=left;verticalAlign=top;spacing=10;strokeWidth=2;" parent="1" vertex="1">
+        <mxCell id="03-BF01-MAT" value="&lt;b&gt;BF01.M 材料与产物&lt;/b&gt;&lt;br&gt;角色：存量产品与架构分析师&lt;br&gt;专用调查提示词/规范：&lt;code&gt;code_design/project_design_init.md&lt;/code&gt;&lt;br&gt;附加加载：产品文档模板与规范 + 代码架构文档模板与规范&lt;br&gt;Artifact：spec/product.md + 多个 spec/feature_&amp;lt;english-name&amp;gt;.md + spec/architecture_code_design.md&lt;br&gt;&lt;b&gt;本 Run 校验：&lt;/b&gt;三类产物必须一起建立并保持功能、规则、边界、流程和异常一致。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#334155;fontSize=12;align=left;verticalAlign=top;spacing=10;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="5030" y="11225" width="4240" height="420" as="geometry"/>
         </mxCell>
         <mxCell id="03-BF01-S1" value="BF01.1　workflow discuss 完整 stdout：角色/全局写作规范/阶段提示词/阶段规范/产出/下一步；Journal 提示词/角色加载；可重复、不回滚门禁。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="5030" y="11665" width="4240" height="165" as="geometry"/>
         </mxCell>
-        <mxCell id="03-BF01-S2" value="BF01.2　AI 阅读代码、能运行就运行，核对当前产品行为、功能边界和架构；代码不能证明产品历史，无法确认的背景询问用户；用户明确讨论完毕。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
+        <mxCell id="03-BF01-S2" value="BF01.2　AI 必须查看说明、配置、入口、关键调用链、状态和测试；具备安全条件时必须运行测试、构建和主要入口。区分运行确认、测试确认、代码确认、未确认和冲突；代码不能证明产品历史。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#334155;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=2;" parent="1" vertex="1">
           <mxGeometry x="5030" y="11850" width="4240" height="140" as="geometry"/>
         </mxCell>
         <mxCell id="03-BF01-S3" value="BF01.3【门1】workflow gate project_design_init --discuss-done → discussion_complete=true + Journal。" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF8E5;strokeColor=#F59E0B;fontColor=#92400E;fontSize=12;align=left;verticalAlign=middle;spacing=9;strokeWidth=3;" parent="1" vertex="1">
@@ -5099,7 +5099,7 @@
         <mxCell id="03-OV-FS-1" value="FS-02&lt;br&gt;spec 产品设计 + 功能拆分" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#E8F2FF;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="4180" y="500" width="3500" height="145" as="geometry"/>
         </mxCell>
-        <mxCell id="03-OV-FS-2" value="FS-03&lt;br&gt;code_design 初步架构" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#E8F2FF;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
+        <mxCell id="03-OV-FS-2" value="FS-03&lt;br&gt;code_design 产品驱动的初步代码架构" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#E8F2FF;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="8080" y="500" width="3500" height="145" as="geometry"/>
         </mxCell>
         <mxCell id="03-OV-FS-3" value="FS-04&lt;br&gt;spike 穿刺&lt;br&gt;A执行/B跳过" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#E8F2FF;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
@@ -5165,7 +5165,7 @@
         <mxCell id="03-OV-PC-0" value="03.PC.IN / PC-00&lt;br&gt;开工 + 项目设计初始化判断" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F0EAFF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=15;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="220" y="1000" width="2750" height="135" as="geometry"/>
         </mxCell>
-        <mxCell id="03-OV-PC-1" value="PC-01&lt;br&gt;project_design_init 项目设计架构初始化" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F0EAFF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=15;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
+        <mxCell id="03-OV-PC-1" value="PC-01&lt;br&gt;project_design_init 查代码并运行，建立产品与代码设计" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F0EAFF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=15;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="3220" y="1000" width="2750" height="135" as="geometry"/>
         </mxCell>
         <mxCell id="03-OV-PC-2" value="PC-02&lt;br&gt;spec 产品设计 + 功能拆分" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#F0EAFF;strokeColor=#7C3AED;fontColor=#4C1D95;fontSize=15;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
@@ -5240,7 +5240,7 @@
         <mxCell id="03-OV-BF-0" value="03.BF.IN / BF-00&lt;br&gt;开工 + 项目设计初始化判断" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#E11D48;fontColor=#881337;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="260" y="1520" width="4100" height="145" as="geometry"/>
         </mxCell>
-        <mxCell id="03-OV-BF-1" value="BF-01&lt;br&gt;project_design_init 项目设计架构初始化" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#E11D48;fontColor=#881337;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
+        <mxCell id="03-OV-BF-1" value="BF-01&lt;br&gt;project_design_init 查代码并运行，建立产品与代码设计" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#E11D48;fontColor=#881337;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">
           <mxGeometry x="4660" y="1520" width="4100" height="145" as="geometry"/>
         </mxCell>
         <mxCell id="03-OV-BF-2" value="BF-02&lt;br&gt;reproduce 复现" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#E11D48;fontColor=#881337;fontSize=16;fontStyle=1;align=center;verticalAlign=middle;spacing=8;strokeWidth=3;" parent="1" vertex="1">

@@ -635,15 +635,21 @@ class StageStrategy(ABC):
 
 | 字段 | 值 |
 |---|---|
-| 角色 | 架构文档撰写者（初步） |
+| 角色 | 代码架构设计师（初步） |
 | 提示词 | `Template_Repository/code_design/code_design.md` |
 | 规范 | `Standardized_Repository/code_design/code_design.md` |
 | 产物 | `spec/architecture_code_design.md` |
 | `code_validate` | 默认（检查文件存在） |
 | `on_advance` | 置 `architecture.preliminary_done=true`；`from_scratch` 中若 `spec` 也已 `--confirmed`，置 `project_design_initialized=true` |
-| instruction | "初步架构阶段：产出 spec/architecture_code_design.md（从零做的初步架构设计）" |
+| instruction | "初步代码架构阶段：从已确认产品设计推导代码分层、关键节点和功能代码过程，产出 spec/architecture_code_design.md" |
 
 **顺序约束**：`from_scratch` 中顺序固定为**先产品设计与功能拆分、后初步架构**（先定做什么，再定怎么搭）。不可因旧文件存在跳过。
+
+**文档主线**：面向项目维护者，说明整个项目的代码怎样落实产品设计。内容固定从产品概览开始，再说明产品怎样决定代码架构、代码分层、架构关键节点、每个产品功能的完整代码过程、多个功能共同使用的代码，以及产品设计与代码实现的差异。
+
+**代码映射**：每个产品功能按场景说明完整代码过程。流程图中的每个程序处理节点必须直接标出文件、类、函数、类型或接口，并说明关键判断、调用、状态或数据结果、失败结果和验证位置。不能只列模块名或函数名，也不能使用脱离流程的“状态变化”字段。
+
+**图的边界**：架构图只画代码分层、职责和依赖方向；功能流程图或时序图只画一个明确场景的执行过程；单个复杂函数需要时再单独画内部流程或状态迁移。三种范围不能混在一张图中。
 
 ### 7.3 spike（可选穿刺）
 
@@ -666,16 +672,20 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 存量产品与架构分析师 |
-| 提示词 | 同时加载 `Template_Repository/spec/spec.md` + `Template_Repository/code_design/code_design.md` 两组 |
-| 规范 | 同时加载 `Standardized_Repository/spec/spec.md` + `Standardized_Repository/code_design/code_design.md` 两组 |
+| 提示词 | `Template_Repository/code_design/project_design_init.md`，并附加加载 `Template_Repository/spec/spec.md` + `Template_Repository/code_design/code_design.md` |
+| 规范 | `Standardized_Repository/code_design/project_design_init.md`，并附加加载 `Standardized_Repository/spec/spec.md` + `Standardized_Repository/code_design/code_design.md` |
 | 产物 | `spec/product.md` + 多个 `spec/feature_<english-name>.md` + `spec/architecture_code_design.md`（一次建立） |
 | `code_validate` | 同时校验三类产物都存在 |
 | `on_advance` | 置 `project_design_initialized=true` 与 `architecture.preliminary_done=true` |
-| instruction | "项目设计架构初始化：根据现有代码及可运行行为一次建立 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md" |
+| instruction | "已有项目设计初始化：必须查看代码和测试，具备安全条件时实际运行，一次建立相互一致的 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md" |
 
 **顺序约束**：该 stage 完成前作废不得写 `project_design_initialized=true`。不拆成彼此可能不一致的"产品反推"+"架构反推"两轮。
 
 **事实边界**：代码和运行结果用于确认产品当前怎样工作，不能单独证明产品当初为什么诞生或某个功能为什么设计；历史背景无法核实时必须询问用户或标记未确认。
+
+**调查要求**：必须查看项目说明、构建与依赖配置、用户实际入口、关键调用链、状态与外部输入输出、自动化测试。具备安全的本地运行条件时，至少运行现有测试，并在条件允许时构建项目和走主要产品入口。需要生产账号、真实数据、付费服务或外部写入时先取得用户同意。
+
+**证据状态**：关键结论区分运行确认、测试确认、代码确认、文档或用户确认、未确认和冲突。代码确认表示已经阅读真实调用链和关键逻辑，不等于已经运行。不可达、隐藏、未完成或废弃代码不能直接写成正式产品功能。
 
 ### 7.5 revise_code_design（改产品设计期改架构）
 
@@ -975,7 +985,7 @@ State Snapshot 中记录架构完成度：
 
 ### 9.3 路由链接
 - `spec/product.md` 里始终有 markdown 链接 `[code_design](./architecture_code_design.md)`
-- `from_scratch`：链接先指向不存在的文件，末段 `update_code_design` stage 才创建/更新该文件
+- `from_scratch`：`spec` 阶段先写链接，紧接着的 `code_design` 阶段创建初步文档；末段 `update_code_design` 再按最终代码、测试和验收结果更新
 - `product_change`/`bugfix`：链接指向已存在的文件（来自 `project_design_init` 或 `revise_code_design`）
 
 ---

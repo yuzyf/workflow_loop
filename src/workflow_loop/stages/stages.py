@@ -49,8 +49,8 @@ class SpecStage(StageStrategy):
         return "产品设计阶段：产出 spec/product.md（产品设计说明书 + 功能路由）+ spec/feature_*.md（功能拆分）"
 
 
-# 初步架构 stage：从零做的初步架构设计
-# 产出 spec/architecture_code_design.md，后续 spike/plan 基于这个架构
+# 初步代码架构 stage：从已确认产品设计推导代码设计
+# 产出 spec/architecture_code_design.md，后续 spike/plan 基于这个设计
 class CodeDesignStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
@@ -75,7 +75,7 @@ class CodeDesignStage(StageStrategy):
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "初步架构阶段：产出 spec/architecture_code_design.md（从零做的初步架构设计）"
+        return "初步代码架构阶段：从已确认产品设计推导代码分层、关键节点和功能代码过程，产出 spec/architecture_code_design.md"
 
 
 # 穿刺 stage：识别风险、写 throwaway 代码到 .workflow_loop/spike_tmp/
@@ -490,7 +490,7 @@ class ProjectDesignInitStage(StageStrategy):
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "项目设计架构初始化：根据现有代码及可运行行为一次建立 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md"
+        return "已有项目设计初始化：必须查看代码和测试，具备安全条件时实际运行，一次建立相互一致的 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md"
 
 
 # 设计期架构修订 stage：按变更后的产品设计改 spec/architecture_code_design.md

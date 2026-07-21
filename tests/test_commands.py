@@ -77,6 +77,55 @@ def test_discuss_loads_global_writing_standard_before_stage_docs(tmp_path):
     assert out.index("【流程模版】") < out.index("【流程规范】")
 
 
+def test_code_design_discuss_prints_product_driven_architecture_rules(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    spec_dir = os.path.join(str(tmp_path), "spec")
+    os.makedirs(spec_dir)
+    with open(os.path.join(spec_dir, "product.md"), "w") as f:
+        f.write("# Product\n")
+    with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
+        f.write("# 【功能】Example\n")
+
+    code, out, _ = _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    assert code == 0, out
+    code, out, _ = _run(["gate", "spec"], str(tmp_path))
+    assert code == 0, out
+    code, out, _ = _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    assert code == 0, out
+
+    code, out, _ = _run(["discuss"], str(tmp_path))
+
+    assert code == 0
+    assert "code_design stage" in out
+    assert "代码架构设计师（初步）" in out
+    assert "产品设计决定代码设计" in out
+    assert "架构图只表达代码分层" in out
+    assert "由产品职责推导代码架构" in out
+    assert "只列函数名不算完成" in out
+    assert "场景B" not in out
+
+
+def test_project_design_init_discuss_prints_investigation_and_output_rules(tmp_path):
+    _setup_project(tmp_path)
+    code, out, _ = _run(["start", "--intent", "product_change"], str(tmp_path))
+    assert code == 0, out
+
+    code, out, _ = _run(["discuss"], str(tmp_path))
+
+    assert code == 0
+    assert "project_design_init stage" in out
+    assert "已有项目设计初始化提示词" in out
+    assert "具备安全的本地运行条件时，必须实际运行" in out
+    assert "运行确认" in out
+    assert "【附加流程模版: Template_Repository/spec/spec.md】" in out
+    assert "【附加流程模版: Template_Repository/code_design/code_design.md】" in out
+    assert "产品设计文档模板" in out
+    assert "代码架构设计文档模板" in out
+    assert "一次建立相互一致的三类文档" in out
+
+
 # 测试 workflow start 在已有 active Run 时拒绝再次启动（防止并发 Run 互相覆盖 state）
 def test_active_run_guard(tmp_path):
     # 初始化项目
