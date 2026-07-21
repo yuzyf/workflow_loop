@@ -2,7 +2,7 @@
 
 ## 命名
 - Stage 名：`project_design_init`
-- 产物：`spec/product.md` + `spec/功能<名>.md`（多个）+ `spec/architecture_code_design.md`
+- 产物：`spec/product.md` + `spec/feature_<english-name>.md`（多个）+ `spec/architecture_code_design.md`
 
 ## 强制规则
 - 仅 `product_change` / `bugfix` 在 `project_design_initialized=false` 时执行

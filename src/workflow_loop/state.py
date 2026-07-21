@@ -28,7 +28,7 @@ class GateState:
 class StageState:
     # stage 生命周期状态：pending（没开始）→ in_progress（AI 在做）→ gated（等门禁）→ done（过了门禁）
     status: str = "pending"
-    # 期望产出的文件路径列表（相对项目根），可能多个（如 spec 的 product.md + 功能*.md）
+    # 期望产出的文件路径列表（相对项目根），可能多个（如 spec 的 product.md + feature_*.md）
     artifact_paths: list[str] = field(default_factory=list)
     # 产出文件首次出现的时间戳（ISO 8601 UTC），用于 journal 追溯
     artifact_produced_at: str | None = None

@@ -22,10 +22,10 @@
 **把工作流从"文字描述"变成"代码关卡"：**
 - AI 不调代码就过不了下一阶段
 - 强制力放在**门禁**上（关卡式强制），不在每轮注入上（唠叨式强制）
-- 代码是流程的**唯一真相**，`AGENTS.md` 只是告诉 AI "去调代码"
+- 代码是流程的**唯一真相**，`AGENTS.md` 告诉 AI "去调代码"，并给出聊天和文档共同遵守的核心表达规则
 
 ### 1.3 第一版要验证的假设
-`AGENTS.md 薄契约 + 全局 CLI workflow + Python 代码门禁` 这个组合，能让 AI 被代码关卡约束着走完三种工作意图（from_scratch / product_change / bugfix）的完整工作流（从 start 到 done/abort）。
+`AGENTS.md 最小契约 + 全局 CLI workflow + Python 代码门禁` 这个组合，能让 AI 被代码关卡约束着走完三种工作意图（from_scratch / product_change / bugfix）的完整工作流（从 start 到 done/abort），并从第一条回复开始使用直白表达。
 
 ### 1.4 与旧 spike 的关系
 本设计是 `workflow_loop_spike` 旧 spike（4 场景 + `python3 workflow.py` + `SCENARIO_REGISTRY`）的**全量重写**，不是增量改造。旧入口、旧 state schema、旧 ScenarioStrategy 直接删除，不做双写兼容（CONTEXT.md "Legacy CLI Removal"）。
@@ -63,7 +63,7 @@ curl -fsSL <安装地址>/install.sh | bash
 ### 2.4 AI 客户端：opencode / codex
 - 客户端无关：契约在 `AGENTS.md` 里自包含
 - 不依赖任何客户端的特殊行为（如自动读 AGENTS.md）
-- AGENTS.md 自己说清"调 `workflow start` 遵守流程"
+- AGENTS.md 自己说清"调 `workflow start` 遵守流程"和核心表达要求
 
 ### 2.5 仓库布局
 
@@ -71,7 +71,7 @@ curl -fsSL <安装地址>/install.sh | bash
 workflow_loop_spike/                      # 仓库根（可仍名 spike）
   ├─ pyproject.toml                       # console script: workflow = "workflow_loop.cli:main"
   ├─ install.sh                           # 官方安装脚本（shell 引导 + 调 workflow install-project）
-  ├─ AGENTS.md                            # 薄契约（既是模板也是本仓库自己的契约）
+  ├─ AGENTS.md                            # 最小工作流契约 + 核心表达要求
   ├─ README.md
   ├─ DESIGN.md                            # 本文档
   ├─ CONTEXT.md                           # 术语与约束（设计真相源）
@@ -94,6 +94,8 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   └─ data/                            # 随包装分发的资源
   │       ├─ Template_Repository/         # 提示词模板
   │       └─ Standardized_Repository/     # 规范词
+  │           └─ global/
+  │               └─ document_writing.md # 所有 stage 共用的写作规范
   ├─ tests/                               # pytest 单元测试
   │   ├─ test_state.py
   │   ├─ test_path_composer.py
@@ -108,6 +110,7 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   ├─ journal.jsonl                    # 历史记录（开工后才写）
   │   ├─ Template_Repository/             # 从包内 data/ 复制（项目可定制）
   │   ├─ Standardized_Repository/         # 从包内 data/ 复制（项目可定制）
+  │   │   └─ global/document_writing.md   # discuss 每次完整加载
   │   └─ spike_tmp/                       # spike stage 的 throwaway 代码
   └─ .gitignore
 ```
@@ -118,7 +121,7 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
 - 本仓库根的 `.workflow_loop/` 是本仓库自己作为被管理项目的运行时骨架（开发态用 `pipx install -e . --force` 把开发版链到全局，然后跑 `workflow install-project` 刷新本仓库的 `.workflow_loop/`）
 - 项目根下的产物目录（`spec/`/`plan/`/`acceptance/`/`qa/`/`impl/`/`bug/`）**不在安装时预建**，首次写产物时才建（CONTEXT.md "瘦骨架"）
 
-### 2.6 AGENTS.md 薄契约
+### 2.6 AGENTS.md 最小契约
 仓库根 `AGENTS.md` 既是模板（被 `workflow install-project` 写入到目标项目），也是本仓库自己的开发契约。内容固定为：
 
 ```markdown
@@ -126,10 +129,19 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
 
 本项目由 workflow_loop 管理。用户提出需求后，调 `workflow start`，
 之后严格按每条命令 stdout 打印的"下一步"执行。
+
+## 表达要求
+
+AI 回复用户和编写正式文档时：
+
+- 输出前先弄清实际问题、已知事实、限制和目标。
+- 能用直白话就不用抽象词；必须使用专业词时，马上说明它具体指什么。
+- 写清谁在什么情况下做什么，以及会得到什么结果。
+- 删除空泛、重复，或者没有增加事实、决定、行动和理由的话。
 ```
 
 安装策略（CONTEXT.md "Agent Contract File"）：
-- 当前项目未安装：`workflow install-project` 写入固定薄契约；`AGENTS.md` 不存在则新建，存在则整份覆盖，不询问、不合并、不备份
+- 当前项目未安装：`workflow install-project` 写入固定最小契约；`AGENTS.md` 不存在则新建，存在则整份覆盖，不询问、不合并、不备份
 - 当前项目已安装：按重复安装保护直接退出，不覆盖现有 `AGENTS.md`
 
 ### 2.7 开发态入口
@@ -428,9 +440,10 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
      AI 调 `workflow discuss`
      → workflow 读 state.current_stage
      → 从 state.stage_path 找对应 Stage 策略类实例
-     → 从项目内 .workflow_loop/Template_Repository/ 与 Standardized_Repository/ 加载提示词与规范
      → 加载 role_doc.py 里该 stage 的角色定义
-     → stdout 完整输出（Prompt Full Print）：提示词全文 + 规范全文 + stage.instruction()
+     → 加载 .workflow_loop/Standardized_Repository/global/document_writing.md
+     → 从项目内 .workflow_loop/Template_Repository/ 与 Standardized_Repository/ 加载当前 stage 提示词与规范
+     → stdout 完整输出：角色全文 + 全局写作规范全文 + 提示词全文 + stage 规范全文 + stage.instruction()
      → 写 journal: 提示词加载 / 角色文档加载
 
 [S2] AI 和用户讨论
@@ -448,7 +461,7 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
      → 写 journal: 门禁讨论完毕 passed
 
 [S4] AI 写产出文件
-     → 可能是多个文件（spec: product.md + 功能*.md）
+     → 可能是多个文件（spec: product.md + feature_*.md）
      → 主题在 plan/fix_plan 定下后，后面 stage 复用主题做文件名（见第 10 节）
      → spike stage 特殊：throwaway 代码进 .workflow_loop/spike_tmp/，结论文档进 spec/
 
@@ -571,11 +584,22 @@ class StageStrategy(ABC):
 
 | 层 | 形式 | 强制度 |
 |---|---|---|
-| AGENTS.md（2 行） | 文字 | 弱：AI 可能不看，但不看就不知道入口 |
+| AGENTS.md（最小契约 + 核心表达要求） | 文字 | 弱：AI 可能不看，但不看就不知道入口和聊天表达要求 |
 | workflow stdout 下一步 | 代码生成 | 中：AI 大概率跟着走，但不强制 |
 | workflow 门禁 | 代码强制 | 强：跳步直接报错，过不去 |
 
-**根本边界**：代码能强制"不调 gate 过不去"，但不能强制"AI 主动调命令"。最薄一层 AGENTS.md 无法消除——AI 必须有入口知道"调 start"。
+**根本边界**：代码能强制"不调 gate 过不去"，但不能强制"AI 主动调命令"，也不能自动判断一篇文章是否直白。AGENTS.md 必须给出入口和核心表达要求；全局写作规范负责详细检查，用户确认负责最后判断。
+
+### 6.7 全局写作规范
+
+- 固定路径：`.workflow_loop/Standardized_Repository/global/document_writing.md`
+- 适用：AI 对用户的回复，以及 AI 编写或修改的正式文档
+- 不适用：`workflow` 命令行 stdout
+- 加载顺序：角色说明 → 全局写作规范 → 当前 stage 模板 → 当前 stage 规范 → 附加材料 → 指令与产物
+- 核心要求：输出前确认实际问题、事实、限制和目标；能用普通话说明就不用抽象词；写清对象、条件、动作和结果；删除重复和不增加信息的话
+- 正式文档写完后执行完整对抗性清晰审查；AI 聊天发送前快速检查抽象词、歧义、重复和废话
+- 不做关键词封禁。代码只检查全局规范已安装并被 `discuss` 加载，不能声称自动判断写作质量
+- 本次只更新当前仓库和未来新安装项目；其他已安装项目不自动覆盖，升级机制以后单独设计
 
 ---
 
@@ -590,14 +614,22 @@ class StageStrategy(ABC):
 | 角色 | 产品设计师 |
 | 提示词 | `Template_Repository/spec/spec.md` |
 | 规范 | `Standardized_Repository/spec/spec.md` |
-| 产物 | `spec/product.md` + `spec/功能<名>.md`（可能多个） |
-| `code_validate` | 检查 `spec/product.md` 存在 + 至少一个 `spec/功能*.md` 存在；阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化（证明产物属于本 Run） |
+| 产物 | `spec/product.md` + `spec/feature_<english-name>.md`（可能多个，文件名使用英文，正文使用中文） |
+| `code_validate` | 检查 `spec/product.md` 存在 + 至少一个 `spec/feature_*.md` 存在；阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化（证明产物属于本 Run） |
 | `on_advance` | no-op；`from_scratch` 中若 `code_design` 也已 `--confirmed`，置 `project_design_initialized=true` |
-| instruction | "产品设计阶段：产出 spec/product.md（产品设计说明书 + 功能路由）+ spec/功能*.md（功能拆分）" |
+| instruction | "产品设计阶段：产出 spec/product.md（产品设计说明书 + 功能路由）+ spec/feature_*.md（功能拆分）" |
 
 **门2特殊校验**：
 - `from_scratch` 要求新建 `product.md` 且至少新建一个功能文档
 - `product_change` 要求 `product.md` 有变化且至少一个功能文档新增、修改或删除
+
+**产品设计提示词规则**：
+- 产品背景说明产品诞生的现实背景和需求来源，不把提示词缺陷、模板修改历史或技术实现写成产品背景
+- 产品目标只写完成后要达到的结果，不把 AI 的提问、调查和整理方法写成目标
+- 产品背景、产品目标、功能背景和设计原因必须来自用户确认或可核实事实；代码和运行结果不能单独证明历史原因
+- 用户清单只列实际用户；AI 和系统服务作为执行角色写在场景或使用过程中
+- 产品通用规则只放整个产品或多个功能共同生效的用户可见行为；讨论方法归阶段规范，表达要求归全局写作规范
+- `bugfix`（修 bug）中，项目设计未初始化时由 `project_design_init` 建立产品设计；已初始化时使用现有设计；改变产品行为时改走 `product_change`（修改产品）
 
 ### 7.2 code_design（从零做前段初步架构）
 
@@ -636,12 +668,14 @@ class StageStrategy(ABC):
 | 角色 | 存量产品与架构分析师 |
 | 提示词 | 同时加载 `Template_Repository/spec/spec.md` + `Template_Repository/code_design/code_design.md` 两组 |
 | 规范 | 同时加载 `Standardized_Repository/spec/spec.md` + `Standardized_Repository/code_design/code_design.md` 两组 |
-| 产物 | `spec/product.md` + 多个 `spec/功能<名>.md` + `spec/architecture_code_design.md`（一次建立） |
+| 产物 | `spec/product.md` + 多个 `spec/feature_<english-name>.md` + `spec/architecture_code_design.md`（一次建立） |
 | `code_validate` | 同时校验三类产物都存在 |
 | `on_advance` | 置 `project_design_initialized=true` 与 `architecture.preliminary_done=true` |
-| instruction | "项目设计架构初始化：根据现有代码及可运行行为一次建立 spec/product.md + spec/功能*.md + spec/architecture_code_design.md" |
+| instruction | "项目设计架构初始化：根据现有代码及可运行行为一次建立 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md" |
 
 **顺序约束**：该 stage 完成前作废不得写 `project_design_initialized=true`。不拆成彼此可能不一致的"产品反推"+"架构反推"两轮。
+
+**事实边界**：代码和运行结果用于确认产品当前怎样工作，不能单独证明产品当初为什么诞生或某个功能为什么设计；历史背景无法核实时必须询问用户或标记未确认。
 
 ### 7.5 revise_code_design（改产品设计期改架构）
 
@@ -813,16 +847,17 @@ class StageStrategy(ABC):
 - **写 journal**：工作流启动 / 路径生成 / 清场确认（若适用）
 
 ### 8.2 `discuss`
-- **干啥**：加载当前 stage 的提示词+规范+角色定义，**完整输出**给 AI（Prompt Full Print）
+- **干啥**：加载全局写作规范和当前 stage 的提示词、规范、角色定义，**完整输出**给 AI
 - **何时调**：每个 stage 的 S1
 - **流程**：
   1. 读 `state.current_stage`
   2. 从 `state.stage_path` 找对应 Stage 策略类实例
-  3. 加载 `stage.prompt_doc_path()` 指向的提示词
-  4. 加载 `stage.standard_doc_path()` 指向的规范词
-  5. 加载 `role_doc.py` 里该 stage 的角色定义
-  6. stdout 打印：提示词全文 + 规范全文 + `stage.instruction()` + 期望产出路径
-  7. 写 journal：提示词加载 / 角色文档加载
+  3. 加载 `role_doc.py` 里该 stage 的角色定义
+  4. 加载 `Standardized_Repository/global/document_writing.md` 全局写作规范
+  5. 加载 `stage.prompt_doc_path()` 指向的提示词
+  6. 加载 `stage.standard_doc_path()` 指向的阶段规范
+  7. stdout 按顺序打印：角色全文 + 全局写作规范全文 + 提示词全文 + 阶段规范全文 + 附加材料 + `stage.instruction()` + 期望产出路径
+  8. 写 journal：提示词加载（含全局规范路径）/ 角色文档加载
 - **可重复加载**：同一 stage 在 Run 仍 active 且尚未整轮结束前，允许多次 discuss；重复 discuss 不自动清零已通过的门禁
 - **stdout 末尾**：`下一步：用这个提示词和用户讨论。讨论完用户说"完毕"后，调 workflow gate <stage> --discuss-done`
 
@@ -908,7 +943,7 @@ class StageStrategy(ABC):
   1. 检查 `.workflow_loop/project.json` 是否存在且 `installer_version` 一致 → Repeat Installation 直接退出，零修改
   2. 创建 `.workflow_loop/`
   3. 用 `importlib.resources` 把 `workflow_loop.data.Template_Repository`、`workflow_loop.data.Standardized_Repository` 解包到 `.workflow_loop/`
-  4. 写 `AGENTS.md`（薄契约，存在则整份覆盖，不询问、不合并、不备份）
+  4. 写 `AGENTS.md`（最小工作流契约 + 核心表达要求；存在则整份覆盖，不询问、不合并、不备份）
   5. 写 `.workflow_loop/project.json`（`installer_version`、`installed_at`、`project_design_initialized=false`）
   6. 不创建 `state.json`（那是 `start --intent` 的事）
   7. 不预建空产物目录（`spec/`/`plan/` 等首次写产物时才建）
@@ -963,7 +998,7 @@ State Snapshot 中记录架构完成度：
 - 日期时间用 workflow 启动时间（不是 stage 时间），保证整个 workflow 的文件名时间一致
 
 ### 10.4 主题前的命名规则
-- `spec`：`spec/product.md` + `spec/功能*.md`
+- `spec`：`spec/product.md` + `spec/feature_*.md`
 - `spike`：`spec/spike_<临时名>.md`
 - `reproduce`：`bug/<YYYY-MM-DD_HHmm-<bug描述>>.md`
 - `code_design`/`revise_code_design`/`update_code_design`/`project_design_init`：`spec/architecture_code_design.md`（文档级产出，不属于某个功能主题）
@@ -1035,6 +1070,7 @@ bug/
 | journal 的查询/grep 命令 | 第一版只做追加 + status 摘要 |
 | bug 册的查询命令 | 第一版只做沉淀 |
 | 内容结构校验 | 只查文件存在 + 内容哈希，内容结构归 Standardized_Repository 管 |
+| 抽象词自动封禁 | 词本身不能判断内容是否清楚；全局规范要求 AI 自查并由用户确认 |
 | 安装时静默安装 + 直接开跑 | 安装必须独立完成，再由 AI 调 `start` |
 | 升级流程 | 第一版不做，升级流程后置单独设计 |
 | 项目安装的 `attach` 子命令 | 用官方安装脚本，不留 attach 入口 |
@@ -1046,11 +1082,13 @@ bug/
 设计到此，以下全部钉死：
 
 - [x] 第一性原理 + 根解法 + 第一版验证假设（第 1 节）
-- [x] 部署形态：全局 CLI `workflow` + 官方安装脚本 + `src/workflow_loop/` 包布局 + Template/Standardized 随包资源 + AGENTS.md 薄契约（第 2 节）
+- [x] 部署形态：全局 CLI `workflow` + 官方安装脚本 + `src/workflow_loop/` 包布局 + Template/Standardized 随包资源 + AGENTS.md 最小契约（第 2 节）
 - [x] 数据模型：state.json 全集 schema + `.workflow_loop/project.json` + journal.jsonl + state vs journal vs project.json 分离原则 + State File Lifecycle（第 3 节）
 - [x] 入口与意图模型：`start` 两种模式 + 三种 Work Intent + Active Run Guard + Clean Confirm 两段式 + Clean Scope + Project Design Init Skip（第 4 节）
 - [x] Stage Path 拼法：PathComposer `build_stage_path` + 三种意图路径表 + spike 可选 + 路径存储与复用（第 5 节）
 - [x] Stage 7 步模式 + 3 道闸 + Verification Invalidation（哈希对象 + 清零检查 + 失效链）+ StageStrategy ABC + stdout 驱动原则（第 6 节）
+- [x] 全局写作规范：AGENTS.md 核心规则 + discuss 每阶段完整加载 + 正式文档/聊天分级审查 + 不做关键词封禁（第 6.7 节）
+- [x] 产品设计文档规则：背景与目标依据、用户与执行角色区分、产品规则归位、修 bug 场景边界（第 7.1、7.4 节）
 - [x] Stage 详典：14 个 stage 的角色/提示词/规范/产物/`code_validate`/`on_advance`/instruction（第 7 节）
 - [x] 命令清单：start + discuss + gate（三种 flag + spike --skip）+ status + done + abort + install-project + 每条 stdout 末尾的"下一步"（第 8 节）
 - [x] 架构文档双阶段：preliminary_done / detailed_done + 同一文件两阶段 + `update_code_design` 末环强制（第 9 节）

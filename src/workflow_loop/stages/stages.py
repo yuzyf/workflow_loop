@@ -4,7 +4,7 @@ import os
 from .base import StageStrategy, clean_spike_tmp
 
 
-# 产品设计 stage：工作流第一个环节，产出 spec/product.md + spec/功能*.md
+# 产品设计 stage：工作流第一个环节，产出 spec/product.md + spec/feature_*.md
 # 把用户需求拆成产品说明书 + 功能路由，后续 stage 都基于这里定的功能
 class SpecStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
@@ -29,24 +29,24 @@ class SpecStage(StageStrategy):
         return "Standardized_Repository/spec/spec.md"
 
     # 门禁的代码侧校验（第 2 道闸）
-    # 检查 spec/product.md 存在 + spec/ 下至少有一个 功能*.md
+    # 检查 spec/product.md 存在 + spec/ 下至少有一个 feature_*.md
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         # 拼出 spec/product.md 的完整路径
         product_md = os.path.join(project_root, "spec", "product.md")
         # product.md 不存在 → 直接判失败
         if not os.path.exists(product_md):
             return (False, "spec/product.md 不存在")
-        # 用 glob 找 spec/ 下所有 功能*.md 文件
-        func_files = glob.glob(os.path.join(project_root, "spec", "功能*.md"))
-        # 没有任何 功能*.md → 判失败
+        # 用 glob 找 spec/ 下所有 feature_*.md 文件
+        func_files = glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
+        # 没有任何 feature_*.md → 判失败
         if not func_files:
-            return (False, "spec/ 下没有 功能*.md 文件")
+            return (False, "spec/ 下没有 feature_*.md 文件")
         # 全部就绪 → 通过，列出找到的功能文件名
         return (True, f"产品设计文档存在: product.md + {[os.path.basename(f) for f in func_files]}")
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "产品设计阶段：产出 spec/product.md（产品设计说明书 + 功能路由）+ spec/功能*.md（功能拆分）"
+        return "产品设计阶段：产出 spec/product.md（产品设计说明书 + 功能路由）+ spec/feature_*.md（功能拆分）"
 
 
 # 初步架构 stage：从零做的初步架构设计
@@ -428,7 +428,7 @@ class UpdateCodeDesignStage(StageStrategy):
 
 
 # 项目设计架构初始化 stage：根据现有代码及可运行行为一次建立设计文档
-# 一次性产出 spec/product.md + spec/功能*.md + spec/architecture_code_design.md
+# 一次性产出 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md
 # 用于已有代码项目接入 workflow_loop 时的初始化
 class ProjectDesignInitStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
@@ -463,7 +463,7 @@ class ProjectDesignInitStage(StageStrategy):
         ]
 
     # 门禁的代码侧校验（第 2 道闸）
-    # 检查 product.md + architecture_code_design.md + 功能*.md 三类产物都就绪
+    # 检查 product.md + architecture_code_design.md + feature_*.md 三类产物都就绪
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         # 拼出 spec/product.md 的完整路径
         product_md = os.path.join(project_root, "spec", "product.md")
@@ -477,11 +477,11 @@ class ProjectDesignInitStage(StageStrategy):
         # architecture_code_design.md 不存在 → 加入 missing
         if not os.path.exists(arch_md):
             missing.append("spec/architecture_code_design.md")
-        # 用 glob 找 spec/ 下所有 功能*.md 文件
-        func_files = glob.glob(os.path.join(project_root, "spec", "功能*.md"))
-        # 没有任何 功能*.md → 加入 missing
+        # 用 glob 找 spec/ 下所有 feature_*.md 文件
+        func_files = glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
+        # 没有任何 feature_*.md → 加入 missing
         if not func_files:
-            missing.append("spec/功能*.md")
+            missing.append("spec/feature_*.md")
         # 有缺失 → 判失败，列出缺失项
         if missing:
             return (False, f"产物未就绪: {missing}")
@@ -490,7 +490,7 @@ class ProjectDesignInitStage(StageStrategy):
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "项目设计架构初始化：根据现有代码及可运行行为一次建立 spec/product.md + spec/功能*.md + spec/architecture_code_design.md"
+        return "项目设计架构初始化：根据现有代码及可运行行为一次建立 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md"
 
 
 # 设计期架构修订 stage：按变更后的产品设计改 spec/architecture_code_design.md

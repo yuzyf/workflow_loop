@@ -62,6 +62,21 @@ def test_start_with_intent_from_scratch_no_artifacts(tmp_path):
     assert "spec" in out
 
 
+# 测试 discuss 在阶段提示词前完整加载全局写作规范
+def test_discuss_loads_global_writing_standard_before_stage_docs(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    code, out, _ = _run(["discuss"], str(tmp_path))
+
+    assert code == 0
+    assert "【全局写作规范】" in out
+    assert "能用普通人听得懂的话" in out
+    assert out.index("【角色定义】") < out.index("【全局写作规范】")
+    assert out.index("【全局写作规范】") < out.index("【流程模版】")
+    assert out.index("【流程模版】") < out.index("【流程规范】")
+
+
 # 测试 workflow start 在已有 active Run 时拒绝再次启动（防止并发 Run 互相覆盖 state）
 def test_active_run_guard(tmp_path):
     # 初始化项目

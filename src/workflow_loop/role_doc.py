@@ -7,7 +7,7 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
 
 【spec/】产品设计说明手册
   - product.md：产品设计说明书 + 功能路由
-  - 功能*.md：按功能拆分的功能设计文档
+  - feature_*.md：按功能拆分的功能设计文档，文件名使用英文，正文使用中文
   - architecture_code_design.md：代码架构设计文档
 
 【plan/】计划册
@@ -41,7 +41,7 @@ ROLE_DOC_MAP = {
     # 产品设计阶段：从零建立或改产品重新设计
     "spec": {
         "role": "产品设计师",
-        "description": "和用户讨论产品要做什么、功能路由、功能拆分。产出 spec/product.md 和每个功能的 spec/功能<名>.md。",
+        "description": "和用户讨论产品要做什么、功能路由、功能拆分。产出 spec/product.md 和每个功能的 spec/feature_<english-name>.md。",
     },
     # 从零做的初步架构阶段：先产品设计与功能拆分、后初步架构
     "code_design": {
@@ -56,7 +56,7 @@ ROLE_DOC_MAP = {
     # 存量项目首次初始化：一次建立产品+功能+架构三类产物
     "project_design_init": {
         "role": "存量产品与架构分析师",
-        "description": "首次处理已有代码项目时，一次建立 spec/product.md + spec/功能*.md + spec/architecture_code_design.md。",
+        "description": "首次处理已有代码项目时，一次建立 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md。",
     },
     # 改产品设计期架构修订：按新设计改架构图
     "revise_code_design": {

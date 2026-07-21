@@ -11,13 +11,22 @@ except ImportError:
 
 from .project import load_project, create_project, INSTALLER_VERSION, ProjectState
 
-# AGENTS.md 的固定内容（薄契约）
-# 唯一薄契约文件名，告诉 AI "调 workflow start，跟着 stdout 走"
+# AGENTS.md 的固定内容（最小契约 + 核心表达要求）
+# 唯一契约文件名，告诉 AI "调 workflow start，跟着 stdout 走"，并约束聊天表达
 # 安装时直接整份覆盖，不询问、不合并、不备份（CONTEXT.md "Agent Contract File"）
 AGENTS_MD_CONTENT = """# Agent 契约
 
 本项目由 workflow_loop 管理。用户提出需求后，调 `workflow start`，
 之后严格按每条命令 stdout 打印的"下一步"执行。
+
+## 表达要求
+
+AI 回复用户和编写正式文档时：
+
+- 输出前先弄清实际问题、已知事实、限制和目标。
+- 能用直白话就不用抽象词；必须使用专业词时，马上说明它具体指什么。
+- 写清谁在什么情况下做什么，以及会得到什么结果。
+- 删除空泛、重复，或者没有增加事实、决定、行动和理由的话。
 """
 
 # .workflow_loop 目录名
@@ -55,7 +64,7 @@ def _copy_resource_tree(src_root, dst_root: str) -> None:
 def _write_agents_md(project_root: str) -> None:
     # 拼出 AGENTS.md 的完整路径
     path = os.path.join(project_root, "AGENTS.md")
-    # 写薄契约内容
+    # 写最小契约和核心表达要求
     with open(path, "w", encoding="utf-8") as f:
         f.write(AGENTS_MD_CONTENT)
 
@@ -99,7 +108,7 @@ def install_project(project_root: str) -> int:
     _copy_resource_tree(template_src, template_dst)
     _copy_resource_tree(standardized_src, standardized_dst)
 
-    # 写薄契约 AGENTS.md（覆盖已有）
+    # 写最小契约 AGENTS.md（覆盖已有）
     _write_agents_md(project_root)
 
     # 创建 project.json（installer_version + installed_at + project_design_initialized=false）

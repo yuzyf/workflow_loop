@@ -40,7 +40,7 @@ _Avoid_: 在 start --intent 里静默安装并直接开跑；把未安装当成�
 **瘦骨架（仅这些）**：
 1. 创建 `.workflow_loop/`
 2. 复制系统默认 `Template_Repository` 与 `Standardized_Repository` 进项目 `.workflow_loop/`
-3. 新建或直接覆盖薄契约，文件名固定为 **`AGENTS.md`**
+3. 新建或直接覆盖最小代理契约，文件名固定为 **`AGENTS.md`**
 4. 写入很小的安装版本标记
 5. 创建 `.workflow_loop/project.json`，初始写入 `project_design_initialized=false`，用于记录项目级设计架构初始化状态
 **明确不做**：不创建 `state.json`（那是 `start --intent`）；不预建空的项目根 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/`（首次写产物时再建）；不下发 role 说明文件（角色说明暂时留在代码/`role_doc`，与提示词仓库分离）。安装成功后才允许 `start --intent`。
@@ -55,7 +55,7 @@ _Avoid_: 安装只建空模板目录, 运行时只读系统目录导致项目无
 **Agent Contract File** (代理契约文件):
 项目根的代理契约，文件名只使用 **`AGENTS.md`**。
 安装策略：
-- 当前项目未安装时：无论 `AGENTS.md` 是否存在，安装程序都写入固定的最小 workflow 薄契约；存在则直接整份覆盖，不询问、不合并、不备份
+- 当前项目未安装时：无论 `AGENTS.md` 是否存在，安装程序都写入固定的最小代理契约；契约包含 workflow 入口、stdout 跟随规则和核心表达要求。文件存在时直接整份覆盖，不询问、不合并、不备份
 - 当前项目已有完整骨架和有效安装版本标记时：按 Repeat Installation 直接退出，保持零修改，不覆盖项目已有 `AGENTS.md`
 - 安装开始时仍须先让用户确认当前目录；直接覆盖只发生在目录已经确认正确之后
 _Avoid_: 自动合并契约, 目录未确认就写入, 使用非 AGENTS.md 的契约文件名, 长期维护双份契约正文, 重复安装重写 AGENTS.md
@@ -106,7 +106,7 @@ _Avoid_: greenfield, new-project（旧场景名，易与是否接入混淆）
 _Avoid_: product-mod（旧场景名）, feature request alone
 
 **Project Design Initialized** (项目设计架构已初始化):
-项目级持久事实，记录在 `.workflow_loop/project.json` 的 `project_design_initialized` 字段中，不放进会被新 Run 覆盖的 `state.json`。安装时初始为 `false`。首次处理已有代码项目时，`product_change` / `bugfix` 共享前置 `project_design_init` Stage；它根据代码建立 `spec/product.md`、多个 `spec/功能<名>.md` 与 `spec/architecture_code_design.md`，三类产物通过门禁并由用户确认后才写为 `true`。若在该 Stage 完成前作废，字段保持 `false`。`from_scratch` 不走该前置 Stage，但在 `spec` 与初步 `code_design` 均确认完成后同样写为 `true`。
+项目级持久事实，记录在 `.workflow_loop/project.json` 的 `project_design_initialized` 字段中，不放进会被新 Run 覆盖的 `state.json`。安装时初始为 `false`。首次处理已有代码项目时，`product_change` / `bugfix` 共享前置 `project_design_init` Stage；它根据代码建立 `spec/product.md`、多个 `spec/feature_<english-name>.md` 与 `spec/architecture_code_design.md`，三类产物通过门禁并由用户确认后才写为 `true`。若在该 Stage 完成前作废，字段保持 `false`。`from_scratch` 不走该前置 Stage，但在 `spec` 与初步 `code_design` 均确认完成后同样写为 `true`。
 _Avoid_: 用架构文件是否存在代替初始化状态, 把字段放进单轮 state.json, 只生成架构文档就视为项目设计已初始化, 安装时直接写 true
 
 **Bugfix Intent** (修 bug):
@@ -184,7 +184,7 @@ _Avoid_: 三条路径合并后丢失差异, 共享通用循环代替逐 Stage �
 最终流程图按四张大画布组织。页面按真实流程的大环节拆分，不按“架构规则”“状态文件”等知识主题拆分：
 1. `00 用户从安装到一次工作结束，完整经过什么`：画真实端到端主流程，不做只有页面标题的目录。入口直接经过 `01` 官方安装脚本，由安装脚本处理重复安装并收敛到已安装状态；总览不再预先判断项目是否安装。之后串起启动 Codex / OpenCode、用户提问、智能体读取 `AGENTS.md`、`workflow start`、继续旧 Run 或选择新 intent、逐 Stage 执行、`done` / `abort`、等待下一次需求。
 2. `01 安装脚本怎样把 workflow 和当前项目一次装好`：放大目录确认、重复安装判断、全局命令安装和项目文件写入。未安装项目直接新建或覆盖 `AGENTS.md`，不画契约冲突确认分支。
-3. `02 用户提问后怎样继续旧工作或新开工作`：放大智能体读取薄契约、自动调用 `workflow start`、读取 `state.json`、active Run 分支和三种工作意图选择。不再展开 Shell / PATH 查找命令、项目根定位或项目安装判断。
+3. `02 用户提问后怎样继续旧工作或新开工作`：放大智能体读取最小代理契约、自动调用 `workflow start`、读取 `state.json`、active Run 分支和三种工作意图选择。不再展开 Shell / PATH 查找命令、项目根定位或项目安装判断。
 4. `03 三种工作意图怎样走完所有阶段并结束`：同一张核心大画布中完整展开三种意图、每个独立 Stage 的全部细节、所有门禁与失败返回、`done`、`abort` 和下一次开工条件。
 
 `03` 核心页采用同页上下两层：页面顶部用三条完整路线缩略带分别列出从零做、改产品、修缺陷从 `start --intent` 到 `done` / `abort` 的全部 Stage 顺序；下方再按从零做、改产品、修缺陷分成三块超大详细区，分别展开每一个 Stage。缩略带只用于在缩小视图时看清整体位置，不代替任何详细节点。
@@ -292,12 +292,12 @@ _Avoid_: scenario/entry 作为场景主键, 双写旧四场景字段, 无 run_st
 _Avoid_: Prompt injection, hook nagging
 
 **Start Command** (开工命令):
-项目安装完成后，用户启动 Codex / OpenCode 并直接提出需求；智能体读取薄 `AGENTS.md`，通过 Shell 工具自动调用全局 CLI `workflow …`，不是让用户手动输入命令，也不是调用目标项目内的 `python3 workflow.py`。项目首次安装由官方安装脚本完成，不属于 `workflow` 日常子命令。
+项目安装完成后，用户启动 Codex / OpenCode 并直接提出需求；智能体读取最小代理契约 `AGENTS.md`，通过 Shell 工具自动调用全局 CLI `workflow …`，不是让用户手动输入命令，也不是调用目标项目内的 `python3 workflow.py`。项目首次安装由官方安装脚本完成，不属于 `workflow` 日常子命令。
 **不带 `--intent`（只读状态检查）**：只读取工作状态并指路，不初始化 Run、不清场。正常流程已由官方安装脚本保证项目安装完成，stdout 按序回答：
 1. **有进行中 Run** → 说明须 `status` 继续原流程（或先 `done`/`abort`）；禁止提示开新 Run
 2. **无进行中 Run** → 列出三种意图及一句话说明；下一步：`workflow start --intent from_scratch|product_change|bugfix`
 全局 CLI 仍须在内部解析项目根并校验完整 `.workflow_loop/` 与安装版本标记；校验失败时立即报错，禁止读取或创建 `state.json`。这是异常保护，不作为第 `00`、`02` 页的正常分支。清场清单仅在选定 `from_scratch` 且检查到过程产物时出现，不在状态检查总览里删除。
-**带 `--intent`**：PathComposer 生成 Stage Path 并初始化 Workflow Run（`from_scratch` 另循 Clean Confirm）。`AGENTS.md` 保持薄契约；`discuss` 加载提示词/规范机制不变。
+**带 `--intent`**：PathComposer 生成 Stage Path 并初始化 Workflow Run（`from_scratch` 另循 Clean Confirm）。`AGENTS.md` 只保留 workflow 入口、stdout 跟随规则和核心表达要求，不展开 stage 序列与门禁细节；`discuss` 负责加载详细写作规范和当前阶段材料。
 _Avoid_: start --entry 旧四场景菜单, start 内补做项目安装, 状态检查初始化 Run 或清场, 把异常安装校验画成正常业务分支, 目标项目内 python3 workflow.py 作为唯一入口, 在 AGENTS.md 背诵完整 stage 列表
 
 **Start Success Output** (带意图开工成功时的 stdout):
@@ -309,17 +309,30 @@ _Avoid_: 把开工摘要理解成精简提示词, start 不打印路线图, 用�
 
 **Discuss Command** (讨论加载命令):
 `workflow discuss`：给**当前 AI**加载本 stage 工作材料。从项目内 `.workflow_loop/Template_Repository` 与 `Standardized_Repository` 读取后，在命令 stdout 中**完整输出**（AI 跑 CLI 时从工具结果读到全文，不是编一本给终端用户看的说明书）。固定拼装：
-1. 当前 stage 名与一句话职责（可含角色说明全文，若有）
-2. **提示词全文**（给 AI 的工作指令，不是给用户读的产品文案）
-3. **规范全文**（给 AI 的约束；该 stage 无规范则明示无）
-4. 本 stage 约定产出路径
-5. 下一步：AI 按提示词与**用户**讨论业务/方案；用户说讨论完毕后，AI 调 `workflow gate <stage> --discuss-done`
+1. 当前 stage 名与角色说明全文（没有角色定义时明示无）
+2. **全局写作规范全文**：固定读取 `Standardized_Repository/global/document_writing.md`
+3. **提示词全文**（给 AI 的工作指令，不是给用户读的产品文案）
+4. **阶段规范全文**（给 AI 的约束；该 stage 无规范则明示无）
+5. 当前 stage 的附加材料、指令和约定产出路径
+6. 下一步：AI 按提示词与**用户**讨论业务/方案；用户说讨论完毕后，AI 调 `workflow gate <stage> --discuss-done`
 用户参与的是「业务讨论」；用户不负责阅读或批准提示词模板本身。无活跃 Run 或已 completed/aborted 则报错。不在每次 discuss 倾倒整份文档结构百科。
 **可重复加载**：同一 stage 在 Run 仍为 active 且该 stage 尚未整轮结束前，允许多次 `discuss`，每次完整下发提示词/规范（AI 重载指令用）。重复 discuss **不**自动清零已通过的门禁（discussion_complete / code_validated / user_confirmed 不因 discuss 回滚）。
 
 **Prompt Full Print** (提示词完整下发):
 提示词/规范的消费者是 **AI**。`discuss` 必须在 stdout 给出**完整正文**，以便 AI 当轮上下文拿到全文；不得改成摘要版、截断版，也不得只打印文件路径让 AI「自己去读」却不给正文（路径可作附注）。不因 start 的路径摘要而缩短 discuss 输出。
 _Avoid_: 把提示词当成写给用户的说明书, discuss 只打印路径不给正文, 提示词/规范摘要截断, 要求用户阅读/确认提示词模板, 每次 discuss 倾倒完整文档百科, 每 stage 只允许 discuss 一次, 重复 discuss 自动回滚门禁
+
+**Plain-Language Output Standard**（直白输出规范）:
+所有工作流正式文档和 AI 对用户的回复共同遵守的表达规则。输出前先弄清读者实际想知道或完成什么、已经确认哪些事实、受什么限制、读完后应知道或能做什么，再只写完成这个目的所需的内容。能用普通人听得懂的话就不用抽象词；确实必须使用专业词时，当场说明它具体指什么。句子要说清谁在什么情况下做什么、会得到什么结果；不规定固定表达顺序，不写删除后不影响事实、决定、行动或理由的废话。正式文档使用直白、准确、简洁的语气；AI 聊天使用直白、自然、像同事交流的语气。核心规则直接写入安装生成的 `AGENTS.md`，保证聊天从第一条回复开始受约束；详细规则、反例、改写例子和输出前检查放在 `.workflow_loop/Standardized_Repository/global/document_writing.md`。每次 `workflow discuss` 在角色说明之后、阶段模板之前完整加载该文件，使后续阶段材料和产物共同受约束。当前仓库立即使用，未来新安装项目随安装包获得；其他已安装项目不自动覆盖，升级机制另行设计。`workflow` 命令行 stdout 不受此规范约束。
+_Avoid_: 为显得专业而使用抽象词, 名词连续堆叠, 优化提升赋能闭环等词代替实际动作, 固定套用先结论后细节, 只写正确方向不写具体内容, 重复同一意思, 空泛开场和收尾, 输出内部推理过程, 把命令行输出纳入文案改造
+
+**First-Principles Writing Check**（第一性原理写作检查）:
+输出前在内部确认：用户真正要解决什么、哪些事实已确认或未知、有哪些限制、读者看完需要知道或完成什么、哪些内容与目的无关可删除。写完后检查抽象词是否替代具体动作、专业词能否换成普通话、是否重复、是否有删掉也不影响意思的句子、是否写清对象、条件、动作和结果；不向用户输出完整内部推理过程。
+_Avoid_: 只写“请第一性原理思考”却不给检查问题, 把内部推理过程写进回复, 用长篇思考代替清楚结论
+
+**Adversarial Clarity Review**（对抗性清晰审查）:
+写完后站在不了解背景且会主动挑错的读者角度，逐项追问“具体是什么、谁负责、什么条件、做什么、结果是什么、依据是什么”，尝试找出另一种解释，并删除不增加信息的句子。正式文档执行完整审查；AI 聊天发送前快速检查抽象词、歧义、重复和废话。不使用关键词封禁假装自动判断写作质量；代码只检查全局规范已安装并在每个阶段加载，AI 必须自查，用户确认门禁负责最后判断。
+_Avoid_: 把对抗性审查写成一句口号, 只查错别字不查意思, 为挑错而增加更多空话, 用禁词列表代替内容判断, 声称代码能自动判断文章是否直白
 
 
 **Optional Spike** (可选穿刺):
@@ -354,18 +367,18 @@ _Avoid_: 全局安装仍依赖仓库根 workflow.py, 模板只放开发树不进
 安装阶段：官方安装脚本严格把当前终端所在目录作为项目根，先打印绝对路径和待修改对象并等待用户确认，不自动向上猜 `.git`。日常阶段：项目已经安装后，全局 CLI 以当前工作目录为起点向上查找 `.workflow_loop/`，因此可以在项目子目录调用。
 _Avoid_: 安装时静默猜项目根, 安装前不展示目标路径, 日常每次必须传绝对项目路径, 仅靠环境变量定位项目根
 **Bootstrap Paradox** (首次安装悖论，已消除方向):
-安装前还没有 `workflow` 命令，因此不能要求用户先执行 `workflow install` 或项目内 `workflow.py`。官方安装脚本作为唯一首次入口：先完成项目路径确认；用户未取消时，再安装或复用全局命令，并在同一次运行中直接写入项目薄契约和安装骨架。
+安装前还没有 `workflow` 命令，因此不能要求用户先执行 `workflow install` 或项目内 `workflow.py`。官方安装脚本作为唯一首次入口：先完成项目路径确认；用户未取消时，再安装或复用全局命令，并在同一次运行中直接写入项目最小代理契约和安装骨架。
 _Avoid_: 项目内本地 workflow.py 作为首次入口, 安装前调用尚不存在的 workflow 命令
 
-**Thin Agent Contract** (薄契约):
-`AGENTS.md`（唯一薄契约文件名）只约定：「本项目由 workflow_loop 管理；用户提出需求后，智能体先调用全局 `workflow start`；之后严格跟随 stdout 的下一步」。用户不需要知道或手动执行 `workflow start`。不在契约里展开 stage 序列与门禁细节。提示词加载仍由 `discuss`（或等价命令）在对应 Stage 完成。
+**Minimal Agent Contract** (最小代理契约):
+`AGENTS.md`（唯一代理契约文件名）只保留两类必须从第一条回复开始生效的规则：一是 workflow 入口，要求用户提出需求后由智能体调用全局 `workflow start`，之后严格跟随 stdout 的下一步；二是核心表达要求，要求先弄清实际问题、事实、限制和目标，用直白话写清对象、条件、动作和结果，并删除空泛与重复内容。用户不需要知道或手动执行 `workflow start`。契约不展开 stage 序列、门禁细节、写作反例和完整审查清单；这些内容由 `discuss` 在对应 Stage 加载。
 _Avoid_: 把完整流程写进 AGENTS.md, 因改全局 CLI 而取消提示词加载
 
 **From Scratch Clean Start** (从零做清场):
 选择 `from_scratch` 表示真的重新做，不能沿用旧设计产物凑合。初始化 `from_scratch` Run 时，无论是否发现并删除旧设计产物，都把 `.workflow_loop/project.json` 的 `project_design_initialized` 置为 `false`；之后固定走：`spec` → `code_design`（初步，不可跳过）→ … → 末段详细架构。`spec` 与 `code_design` 均经用户确认后再写回 `true`。从零做不进入存量项目的 `project_design_init`。
 
 **Clean Scope** (清场范围):
-- **删除**（仅项目根产物侧）：`spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 等目录下由 workflow 约定写出的设计/过程文档（如 `spec/product.md`、`spec/architecture_code_design.md`、`spec/功能*.md`、`plan/*` 等）。
+- **删除**（仅项目根产物侧）：`spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 等目录下由 workflow 约定写出的设计/过程文档（如 `spec/product.md`、`spec/architecture_code_design.md`、`spec/feature_*.md`、`plan/*` 等）。
 - **不删除**：`.workflow_loop/Template_Repository/` 与 `.workflow_loop/Standardized_Repository/` 全部内容（含其中的 `spec/`、`plan/` 等**提示词/规范**子目录）；`.workflow_loop/project.json` 文件本身（只更新初始化字段）；源代码、`.git`、与设计产物无关的项目文件；`.workflow_loop/` 运行时骨架本身（仅重建本次 Run 的 state，不拆模板仓库）。
 - **确认**：有可删过程产物时才走清场确认；无则跳过（见 Clean Confirm）。
 _Avoid_: 从零做复用旧架构并跳过初步, 删除 Template/Standardized 仓库或其下 stage 子目录, 把模板 spec 当产物删, 默认删除源代码, 静默清场不确认, 无过程产物仍强制 --confirm-clean
@@ -398,12 +411,92 @@ _Avoid_: 修 bug 默认跳过架构收尾, 无结构变化就不跑 stage
 _Avoid_: 与 update_code_design 共用同一 stage 名当主键
 
 **Project Design Init Stage** (`project_design_init`):
-首次处理已有代码项目时，为 `product_change` / `bugfix` 共享的前置 Stage，中文名“项目设计架构初始化”。角色为“存量产品与架构分析师”；同时加载 `spec/spec.md` 与 `code_design/code_design.md` 两组提示词和规范。根据现有代码及可运行行为一次建立：`spec/product.md`、多个 `spec/功能<名>.md`、`spec/architecture_code_design.md`。门2必须同时校验三类产物，门3确认后写 `project_design_initialized=true` 与 `architecture.preliminary_done=true`。该 Stage 完成前作废不得写 true。
+首次处理已有代码项目时，为 `product_change` / `bugfix` 共享的前置 Stage，中文名“项目设计架构初始化”。角色为“存量产品与架构分析师”；同时加载 `spec/spec.md` 与 `code_design/code_design.md` 两组提示词和规范。根据现有代码及可运行行为一次建立：`spec/product.md`、多个 `spec/feature_<english-name>.md`、`spec/architecture_code_design.md`。门2必须同时校验三类产物，门3确认后写 `project_design_initialized=true` 与 `architecture.preliminary_done=true`。该 Stage 完成前作废不得写 true。
 _Avoid_: 只生成 architecture_code_design.md, 拆成彼此可能不一致的产品反推和架构反推两轮, 用旧文档存在冒充本次初始化完成
 
 **Product Spec Stage** (`spec`):
-统一负责“产品设计 + 功能拆分”。角色为产品设计师；加载 `.workflow_loop/Template_Repository/spec/spec.md` 与 `.workflow_loop/Standardized_Repository/spec/spec.md`；产物为 `spec/product.md` 与多个 `spec/功能<名>.md`。`from_scratch` 中负责从零建立；`product_change` 中负责基于现状重新设计，可新增、修改或删除功能文档。门2必须证明产物属于本 Run：阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化。`from_scratch` 要求新建 product.md 且至少新建一个功能文档；`product_change` 要求 product.md 有变化且至少一个功能文档新增、修改或删除。
+统一负责“产品设计 + 功能拆分”。角色为产品设计师；加载 `.workflow_loop/Template_Repository/spec/spec.md` 与 `.workflow_loop/Standardized_Repository/spec/spec.md`；产物为 `spec/product.md` 与多个 `spec/feature_<english-name>.md`。`from_scratch` 中负责从零建立；`product_change` 中负责基于现状重新设计，可新增、修改或删除功能文档。门2必须证明产物属于本 Run：阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化。`from_scratch` 要求新建 product.md 且至少新建一个功能文档；`product_change` 要求 product.md 有变化且至少一个功能文档新增、修改或删除。
 _Avoid_: 只校验 product.md, 独立生成 requirement_<临时名>.md, 把产品更新与功能拆分拆成两个后续 Stage, 旧功能文件冒充本 Run 产物
+
+**Product Spec Template Prompt**（产品设计模板提示词）:
+`.workflow_loop/Template_Repository/spec/spec.md`，是适用于所有产品类型的通用模板，提供可直接生成文件的 `spec/product.md` 完整九章骨架和 `spec/feature_<english-name>.md` 完整六章骨架，并说明每章应该写什么、不写什么、表格字段及无内容时如何标记；它说明“最终文档应是什么”，不承担逐题访谈流程，也不强制所有产品套用数据进入、整理、计算、输出等固定分类。没有相关内容时明确写“暂无”，不得为填满模板编造内容。
+_Avoid_: 把模板提示词写成访谈脚本, 只给目录不定义内容质量, 把某类数据产品的处理环节规定成所有产品必用维度
+
+**Product Spec Process Prompt**（产品设计流程提示词）:
+`.workflow_loop/Standardized_Repository/spec/spec.md`，定义产品设计阶段如何根据当前产品灵活地逐题讨论需求、检查讨论结果并取得用户确认；它说明“怎样形成最终文档”，不规定固定的需求讨论顺序，也不重复定义模板正文。流程区分四种情况：从零设计从用户需求建立产品；修改已有产品先读取现有文档和代码，只讨论本次新增、修改、删除以及需要保留的旧规则；已有代码但没有产品文档时，必须先查看代码并在安全条件下实际运行，用真实表现校准当前产品；修 bug 时，项目设计未初始化则先建立产品设计，已经初始化则使用现有产品设计，需要改变产品行为时改走修改产品。产品背景和功能设计原因必须来自用户确认或可核实事实，不能从提示词、文件名或代码结构推断历史。任何情况都不让用户重复说明可从环境查明的事实。讨论结束时先总结产品背景、目标、用户、场景、边界、组成、产品通用规则、功能拆分和未决问题，用户明确确认后才生成或修改产品文档。
+_Avoid_: 与模板提示词重复抄写全部定义, 强制所有需求按固定步骤讨论, 未总结共识就要求确认, 未确认共识就写产物
+
+**Product Design Phase Scope**（产品设计阶段范围）:
+产品设计阶段从调查已知事实和讨论需求开始，经过共同理解确认，最后生成或修改产品设计文档。`spec/product.md` 描述整个产品设计阶段，不只描述最后的文档生成动作。需求讨论属于阶段内的工作过程，不单独生成一份功能文档。
+_Avoid_: 把 product.md 缩成文档生成器说明, 把需求讨论单独拆成产品功能, 只写产物不写确认前的产品行为
+
+**Product Design Phase Components**（产品设计阶段组成）:
+产品设计阶段由三个用户可理解的部分组成：需求讨论负责查明事实并逐个讨论需要用户决定的问题；共同理解确认负责总结目标、边界、规则和功能拆分并等待用户确认；产品设计文档负责保存产品总说明和各功能文档。提示词文件、全局写作规范和代码模块不作为产品组成列出。
+_Avoid_: 把提示词文件当成用户产品组成, 把全局写作规范当成产品部件, 用代码模块代替用户可理解的产品部分
+
+**Product Background**（产品背景）:
+产品总说明中的“产品背景”解释这个产品为什么会诞生：在什么现实背景下，谁产生了什么需求，因此需要设计这个产品。只有事实明确时，才说明原有做法为什么不能满足需求。产品背景不要求机械编造“目前存在的问题”，也不写提示词缺陷、模板修改历史、技术方案或开发过程。
+_Avoid_: 为填背景虚构问题, 用原有提示词不完整代替产品诞生原因, 在产品背景写修改历史或技术实现
+
+**Background Evidence Rule**（背景依据规则）:
+产品背景、产品目标、功能背景和设计原因只能来自用户已经确认的内容，或者能从现有文档、代码和运行结果核实的事实。代码和运行结果可以证明产品现在怎样工作，但不能单独证明产品当初为什么诞生。无法确认的产品历史和设计原因必须继续询问用户或明确标记未确认，不能根据旧提示词、文件名、程序类名或代码结构自行推断。
+_Avoid_: 根据实现反推产品诞生原因, 为填章节补写没有依据的历史, 把推测写成已确认事实
+
+**Product Goals**（产品目标）:
+产品目标说明产品完成后应达到什么结果，每个目标都必须对应产品背景中的实际需求。AI 怎样提问、调查、运行项目或整理文档属于工作方法，不写成产品目标；“优化体验”“提升效率”“完善能力”等无法判断的概括也不能单独作为目标。
+_Avoid_: 把讨论步骤当产品目标, 把调查方法当产品结果, 只写无法判断的方向性口号
+
+**Workflow Loop Product Design Goals**（Workflow Loop 产品设计阶段目标）:
+产品设计阶段完成后必须达到三个结果：进入代码设计前，产品背景、目标、用户、场景、边界、规则和功能拆分已经得到用户确认；从零设计、修改已有产品、已有代码但缺少产品文档、修复产品缺陷四种情况都正确使用或形成符合当前实际情况和用户决定的产品设计；产品总说明与功能文档内容完整、互相链接且没有冲突，后续代码设计、开发、测试和验收使用同一份产品依据。
+_Avoid_: 用讨论方法代替阶段结果, 只完成聊天不形成确认, 后续阶段各自解释产品要求
+
+**Product Design Actors**（产品设计参与者）:
+产品设计阶段的用户角色只有产品提出者和已有项目维护者。AI 产品设计师是负责查明事实、组织讨论、总结确认和生成文档的系统执行角色，不列入用户清单；它只在场景和使用过程中作为执行者出现。
+_Avoid_: 把 AI 和人类用户混在同一用户清单, 把系统执行角色写成产品使用者
+
+**Product Design Scenarios**（产品设计场景）:
+产品设计阶段覆盖四种使用场景：从零设计产品；修改已有产品；已有代码但缺少产品文档时建立产品设计；修复产品缺陷。修复缺陷时，如果项目设计尚未初始化，先根据现有代码和可运行行为建立产品设计；已经初始化时直接使用已有产品设计，不重新进入产品设计阶段。若修复需要改变产品规则、功能边界或用户可见行为，应改为“修改已有产品”，不能继续按单纯修 bug 处理。“根据共识生成产品文档”是前述场景共同的最后一步，不单独列为场景。
+_Avoid_: 遗漏修 bug 场景, 每次修 bug 都重做产品设计, 用 bugfix 绕过产品变化流程, 把共同的文档生成步骤重复列成独立场景
+
+**Workflow Loop Product Design Boundary**（Workflow Loop 产品设计阶段边界）:
+支持从零讨论并确认产品设计；根据已有产品文档和代码修改产品设计；已有代码但没有产品文档时，通过查看代码和安全运行建立产品设计；用户确认后生成或修改产品总说明和功能文档；修 bug 时，项目设计未初始化则先建立现有产品设计。不负责代码架构、接口、数据库、实施步骤、测试和验收文档；不在用户确认共同理解前生成产品设计文档；不在未经同意时使用生产账号、真实数据、付费服务或修改外部数据；修 bug 需要改变产品行为或规则时，必须改为修改产品。
+_Avoid_: 用模板改造历史充当产品边界, 未确认就生成文档, 未授权运行高风险环境, 用修 bug 绕过产品变更
+
+**Product Design Document Generation Feature**（生成产品设计文档功能）:
+Workflow Loop 的产品设计阶段完成后，需要形成统一的产品总说明和功能说明，供后续代码设计、开发、测试和验收使用。用户确认共同理解后，AI 新建或修改 `spec/product.md` 和对应的 `spec/feature_<english-name>.md`。该功能只负责把已确认内容写成产品设计文档，不包含确认前的事实调查和需求讨论。全局写作规范是所有阶段共同遵守的 AI 工作规则，不是本功能的组成部分，也不写入产品通用规则。
+_Avoid_: 把需求讨论写进文档生成功能, 把全局写作规范当成产品功能, 在产品通用规则中重复 AI 工作规范
+
+**Product Overview Document**（产品总说明）:
+项目根下的 `spec/product.md`，固定包含九章：产品背景与目标、术语、用户与场景、产品边界、产品组成与主要流程、产品通用规则、产品功能、相关文档、修改记录。其中“产品组成与主要流程”只说明产品各部分的关系和用户在功能间怎样流转，不写代码模块、接口或数据库结构；“产品功能”只放功能名称、一句话说明、对应场景和详细功能文档链接。“产品边界”单独说明整个产品支持和不支持什么，不代替各功能文档中的“功能边界”。每个功能的全部规则和细节放在独立功能文档中。“相关文档”可链接代码设计文档，不链接尚未生成或持续变化的开发计划。
+_Avoid_: 把所有功能细节都堆进 product.md, 只有功能名没有功能文档链接, 把产品组成写成技术架构, 链接活跃开发计划, 把施工步骤写进产品总说明
+
+**Product Terminology**（产品术语）:
+产品总说明中的独立章节，只解释容易歧义或在本产品中有特定含义的词；产品背景与目标不夹带术语定义，普通常用词不收入术语表。提示词文件名、规范文件名和代码标识属于内部实现名称，不作为产品术语。当前 Workflow Loop 产品设计阶段保留“产品总说明”“功能说明文档”“产品通用规则”“运行校准”，并增加“共同理解”。
+_Avoid_: 与产品背景混成一章, 收录无需解释的普通词, 把内部提示词名称当产品术语, 同一词给出多个冲突含义
+
+**Shared Product Understanding**（共同理解）:
+用户已经明确确认的产品背景、目标、用户、场景、边界、规则和功能拆分。AI 的临时总结、尚未回答的问题和只从代码推测出的内容不属于共同理解；只有形成共同理解后，才能生成或修改产品设计文档。
+_Avoid_: 把 AI 单方面总结当用户确认, 未决问题仍存在就生成文档, 把推测当共同理解
+
+**Product Common Rules**（产品通用规则）:
+产品总说明中记录对整个产品或多个功能共同生效的用户可见行为，例如统一权限、删除确认、时间显示或共同状态规则；具体内容由各项目决定。AI 怎样提问、调查和组织需求讨论属于产品设计流程规范；AI 怎样使用直白话和执行对抗性审查属于全局写作规范，这两类工作方法都不写成产品通用规则。当前 Workflow Loop 产品设计阶段保留“用户确认后才能生成文档”“高风险运行前取得用户同意”“无法确认的内容不得编造”等产品行为；“一次只讨论一个决定”“事实先查明”留在流程规范；“使用直白话”“对抗性审查”留在全局写作规范。
+_Avoid_: 称为全局规则导致与 AI 工作规范混淆, 把讨论方法或写作要求当产品规则, 把某个项目的产品规则写成所有项目强制规范, 在每份功能文档重复同一规则
+
+**Feature Specification Document**（功能说明文档）:
+项目根下的 `spec/feature_<english-name>.md`，其中 `<english-name>` 使用小写英文单词并以下划线连接，文件正文继续使用中文，文档一级标题固定为 `# 【功能】<功能名称>`，`spec/product.md` 中的功能名称和链接文字也使用中文。代码校验只接受 `feature_*.md`，不兼容旧的 `功能*.md` 命名；已有中文文件必须删除或重命名。每个文件只说明一个功能的用户可见设计，固定包含“背景、场景、功能边界、规则、使用过程、异常情况”六部分；由 `spec/product.md` 链接进入，不写程序类、接口、数据库、模块划分等技术实现。“使用过程”若没有用户操作，则写系统在什么条件下自动执行以及产生什么结果。
+_Avoid_: 继续接受 功能*.md, 两套功能文件命名并存, 多个无关功能写在同一文件, 重复整份产品总说明, 缺少 product.md 入口, 混入代码设计或施工步骤
+
+**Feature Background**（功能背景）:
+功能说明文档中的“背景”说明产品中出现了什么具体需求，因此设计这个功能。它交代功能的需求来源和设计原因，不机械要求先写“目前存在什么问题”，不重复整份产品背景，也不写技术实现或开发过程。
+_Avoid_: 为功能虚构问题, 用技术缺陷代替产品需求, 重复整份产品背景, 在背景写实现方案
+
+**Requirement Discussion Process**（需求讨论过程）:
+产品设计规范提示词规定的 AI 工作过程，不是用户可独立使用的产品功能，也不生成 `spec/feature_*.md` 功能文档。它负责调查事实、逐个确认决定、总结共同理解，并在用户确认后触发生成产品设计文档。
+_Avoid_: 把需求讨论过程当成产品功能, 为提示词内部流程生成独立功能文档
+
+**Feature Boundary Rule**（功能拆分标准）:
+一份功能文档对应一件可以独立完成的用户事情；为了完成同一件事而共同使用的搜索、筛选、翻页等操作可留在同一功能中，目的、规则或异常处理明显不同的事情应拆开。功能不按按钮数量、页面数量或程序模块划分。
+_Avoid_: 一个按钮一份功能文档, 整个产品只有一份巨型功能文档, 按代码模块拆产品功能
 
 **Acceptance Plan Stage** (`acceptance_plan`):
 制定“什么算完成”的验收计划，不执行最终验收。角色为验收计划制定者；提示词与规范分别为 `.workflow_loop/Template_Repository/qa/acceptance_plan.md`、`.workflow_loop/Standardized_Repository/qa/acceptance_plan.md`；产物为 `acceptance/<topic>_plan.md`。门2校验文件属于当前 Run、文件名与 `state.topic` 一致、每条验收条件可判定且覆盖本次实施计划。
@@ -434,7 +527,7 @@ _Avoid_: 上游变化后下游仍显示 done, 仅比较文件存在不比较内�
 _Avoid_: generate_code_design 作为从零做末环, 三种意图末环不同名, 因文件已存在而跳过本 stage, 未通过测试验收就写最终架构
 
 **Installer Agent Contract Write** (安装时写入代理契约):
-项目目录确认正确且当前项目尚未安装后，安装脚本把薄契约直接写入 **`AGENTS.md`**：文件不存在则新建，文件存在则整份覆盖。这里不再提供契约冲突选择、不自动合并、不生成备份。项目已有完整安装标记时按重复安装规则直接退出，不改现有契约。
+项目目录确认正确且当前项目尚未安装后，安装脚本把最小代理契约直接写入 **`AGENTS.md`**：文件不存在则新建，文件存在则整份覆盖。契约包含 workflow 入口、stdout 跟随规则和核心表达要求。这里不再提供契约冲突选择、不自动合并、不生成备份。项目已有完整安装标记时按重复安装规则直接退出，不改现有契约。
 
 不再提供 `--overwrite-agent` 或 `workflow attach`。安装程序唯一需要阻塞等待的是项目目录确认。
 _Avoid_: 自动合并, 同时维护双份契约, 目录未确认就覆盖, 重复安装重写契约, 保留 attach 或 overwrite-agent 兼容入口

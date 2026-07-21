@@ -8,7 +8,7 @@
 
 根据现有代码及可运行行为一次建立：
 1. `spec/product.md`（产品设计说明书 + 功能路由）
-2. 多个 `spec/功能<名>.md`（功能拆分）
+2. 多个 `spec/feature_<english-name>.md`（功能拆分，文件名使用英文，正文使用中文）
 3. `spec/architecture_code_design.md`（架构设计文档）
 
 ## 约束
@@ -20,5 +20,5 @@
 
 ## 产出
 - `spec/product.md`（新建）
-- `spec/功能<名>.md`（新建，可能多个）
+- `spec/feature_<english-name>.md`（新建，可能多个）
 - `spec/architecture_code_design.md`（新建）

@@ -16,6 +16,8 @@ from .stages.base import StageStrategy, clean_spike_tmp
 NEXT_STEP_SEPARATOR = "─" * 42
 # .workflow_loop 目录名
 WORKFLOW_LOOP_DIRNAME = ".workflow_loop"
+# 所有 stage 共用的写作规范路径（相对 .workflow_loop/）
+GLOBAL_WRITING_STANDARD_PATH = "Standardized_Repository/global/document_writing.md"
 # from_scratch 清场时探测的过程产物目录列表（Clean Detect List）
 # 这些目录下有文件时需要 --confirm-clean 才能删除
 CLEAN_DETECT_DIRS = ["spec", "plan", "acceptance", "qa", "impl", "bug"]
@@ -253,11 +255,12 @@ def cmd_start(args) -> None:
     print_next_step("调 `workflow discuss` 加载第一个 stage 提示词")
 
 
-# discuss 命令：加载当前 stage 的提示词+规范+角色定义，完整输出给 AI
+# discuss 命令：加载全局写作规范 + 当前 stage 的提示词/规范/角色定义，完整输出给 AI
 # Prompt Full Print：提示词/规范的消费者是 AI，必须在 stdout 给出完整正文
 def cmd_discuss(args) -> None:
     # 定位项目根
     project_root = resolve_project_root()
+
     if project_root is None:
         print("错误：找不到 .workflow_loop/ 目录。")
         sys.exit(1)
@@ -285,7 +288,10 @@ def cmd_discuss(args) -> None:
         print(f"错误：找不到 stage '{wf_state.current_stage}' 的策略实现")
         sys.exit(1)
 
-    # 加载提示词（Prompt Full Print：完整正文）
+    # 加载全局写作规范（所有 stage 共用）
+    global_writing_content = load_doc_content(project_root, GLOBAL_WRITING_STANDARD_PATH)
+    # 加载模版提示词（Prompt Full Print：完整正文）
+    print("当前路径：", stage.prompt_doc_path())
     prompt_content = load_doc_content(project_root, stage.prompt_doc_path())
     # 加载规范词（完整正文）
     standard_content = load_doc_content(project_root, stage.standard_doc_path())
@@ -301,18 +307,21 @@ def cmd_discuss(args) -> None:
         print(f"描述: {role_doc['description']}")
     else:
         print("（无角色定义）")
+    # 打印全局写作规范全文
+    print(f"\n【全局写作规范】")
+    print(global_writing_content)
     # 打印提示词全文
-    print(f"\n【提示词】")
+    print(f"\n【流程模版】")
     print(prompt_content)
     # 打印规范词全文
-    print(f"\n【规范词】")
+    print(f"\n【流程规范】")
     print(standard_content)
 
     # 打印附加提示词/规范（project_design_init 加载 spec + code_design 两组）
     for extra_prompt_path, extra_standard_path in stage.additional_doc_paths():
-        print(f"\n【附加提示词: {extra_prompt_path}】")
+        print(f"\n【附加流程模版: {extra_prompt_path}】")
         print(load_doc_content(project_root, extra_prompt_path))
-        print(f"\n【附加规范: {extra_standard_path}】")
+        print(f"\n【附加流程规范: {extra_standard_path}】")
         print(load_doc_content(project_root, extra_standard_path))
 
     # 打印指令
@@ -325,7 +334,8 @@ def cmd_discuss(args) -> None:
     # 写 journal：提示词加载
     journal_mod.append_entry(project_root, "提示词加载", "workflow.py",
                             stage=stage.name(), prompt_doc=stage.prompt_doc_path(),
-                            standard_doc=stage.standard_doc_path())
+                            standard_doc=stage.standard_doc_path(),
+                            global_writing_standard=GLOBAL_WRITING_STANDARD_PATH)
     # 写 journal：角色文档加载
     journal_mod.append_entry(project_root, "角色文档加载", "workflow.py",
                             stage=stage.name())

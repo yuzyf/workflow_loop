@@ -22,7 +22,7 @@ from .stages.base import StageStrategy
 # 然后穿刺验证风险 → 制定计划 → 验收计划 → 测试计划 → 实施 → 测试 → 验收 → 详细架构收尾
 # 共享后半截：plan → acceptance_plan → test_plan → impl → test → acceptance → update_code_design
 FROM_SCRATCH_PATH = [
-    # 产品设计阶段：产出 spec/product.md + spec/功能*.md
+    # 产品设计阶段：产出 spec/product.md + spec/feature_*.md
     SpecStage,
     # 初步架构阶段：产出 spec/architecture_code_design.md（从零做的初步架构）
     CodeDesignStage,

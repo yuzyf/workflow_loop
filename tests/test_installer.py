@@ -18,6 +18,11 @@ def test_install_project_creates_all(tmp_path):
     assert os.path.exists(os.path.join(str(tmp_path), ".workflow_loop", "Template_Repository"))
     # 验证 Standardized_Repository/ 被创建（标准化产出归档）
     assert os.path.exists(os.path.join(str(tmp_path), ".workflow_loop", "Standardized_Repository"))
+    # 验证所有 stage 共用的全局写作规范被安装
+    assert os.path.exists(os.path.join(
+        str(tmp_path), ".workflow_loop", "Standardized_Repository",
+        "global", "document_writing.md",
+    ))
     # 验证 AGENTS.md 被创建（项目根的 agent 契约）
     assert os.path.exists(os.path.join(str(tmp_path), "AGENTS.md"))
     # 验证 is_installed 返回 True
@@ -60,6 +65,48 @@ def test_install_project_copies_templates(tmp_path):
     assert os.path.exists(os.path.join(template_dir, "reproduce", "reproduce.md"))
 
 
+def test_install_project_uses_english_feature_document_names(tmp_path):
+    install_project(str(tmp_path))
+    workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
+    prompt_paths = [
+        os.path.join(workflow_dir, "Template_Repository", "spec", "spec.md"),
+        os.path.join(workflow_dir, "Standardized_Repository", "spec", "spec.md"),
+        os.path.join(workflow_dir, "Template_Repository", "code_design", "project_design_init.md"),
+        os.path.join(workflow_dir, "Standardized_Repository", "code_design", "project_design_init.md"),
+    ]
+
+    for prompt_path in prompt_paths:
+        with open(prompt_path) as f:
+            content = f.read()
+        assert "feature_" in content
+        assert "spec/功能" not in content
+
+
+def test_install_project_copies_product_background_and_bugfix_rules(tmp_path):
+    install_project(str(tmp_path))
+    workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
+    template_path = os.path.join(
+        workflow_dir, "Template_Repository", "spec", "spec.md",
+    )
+    standard_path = os.path.join(
+        workflow_dir, "Standardized_Repository", "spec", "spec.md",
+    )
+
+    with open(template_path) as f:
+        template_content = f.read()
+    with open(standard_path) as f:
+        standard_content = f.read()
+
+    assert "这个产品在什么背景下产生" in template_content
+    assert "什么具体产品需求促使设计这个功能" in template_content
+    assert "产品设计文档通用规则" in template_content
+    assert "代码和运行结果只能证明产品现在怎样工作" in template_content
+    assert "说明目前存在什么问题" not in template_content
+    assert "通用写作要求" not in template_content
+    assert "修复产品缺陷" in standard_content
+    assert "需要改变产品行为时改走修改产品流程" in standard_content
+
+
 # 测试 install_project 覆盖 AGENTS.md（首次安装写入 workflow_loop 契约）
 def test_install_project_writes_agents_md(tmp_path):
     # 准备一个旧的 AGENTS.md 内容
@@ -76,6 +123,10 @@ def test_install_project_writes_agents_md(tmp_path):
     assert "workflow_loop" in content
     # 验证新内容包含 workflow start 命令提示
     assert "workflow start" in content
+    # 验证聊天和正式文档从安装后就受核心表达要求约束
+    assert "表达要求" in content
+    assert "能用直白话就不用抽象词" in content
+    assert "删除空泛、重复" in content
     # 验证旧内容被覆盖（不再包含 Custom）
     assert "Custom" not in content
 
