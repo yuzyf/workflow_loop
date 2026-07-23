@@ -4,7 +4,8 @@ from workflow_loop.state import WorkflowState, StageState, GateState
 from workflow_loop.verification import (
     compute_file_hash, compute_impl_hash, compute_test_plan_hash,
     compute_acceptance_plan_hash, compute_test_result_hash,
-    check_invalidation, clear_stage_gates,
+    compute_product_design_hash, compute_code_design_hash,
+    get_linked_product_design_paths, check_invalidation, clear_stage_gates,
 )
 
 
@@ -52,6 +53,43 @@ def test_compute_file_hash(tmp_path):
     assert len(h) == 64
     # 验证文件不存在时返回 None（不抛异常）
     assert compute_file_hash(str(tmp_path), "nonexistent.txt") is None
+
+
+def test_product_design_hash_uses_only_linked_feature_documents(tmp_path):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "product.md").write_text(
+        "[功能 A](./feature_a.md)\n[外部文档](https://example.com)\n",
+        encoding="utf-8",
+    )
+    (spec_dir / "feature_a.md").write_text("A", encoding="utf-8")
+    (spec_dir / "feature_old.md").write_text("old", encoding="utf-8")
+
+    paths = get_linked_product_design_paths(str(tmp_path))
+    first_hash, _ = compute_product_design_hash(str(tmp_path))
+    (spec_dir / "feature_old.md").write_text("changed old", encoding="utf-8")
+    second_hash, _ = compute_product_design_hash(str(tmp_path))
+
+    assert paths == ["spec/feature_a.md", "spec/product.md"]
+    assert first_hash == second_hash
+
+
+def test_product_and_code_design_hash_change_with_content(tmp_path):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "product.md").write_text("[功能 A](./feature_a.md)\n", encoding="utf-8")
+    (spec_dir / "feature_a.md").write_text("A", encoding="utf-8")
+    (spec_dir / "architecture_code_design.md").write_text("code v1", encoding="utf-8")
+
+    product_hash_1, _ = compute_product_design_hash(str(tmp_path))
+    code_hash_1 = compute_code_design_hash(str(tmp_path))
+    (spec_dir / "feature_a.md").write_text("A changed", encoding="utf-8")
+    (spec_dir / "architecture_code_design.md").write_text("code v2", encoding="utf-8")
+
+    product_hash_2, _ = compute_product_design_hash(str(tmp_path))
+    code_hash_2 = compute_code_design_hash(str(tmp_path))
+    assert product_hash_1 != product_hash_2
+    assert code_hash_1 != code_hash_2
 
 
 # 测试 compute_impl_hash 包含代码快照：impl 记录 + 项目代码任一变化都会改变哈希

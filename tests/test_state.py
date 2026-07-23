@@ -2,7 +2,7 @@ import json
 import os
 
 from workflow_loop.state import (
-    WorkflowState, StageState, GateState, ArchitectureState, VerificationState,
+    WorkflowState, StageState, GateState, ArchitectureState, VerificationState, SpikeBaselineState,
     state_to_dict, state_from_dict, load_state, save_state, is_active_run, now_iso,
 )
 
@@ -27,6 +27,13 @@ def test_state_round_trip(tmp_path):
         },
         architecture=ArchitectureState(preliminary_done=False, detailed_done=False),
         verification=VerificationState(impl_hash=None, test_plan_hash=None, acceptance_plan_hash=None, test_result_hash=None),
+        spike_baseline=SpikeBaselineState(
+            captured_at="2026-07-20T03:48:00+00:00",
+            product_design_hash="product123",
+            product_design_paths=["spec/product.md", "spec/feature_example.md"],
+            code_design_hash="code123",
+            legacy_unavailable=False,
+        ),
     )
     # 把 state 落盘到临时目录的 .workflow_loop/state.json
     save_state(str(tmp_path), state)
@@ -54,6 +61,10 @@ def test_state_round_trip(tmp_path):
     assert loaded.architecture.preliminary_done is False
     # 验证 verification.impl_hash 往返一致（None 不会被改成空字符串）
     assert loaded.verification.impl_hash is None
+    # 验证穿刺设计基线往返一致
+    assert loaded.spike_baseline.product_design_hash == "product123"
+    assert loaded.spike_baseline.product_design_paths == ["spec/product.md", "spec/feature_example.md"]
+    assert loaded.spike_baseline.legacy_unavailable is False
 
 
 # 测试 load_state 在 state.json 不存在时返回 None（项目未初始化或首次启动）
@@ -128,6 +139,13 @@ def test_full_schema_fields(tmp_path):
             acceptance_plan_hash=None,
             test_result_hash=None,
         ),
+        spike_baseline=SpikeBaselineState(
+            captured_at="2026-07-20T03:48:00+00:00",
+            product_design_hash="product123",
+            product_design_paths=["spec/product.md"],
+            code_design_hash="code123",
+            legacy_unavailable=True,
+        ),
     )
     # 落盘
     save_state(str(tmp_path), state)
@@ -152,6 +170,8 @@ def test_full_schema_fields(tmp_path):
     assert "architecture" in data
     # 验证顶层 verification 子对象存在
     assert "verification" in data
+    # 验证顶层 spike_baseline 子对象存在
+    assert "spike_baseline" in data
     # 验证 architecture.preliminary_done 子字段存在
     assert "preliminary_done" in data["architecture"]
     # 验证 architecture.detailed_done 子字段存在
@@ -160,3 +180,25 @@ def test_full_schema_fields(tmp_path):
     assert "impl_hash" in data["verification"]
     # 验证 verification.impl_hash 的值正确落盘
     assert data["verification"]["impl_hash"] == "abc123"
+    # 验证穿刺基线字段正确落盘
+    assert data["spike_baseline"]["product_design_hash"] == "product123"
+    assert data["spike_baseline"]["code_design_hash"] == "code123"
+    assert data["spike_baseline"]["legacy_unavailable"] is True
+
+
+# 测试旧 state.json 没有 spike_baseline 时仍可读取
+def test_old_state_without_spike_baseline_is_compatible():
+    data = {
+        "workflow_id": "legacy",
+        "intent": "from_scratch",
+        "current_stage": "spike",
+        "started_at": "2026-07-20T03:47:00+00:00",
+        "stage_path": ["spec", "code_design", "spike"],
+        "stages": {},
+    }
+
+    loaded = state_from_dict(data)
+
+    assert loaded.spike_baseline.captured_at is None
+    assert loaded.spike_baseline.product_design_paths == []
+    assert loaded.spike_baseline.legacy_unavailable is False

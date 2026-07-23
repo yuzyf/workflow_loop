@@ -30,6 +30,35 @@ def print_next_step(instruction: str) -> None:
     print(f"\n{NEXT_STEP_SEPARATOR}\n下一步：{instruction}")
 
 
+# 根据当前阶段的门禁状态，给出不会跨阶段的下一步
+def current_stage_next_instruction(wf_state) -> str:
+    stage_name = wf_state.current_stage
+    if stage_name == "completed":
+        return "调 `workflow done` 标记本次工作流完成"
+
+    stage_state = wf_state.stages.get(stage_name)
+    if stage_state is None:
+        return "调 `workflow status` 查看当前工作流状态"
+
+    gate = stage_state.gate
+    if not gate.discussion_complete:
+        return (
+            f"调 `workflow discuss` 加载当前 {stage_name} stage 提示词；"
+            f"讨论完成后调 `workflow gate {stage_name} --discuss-done`"
+        )
+    if not gate.code_validated:
+        return (
+            f"完成当前 {stage_name} stage 的产出文件后，"
+            f"调 `workflow gate {stage_name}` 执行校验"
+        )
+    if not gate.user_confirmed:
+        return (
+            f"用户确认当前 {stage_name} stage 的产出后，"
+            f"调 `workflow gate {stage_name} --confirmed`"
+        )
+    return "调 `workflow status` 查看当前工作流状态"
+
+
 # 从当前工作目录向上查找 .workflow_loop/ 目录，定位项目根
 # 日常命令（start/discuss/gate 等）用这个找项目根
 # 安装命令（install-project）不用这个，直接用 cwd
@@ -64,6 +93,62 @@ def load_doc_content(project_root: str, rel_path: str | None) -> str:
     # 读文件内容
     with open(full_path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+# 记录进入穿刺阶段时的产品设计和代码设计内容哈希
+# 新流程只在真正进入 spike 时记录；旧 state.json 已经停在 spike 且没有基线时，明确标记无法还原
+# 旧状态里的穿刺产物路径也在这里迁移为新的固定清单路径
+def ensure_spike_baseline(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    *,
+    capture_if_missing: bool = False,
+) -> bool:
+    changed = False
+    spike_state = wf_state.stages.get("spike")
+    expected_artifact_paths = ["spec/spike_index.md"]
+    if spike_state is not None and spike_state.artifact_paths != expected_artifact_paths:
+        spike_state.artifact_paths = expected_artifact_paths
+        changed = True
+        journal_mod.append_entry(
+            project_root,
+            "穿刺状态迁移",
+            "workflow.py",
+            artifact_paths=expected_artifact_paths,
+        )
+
+    if wf_state.spike_baseline.captured_at is not None:
+        return changed
+
+    if not capture_if_missing:
+        if not wf_state.spike_baseline.legacy_unavailable:
+            wf_state.spike_baseline.legacy_unavailable = True
+            journal_mod.append_entry(
+                project_root,
+                "穿刺基线缺失",
+                "workflow.py",
+                reason="旧工作流没有保存进入 spike 时的设计哈希，不能用当前文件冒充旧基线",
+            )
+            changed = True
+        return changed
+
+    product_hash, product_paths = verification_mod.compute_product_design_hash(project_root)
+    wf_state.spike_baseline = state_mod.SpikeBaselineState(
+        captured_at=state_mod.now_iso(),
+        product_design_hash=product_hash,
+        product_design_paths=product_paths,
+        code_design_hash=verification_mod.compute_code_design_hash(project_root),
+        legacy_unavailable=False,
+    )
+    journal_mod.append_entry(
+        project_root,
+        "穿刺设计基线",
+        "workflow.py",
+        product_design_hash=product_hash,
+        product_design_paths=product_paths,
+        code_design_hash=wf_state.spike_baseline.code_design_hash,
+    )
+    return True
 
 
 # 从 stage 实例列表里找对应 stage 名的策略实例
@@ -280,6 +365,10 @@ def cmd_discuss(args) -> None:
         print("错误：工作流已完成。")
         sys.exit(1)
 
+    # 兼容旧状态：已经进入 spike 但没有入场基线时，在加载提示词前标记无法还原
+    if wf_state.current_stage == "spike" and ensure_spike_baseline(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
+
     # 从 PathComposer 重建 stage 实例列表
     stage_instances = build_stage_path(wf_state.intent, project_root)
     # 找当前 stage 的策略
@@ -371,15 +460,21 @@ def cmd_gate(args) -> None:
     # 要过门禁的 stage 名
     stage_name = args.stage
 
+    # 所有门禁只能操作当前正在进行的 stage，不能跨阶段提前标记或推进
+    if stage_name not in wf_state.stages:
+        print(f"错误：stage '{stage_name}' 不在当前工作流的 stages 里")
+        print_next_step(current_stage_next_instruction(wf_state))
+        sys.exit(1)
+    if stage_name != wf_state.current_stage:
+        print(f"错误：当前 stage 是 {wf_state.current_stage}，不能操作 {stage_name} 的门禁")
+        print_next_step(current_stage_next_instruction(wf_state))
+        sys.exit(1)
+
     # ── 特殊：--skip（仅 spike）──
     if args.skip:
         # --skip 只适用于 spike stage
         if stage_name != "spike":
             print(f"错误：--skip 仅适用于 spike stage，不适用于 {stage_name}")
-            sys.exit(1)
-        # stage 不在 state 里
-        if stage_name not in wf_state.stages:
-            print(f"错误：stage '{stage_name}' 不在当前工作流的 stages 里")
             sys.exit(1)
         # 标记 spike 跳过
         wf_state.spike_skipped = True
@@ -396,11 +491,13 @@ def cmd_gate(args) -> None:
             next_stage = stage_names[current_idx + 1]
             wf_state.current_stage = next_stage
             wf_state.stages[next_stage].status = "in_progress"
+        # 清理可能存在的临时内容
+        cleaned_paths = clean_spike_tmp(project_root)
         # 保存 state
         state_mod.save_state(project_root, wf_state)
         # 写 journal：spike 跳过
         journal_mod.append_entry(project_root, "spike 跳过", "workflow.py",
-                                cleaned_paths=[])
+                                cleaned_paths=cleaned_paths)
         # 写 journal：阶段推进
         journal_mod.append_entry(project_root, "阶段推进", "workflow.py",
                                 from_=stage_name, to=wf_state.current_stage)
@@ -410,17 +507,15 @@ def cmd_gate(args) -> None:
         print_next_step(f"调 `workflow discuss` 加载 {wf_state.current_stage} stage 提示词")
         return
 
-    # stage 不在 state 里 → 报错
-    if stage_name not in wf_state.stages:
-        print(f"错误：stage '{stage_name}' 不在当前工作流的 stages 里")
-        sys.exit(1)
-
     # 拿 stage 的 gate 状态
     stage_state = wf_state.stages[stage_name]
     gate = stage_state.gate
 
     # ── 第 1 道闸：--discuss-done ──
     if args.discuss_done:
+        # 兼容旧状态：第一道门前处理产物路径迁移，并标记缺失的入场基线
+        if stage_name == "spike" and ensure_spike_baseline(project_root, wf_state):
+            state_mod.save_state(project_root, wf_state)
         # 已经标记过了 → 提示
         if gate.discussion_complete:
             print(f"提示：{stage_name} 的讨论已经标记完毕了")
@@ -449,6 +544,10 @@ def cmd_gate(args) -> None:
             print(f"错误：{stage_name} 还没标记讨论完毕，请先调 "
                   f"`workflow gate {stage_name} --discuss-done`")
             sys.exit(1)
+
+        # 穿刺门2比较设计文档前后变化；旧状态缺少基线时明确标记无法还原
+        if stage_name == "spike" and ensure_spike_baseline(project_root, wf_state):
+            state_mod.save_state(project_root, wf_state)
 
         # 重建 stage 实例列表
         stage_instances = build_stage_path(wf_state.intent, project_root)
@@ -493,6 +592,10 @@ def cmd_gate(args) -> None:
 
         # 校验不通过
         if not passed:
+            # 之前通过过门2，但产物后来被改坏时，旧的通过标记必须失效
+            gate.code_validated = False
+            gate.user_confirmed = False
+            state_mod.save_state(project_root, wf_state)
             print(f"═══ {stage_name} 代码校验失败 ═══")
             print(f"详情: {details}")
             # 下一步：补完产出再校验
@@ -526,17 +629,63 @@ def cmd_gate(args) -> None:
               f"`workflow gate {stage_name}`")
         sys.exit(1)
 
+    # 门2通过后文件仍可能变化。门3推进前必须重新检查当前文件，不能只相信旧布尔值。
+    stage_instances = build_stage_path(wf_state.intent, project_root)
+    stage = get_stage_strategy(stage_name, wf_state, stage_instances)
+    if stage is None:
+        print(f"错误：找不到 stage '{stage_name}' 的策略实现")
+        sys.exit(1)
+
+    invalidations = verification_mod.check_invalidation(wf_state, project_root)
+    if invalidations:
+        state_mod.save_state(project_root, wf_state)
+        for from_stage, to_stages in invalidations:
+            journal_mod.append_entry(
+                project_root,
+                "验证失效",
+                "workflow.py",
+                from_stage=from_stage,
+                to_stage=to_stages,
+                reason="用户确认前发现上游内容已变化",
+            )
+        print("═══ 用户确认前校验失败 ═══")
+        for from_stage, to_stages in invalidations:
+            print(f"  {from_stage} 变化 → 清零 {to_stages}")
+        print_next_step(f"重新写产出文件，写完调 `workflow gate {stage_name}`")
+        return
+
+    passed, details = stage.code_validate(project_root)
+    journal_mod.append_entry(
+        project_root,
+        "门禁确认前复核",
+        "workflow.py",
+        stage=stage_name,
+        passed=passed,
+        details=details,
+    )
+    if not passed:
+        gate.code_validated = False
+        gate.user_confirmed = False
+        state_mod.save_state(project_root, wf_state)
+        print(f"═══ {stage_name} 用户确认前校验失败 ═══")
+        print(f"详情: {details}")
+        print_next_step(f"修正文档后重新调 `workflow gate {stage_name}`")
+        return
+
     # 标记用户确认
     gate.user_confirmed = True
     # stage 状态改为 done
     stage_state.status = "done"
 
-    # 重建 stage 实例列表
-    stage_instances = build_stage_path(wf_state.intent, project_root)
-    stage = get_stage_strategy(stage_name, wf_state, stage_instances)
-    # 调 on_advance 钩子（spike 清理 throwaway 代码）
-    if stage is not None:
-        stage.on_advance(project_root)
+    # 调 on_advance 钩子（spike 清理临时代码、样本和原始输出）
+    cleaned_paths = stage.on_advance(project_root)
+    if stage_name == "spike":
+        journal_mod.append_entry(
+            project_root,
+            "spike 清理",
+            "workflow.py",
+            cleaned_paths=cleaned_paths,
+        )
 
     # ── 记录 verification hash ──
     # impl stage → 记录 impl_hash，清零 test/acceptance（impl 变了下游失效）
@@ -607,6 +756,9 @@ def cmd_gate(args) -> None:
         next_stage = stage_names[current_idx + 1]
         wf_state.current_stage = next_stage
         wf_state.stages[next_stage].status = "in_progress"
+        # 新流程在真正进入 spike 时记录设计基线
+        if next_stage == "spike":
+            ensure_spike_baseline(project_root, wf_state, capture_if_missing=True)
         # 保存 state
         state_mod.save_state(project_root, wf_state)
         # 写 journal：阶段推进

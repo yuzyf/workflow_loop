@@ -19,14 +19,14 @@ from .stages.base import StageStrategy
 
 # from_scratch（从零做）的完整 stage 路径
 # 顺序固定：先产品设计与功能拆分、后初步架构（先定做什么，再定怎么搭）
-# 然后穿刺验证风险 → 制定计划 → 验收计划 → 测试计划 → 实施 → 测试 → 验收 → 详细架构收尾
+# 然后验证技术不确定性 → 制定计划 → 验收计划 → 测试计划 → 实施 → 测试 → 验收 → 详细架构收尾
 # 共享后半截：plan → acceptance_plan → test_plan → impl → test → acceptance → update_code_design
 FROM_SCRATCH_PATH = [
     # 产品设计阶段：产出 spec/product.md + spec/feature_*.md
     SpecStage,
     # 初步架构阶段：产出 spec/architecture_code_design.md（从零做的初步架构）
     CodeDesignStage,
-    # 穿刺阶段：验证设计风险，throwaway 代码进 spike_tmp/，结论文档进 spec/spike_*.md
+    # 穿刺阶段：验证真实场景中的技术不确定性，写清单和每项结论；临时代码按需进入 spike_tmp/
     # 可选 stage，可通过 gate spike --skip 跳过
     SpikeStage,
     # 计划阶段：产出 plan/<主题>.md + plan/index.md（主题在这里定下）
@@ -76,12 +76,14 @@ PRODUCT_CHANGE_BASE = [
 ]
 
 # bugfix（修 bug）的基础 stage 路径（不含 project_design_init 前置）
-# 和 from_scratch 的差异：没有 spec/spike/plan，换成 reproduce/fix_plan
+# 和 from_scratch 的差异：没有 spec/plan，先 reproduce，再经过可选 spike，最后进入 fix_plan
 # 主题在 fix_plan 定（从 bug 反推），不复用 plan
 # 末段 update_code_design 即使无结构变化也必须走，在门禁中显式确认"无结构变化"
 BUGFIX_BASE = [
     # 复现阶段：复现 bug + 根因分析，产出 bug/<...>.md + 更新 bug/index.md
     ReproduceStage,
+    # 穿刺阶段：验证修复仍依赖的真实技术不确定性；没有时由用户确认跳过
+    SpikeStage,
     # 修复计划阶段：定主题（从 bug 反推），产出 plan/<主题>.md
     FixPlanStage,
     # 验收计划阶段

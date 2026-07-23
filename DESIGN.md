@@ -85,6 +85,7 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   ├─ project.py                       # .workflow_loop/project.json 读写
   │   ├─ path_composer.py                 # build_stage_path(intent, project_root)
   │   ├─ verification.py                  # SHA256 哈希 + 失效清零逻辑
+  │   ├─ spike_validation.py              # 穿刺清单/详情解析 + spike 门2校验
   │   ├─ installer.py                     # workflow install-project 子命令实现
   │   ├─ role_doc.py                      # 文档概览 + stage 角色定义
   │   ├─ stages/                          # Stage 策略类（替换旧 strategies/）
@@ -100,6 +101,7 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   ├─ test_state.py
   │   ├─ test_path_composer.py
   │   ├─ test_verification.py
+  │   ├─ test_spike_validation.py
   │   ├─ test_active_run_guard.py
   │   ├─ test_clean_confirm.py
   │   ├─ test_installer.py
@@ -111,7 +113,7 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   ├─ Template_Repository/             # 从包内 data/ 复制（项目可定制）
   │   ├─ Standardized_Repository/         # 从包内 data/ 复制（项目可定制）
   │   │   └─ global/document_writing.md   # discuss 每次完整加载
-  │   └─ spike_tmp/                       # spike stage 的 throwaway 代码
+  │   └─ spike_tmp/                       # spike stage 的临时代码、样本和原始输出
   └─ .gitignore
 ```
 
@@ -194,6 +196,13 @@ AI 回复用户和编写正式文档时：
     "acceptance_plan_hash": null,
     "test_result_hash": null
   },
+  "spike_baseline": {
+    "captured_at": null,
+    "product_design_hash": null,
+    "product_design_paths": [],
+    "code_design_hash": null,
+    "legacy_unavailable": false
+  },
   "meta": {}
 }
 ```
@@ -217,6 +226,11 @@ AI 回复用户和编写正式文档时：
 | `architecture.preliminary_done` | bool | 初步架构完成标记；前段架构 stage `--confirmed` 后置 true |
 | `architecture.detailed_done` | bool | 详细架构完成标记；末段 `update_code_design` `--confirmed` 后置 true |
 | `verification.*_hash` | str\|null | 上游内容哈希；`gate --confirmed` 时记录，下游 `gate`（无 flag）时检查 |
+| `spike_baseline.captured_at` | str\|null | 真正进入 spike 时记录基线的时间；旧状态缺失时保持为空，不用当前文件冒充旧基线 |
+| `spike_baseline.product_design_hash` | str\|null | `product.md` 及其功能清单实际链接文档的整体 SHA256 |
+| `spike_baseline.product_design_paths` | list[str] | 参与产品设计整体哈希的文件路径 |
+| `spike_baseline.code_design_hash` | str\|null | `architecture_code_design.md` 的 SHA256 |
+| `spike_baseline.legacy_unavailable` | bool | 旧工作流已经进入 spike，但没有保存入场基线；为 true 时不能证明设计文档在穿刺后发生变化 |
 | `meta` | dict | 自由扩展口子（hooks 等后面用） |
 
 **StageState 字段**：
@@ -276,6 +290,7 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 | 门禁讨论完毕 | `gate --discuss-done` 时 | `stage`, `passed` |
 | 产出文件检查 | `gate`（无 flag）检查时 | `stage`, `artifact`, `exists` |
 | 门禁代码校验 | `gate`（无 flag）时 | `stage`, `passed`, `details` |
+| 门禁确认前复核 | `gate --confirmed` 推进前重新校验当前产物时 | `stage`, `passed`, `details` |
 | 验证失效 | 上游 hash 变化清零下游时 | `from_stage`, `to_stage`, `reason` |
 | 门禁用户确认 | `gate --confirmed` 时 | `stage`, `passed` |
 | 阶段推进 | `--confirmed` 推进时 | `from`, `to` |
@@ -283,6 +298,7 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 | 架构标记 | preliminary/detailed 设置时 | `mark`, `stage` |
 | spike 跳过 | `gate spike --skip` 时 | `cleaned_paths` |
 | spike 清理 | spike `on_advance` 时 | `cleaned_paths` |
+| 穿刺基线缺失 | 旧工作流已经在 spike，但没有保存入场基线时 | `reason` |
 | Run 作废 | `abort` 时 | `workflow_id` |
 | Run 完成 | `done` 时 | `workflow_id` |
 
@@ -398,8 +414,8 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 | `from_scratch` | 总是 | 清场确认 → `spec` → `code_design`（初步）→ `spike`（可选）→ `plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
 | `product_change` | `project_design_initialized=false` | `project_design_init` → `spec` → `revise_code_design` → `spike`（可选）→ `plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
 | `product_change` | `project_design_initialized=true` | `spec` → `revise_code_design` → `spike`（可选）→ `plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
-| `bugfix` | `project_design_initialized=false` | `project_design_init` → `reproduce` → `fix_plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
-| `bugfix` | `project_design_initialized=true` | `reproduce` → `fix_plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
+| `bugfix` | `project_design_initialized=false` | `project_design_init` → `reproduce` → `spike`（可选）→ `fix_plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
+| `bugfix` | `project_design_initialized=true` | `reproduce` → `spike`（可选）→ `fix_plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
 
 **清场确认**不是 stage，是 `from_scratch` 在 `start --intent` 时的前置动作（见 4.5）。
 
@@ -417,12 +433,15 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 - 任何意图不得跳过末段 `update_code_design`
 
 ### 5.4 Optional Spike
-- `spike` 在 `from_scratch` / `product_change` 路径上**默认在路径中**
+- `spike` 在 `from_scratch` / `product_change` / `bugfix` 路径上**默认在路径中**
+- `bugfix` 中顺序固定为 `reproduce → spike → fix_plan`；`reproduce` 确认缺陷和根因，`spike` 只验证修复仍依赖的具体技术不确定性
 - 用户确认不需要穿刺后，通过显式门禁动作跳过：`workflow gate spike --skip`
 - state 记 `spike_skipped=true`、journal 记跳过并推进下一 Stage
-- 不要求 throwaway 与完整结论文档
+- 跳过时不要求 `spike_index.md`、结论文档和临时代码，并清理已存在的 `spike_tmp`
 - 不能靠 AI 自觉删 stage；不在 `start` 时默认从路径抹掉 spike
 - `spike` `--skip` 不取消其它 stage 的三道门，也不合并门禁
+- `--skip` 只能在当前 stage 确实是 `spike` 时调用，不能跨阶段跳转
+- 所有 `gate <stage>` 命令只能操作 `state.current_stage` 指向的当前阶段，不能提前操作后续阶段或重复操作已完成阶段；调用错误阶段时，stdout 必须同时打印当前阶段和按当前门禁状态计算出的下一步命令
 
 ### 5.5 路径存储与复用
 - `start --intent` 时调一次 PathComposer，结果存入 `state.stage_path`（list[str]）
@@ -450,24 +469,25 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
      → AI 用提示词里的问题/结构和用户交互
      → workflow 不参与对话，但提示词是 workflow 加载的
      → 讨论持续到双方满意
-     → （spike stage 特殊：AI 写 throwaway 代码验证风险，见第 7.3 节）
+     → （spike stage 特殊：AI 先查事实、识别真实场景中的技术不确定性，用户逐项决定执行或全部跳过，见第 7.3 节）
      → 可重复 discuss：同一 stage 在 Run 仍 active 且尚未整轮结束前，允许多次 discuss
      → 重复 discuss 不自动清零已通过的门禁
 
 [S3] 讨论完毕门禁（第 1 道闸）
      → 用户确认"讨论完毕"
      → AI 调 `workflow gate <stage> --discuss-done`
+     → 前置：命令中的 stage 必须等于 state.current_stage
      → workflow 标记 state.stages.<stage>.gate.discussion_complete = True
      → 写 journal: 门禁讨论完毕 passed
 
 [S4] AI 写产出文件
      → 可能是多个文件（spec: product.md + feature_*.md）
      → 主题在 plan/fix_plan 定下后，后面 stage 复用主题做文件名（见第 10 节）
-     → spike stage 特殊：throwaway 代码进 .workflow_loop/spike_tmp/，结论文档进 spec/
+     → spike stage 特殊：清单写入 spec/spike_index.md，每项结论写入 spec/spike_<english-name>.md；只有需要时才把临时代码和原始证据放入 .workflow_loop/spike_tmp/
 
 [S5] 代码校验门禁（第 2 道闸）
      → AI 调 `workflow gate <stage>`（无 flag）
-     → 前置：discussion_complete=True
+     → 前置：命令中的 stage 等于 state.current_stage，且 discussion_complete=True
      → **Verification Invalidation 检查**（见 6.4）：进入下游 stage 的第 2 道闸时，先重算上游 hash 比对，不一致则清零本 stage 的所有 gate
      → 跑 stage.code_validate(project_root)
      → 默认实现：检查所有 artifact_paths 的文件是否存在
@@ -482,9 +502,11 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 
 [S7] 用户确认门禁 + 推进（第 3 道闸后半）
      → AI 调 `workflow gate <stage> --confirmed`
-     → 前置：code_validated=True
+     → 前置：命令中的 stage 等于 state.current_stage，且 code_validated=True
+     → 重新执行 Verification Invalidation 和 stage.code_validate(project_root)
+     → 当前文件已变化或重新校验失败：code_validated=False，停留在当前 stage
      → 标记 user_confirmed = True
-     → 调 stage.on_advance(project_root)（spike 清理 throwaway 代码）
+     → 调 stage.on_advance(project_root)（spike 清理临时代码并记录清理 journal）
      → **记录上游 hash**（见 6.4）：本 stage 是 impl/test_plan/acceptance_plan/test 时，记录对应 verification hash
      → **设置 Architecture Gate Marks**（见第 9 节）：本 stage 是 code_design/revise_code_design/project_design_init/update_code_design 时，置对应 mark
      → **设置 project_design_initialized**（见 4.4）：本 stage 是 project_design_init 或 from_scratch 的 spec+code_design 都确认后
@@ -496,9 +518,9 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 
 | 闸 | 字段 | 命令 | 前置条件 | 不满足时报错 |
 |---|---|---|---|---|
-| 1 讨论完毕 | `discussion_complete` | `gate <stage> --discuss-done` | stage 已 discuss | "请先调 discuss 加载提示词" |
-| 2 代码校验 | `code_validated` | `gate <stage>` | `discussion_complete=True` | "请先确认讨论完毕" |
-| 3 用户确认 | `user_confirmed` | `gate <stage> --confirmed` | `code_validated=True` | "请先跑代码校验" |
+| 1 讨论完毕 | `discussion_complete` | `gate <stage> --discuss-done` | stage 是当前阶段且已 discuss | 当前阶段不一致或尚未加载提示词时拒绝 |
+| 2 代码校验 | `code_validated` | `gate <stage>` | stage 是当前阶段且 `discussion_complete=True` | 当前阶段不一致或讨论未完成时拒绝 |
+| 3 用户确认 | `user_confirmed` | `gate <stage> --confirmed` | stage 是当前阶段、`code_validated=True`，并且当前产物重新校验通过 | 当前阶段不一致、未过门2或产物已变化时拒绝 |
 
 **跳步抛错**：直接调 `gate --confirmed` 而没跑前两道 → 报错并提示正确顺序。
 
@@ -528,10 +550,10 @@ class StageStrategy(ABC):
         子类可重写做更复杂校验。"""
         ...
     
-    def on_advance(self, project_root: str) -> None:
+    def on_advance(self, project_root: str) -> list[str]:
         """stage 推进时的钩子。默认 no-op。
-        spike stage 重写这个清理 throwaway 代码。"""
-        pass
+        spike stage 重写这个清理临时代码、样本和原始输出，返回已清理条目。"""
+        return []
     
     @abstractmethod
     def instruction(self) -> str: ...
@@ -550,6 +572,13 @@ class StageStrategy(ABC):
 | `acceptance_plan_hash` | `acceptance/<topic>_plan.md` 内容 | `gate acceptance_plan --confirmed` 时 |
 | `test_result_hash` | `qa/<topic>_result.md` 内容 | `gate test --confirmed` 时 |
 
+**穿刺设计基线**不属于 Verification Invalidation，但同样使用 SHA256：
+
+| 字段 | 哈希对象 | 记录时机 | 使用位置 |
+|---|---|---|---|
+| `spike_baseline.product_design_hash` | `spec/product.md` + 其功能清单实际链接的 `spec/feature_*.md`，路径和文件哈希共同参与 | 真正进入 `spike` 时记录；旧状态缺失时不自动补造 | spike 门2发现任意项目写“产品设计影响：需要修改”时比较当前值 |
+| `spike_baseline.code_design_hash` | `spec/architecture_code_design.md` | 同上 | spike 门2发现任意项目写“代码设计影响：需要修改”时比较当前值 |
+
 **清零检查**：进入下游 stage 的第 2 道闸（`gate` 无 flag）时，先重算上游 hash 比对：
 
 | 进入 stage | 检查上游 | 不一致时清零 |
@@ -564,7 +593,7 @@ class StageStrategy(ABC):
 
 ### 6.5 on_advance() 钩子
 - 默认 no-op
-- `spike` stage 重写：删除 `.workflow_loop/spike_tmp/` 下所有内容（保留 `spec/spike_*.md` 结论文档）
+- `spike` stage 重写：删除 `.workflow_loop/spike_tmp/` 下所有内容（保留 `spec/spike_index.md`、`spec/spike_*.md` 和更新后的设计文档）
 - 后面扩展：某 stage 推进时要通知/迁移/清理，重写这个方法
 
 ### 6.6 stdout 驱动原则（核心设计约束）
@@ -655,17 +684,36 @@ class StageStrategy(ABC):
 
 | 字段 | 值 |
 |---|---|
-| 角色 | 风险验证者 |
+| 角色 | 技术不确定性验证工程师 |
 | 提示词 | `Template_Repository/spike/spike.md` |
 | 规范 | `Standardized_Repository/spike/spike.md` |
-| 产物 | `spec/spike_<临时名>.md`（结论文档）+ throwaway 代码进 `.workflow_loop/spike_tmp/` |
-| `code_validate` | 检查 `spec/` 下有 `spike_*.md` 文件存在 |
-| `on_advance` | 删除 `.workflow_loop/spike_tmp/` 下所有内容（保留 `spec/spike_*.md`） |
-| instruction | "穿刺阶段：问用户哪些功能要穿刺、识别风险、写 throwaway 代码到 .workflow_loop/spike_tmp/、写结论文档 spec/spike_<临时名>.md" |
+| 产物 | `spec/spike_index.md` + 每项 `spec/spike_<english-name>.md`；需要时临时代码、样本和原始输出进 `.workflow_loop/spike_tmp/<english-name>/` |
+| `code_validate` | `SpikeStage` 调 `spike_validation.validate_spike_stage()`：检查当前工作流编号、唯一穿刺项编号、文档链接、八章、固定字段、结果一致性、阻塞状态、剩余风险、意图边界和设计哈希 |
+| `on_advance` | 删除 `.workflow_loop/spike_tmp/` 下所有内容，保留清单、结论和设计文档 |
+| instruction | "先查产品设计、代码设计、相关代码和运行事实，识别真实场景中的技术不确定性；用户决定执行清单或全部跳过。正常执行时写清单和每项结论，需要临时代码时放入 spike_tmp，并在进入计划前同步受影响的设计文档。" |
 
-**特殊跳过**：`workflow gate spike --skip` 跳过整个 spike stage（包括三道门），state 记 `spike_skipped=true`，journal 记跳过并推进下一 Stage。
+**适用路径**：`from_scratch`、`product_change`、`bugfix`。修 bug 时位于 `reproduce` 和 `fix_plan` 之间。
 
-**throwaway 代码**：不进 git（`.workflow_loop/` 整个或部分 gitignore）；代码目的是验证设计风险，不是产出。
+**候选识别**：AI 必须先查看产品设计、代码设计、相关代码、测试、日志、依赖文档和已有运行结果；具备运行条件时先运行相关现有功能。已经能确认的事项不进入穿刺。语义重复由 AI 比较真实场景、不确定内容、证据和结果用途，程序不声称能判断。
+
+**用户选择**：候选尚未选择时不写入清单、不分配 `SP-001` 编号。用户逐项决定后确认最终清单，第一道门才通过。没有穿刺项时用户明确决定跳过。
+
+**真实场景**：验证对象必须是实际接口、业务文件、目标平台、真实数据特征、实际数据规模、操作路径或故障条件。不能用模拟返回、自造业务数据或理想化文件证明真实行为。方法不限于原型；现有命令或程序能取得证据时优先使用。
+
+**特殊跳过**：`workflow gate spike --skip` 只允许当前 stage 为 `spike`，跳过整个 stage（包括三道门），state 记 `spike_skipped=true`，清理临时目录，journal 记跳过并推进下一 Stage。
+
+**正常门2**：
+
+1. `spike_index.md` 和每份详情必须绑定当前 `workflow_id`。
+2. 清单中每项必须有唯一 `SP-xxx` 编号和唯一结论文档，且不再是“待验证”。
+3. 详情必须包含八章和固定字段，清单状态必须与详情一致。
+4. 任意项目“是否阻塞后续：是”时失败。
+5. `仍未确认`但不阻塞时，剩余风险、后续处理阶段和后续检查内容必须完整。
+6. 产品设计或代码设计写“需要修改”时，对应当前哈希必须不同于 `spike_baseline`。
+7. `bugfix` 中出现“产品设计影响：需要修改”时失败，提示结束当前 Run 后启动 `product_change`。
+8. 旧工作流缺少入场基线时，全部设计影响为“无需修改”才允许继续；需要证明设计变化时直接失败。
+
+**临时代码**：不是每次穿刺必需；只在现有手段无法取得证据时编写。不进正式代码，用户确认结果后自动清理。正式实现可以使用穿刺确认的事实，但不能直接照搬缺少正式错误处理和测试的临时代码。
 
 ### 7.4 project_design_init（存量项目首次初始化）
 
@@ -873,43 +921,48 @@ class StageStrategy(ABC):
 
 ### 8.3 `gate <stage> --discuss-done`
 - **干啥**：标记讨论完毕（第 1 道闸）
-- **前置**：该 stage 已 discuss（journal 里有提示词加载记录）
+- **前置**：命令中的 stage 必须是 `state.current_stage`，并且该 stage 已 discuss（journal 里有提示词加载记录）
+- **错误阶段**：拒绝修改状态，并打印当前 stage 和正确的下一步。当前阶段尚未完成讨论时，下一步先给出 `workflow discuss`，并同时说明讨论完成后的 `workflow gate <current_stage> --discuss-done`
 - **流程**：标记 `gate.discussion_complete = True`；写 journal
 - **stdout 末尾**：`下一步：写产出文件 <artifact_paths>。写完调 workflow gate <stage>`
 
 ### 8.4 `gate <stage>`（无 flag，第 2 道闸代码校验）
-- **前置**：`discussion_complete=True`
+- **前置**：命令中的 stage 必须是 `state.current_stage`，并且 `discussion_complete=True`
 - **Verification Invalidation 检查**：进入下游 stage 的第 2 道闸时，先重算上游 hash 比对，不一致则清零本 stage 的所有 gate，写 journal "验证失效"，提示用户重新写产出
 - **流程**：
   1. 跑 `stage.code_validate(project_root)`
   2. 检查产出文件是否存在（写 journal: 产出文件检查）
-  3. 失败 → 打印"产出文件未就绪"，写 journal: 门禁代码校验 failed
+  3. 失败 → 清除旧的 `code_validated` 和 `user_confirmed`，打印"产出文件未就绪"，写 journal: 门禁代码校验 failed
   4. 成功 → 标记 `code_validated=True` + `artifact_produced_at`，打印"请和用户确认已写完"
 - **stdout 末尾**（通过）：`下一步：问用户"<stage> 写完了？"，用户确认后调 workflow gate <stage> --confirmed`
 - **stdout 末尾**（失败）：`下一步：产出文件未就绪，补完后再调 workflow gate <stage>`
 
 ### 8.5 `gate <stage> --confirmed`（第 3 道闸用户确认 + 推进）
-- **前置**：`code_validated=True`
+- **前置**：命令中的 stage 必须是 `state.current_stage`，并且 `code_validated=True`
 - **流程**：
-  1. 标记 `user_confirmed=True`，stage 状态改 `done`
-  2. 调 `stage.on_advance(project_root)`（spike 清理 throwaway 代码）
-  3. **记录 verification hash**（若 stage 是 impl/test_plan/acceptance_plan/test）
-  4. **设置 Architecture Gate Marks**（若 stage 是 code_design/revise_code_design/project_design_init/update_code_design）
-  5. **设置 project_design_initialized**（若 stage 是 project_design_init，或 from_scratch 的 spec+code_design 都已确认）
-  6. **写入 topic**（若 stage 是 plan/fix_plan）
-  7. 推进 `state.current_stage` = 下一 stage（或 `"completed"` 临时中间态，由 done 确认）
-  8. 写 journal：门禁用户确认 / 阶段推进 / 主题确定 / 架构标记（若适用）
+  1. 重新执行上游失效检查和当前 stage 的 `code_validate()`，写 journal“门禁确认前复核”
+  2. 重新校验失败时清除 `code_validated`，停留在当前阶段并要求重新执行门2
+  3. 标记 `user_confirmed=True`，stage 状态改 `done`
+  4. 调 `stage.on_advance(project_root)`；spike 清理临时代码并写 journal“spike 清理”
+  5. **记录 verification hash**（若 stage 是 impl/test_plan/acceptance_plan/test）
+  6. **设置 Architecture Gate Marks**（若 stage 是 code_design/revise_code_design/project_design_init/update_code_design）
+  7. **设置 project_design_initialized**（若 stage 是 project_design_init，或 from_scratch 的 spec+code_design 都已确认）
+  8. **写入 topic**（若 stage 是 plan/fix_plan）
+  9. 推进 `state.current_stage` = 下一 stage（或 `"completed"` 临时中间态，由 done 确认）
+  10. 写 journal：门禁用户确认 / 阶段推进 / 主题确定 / 架构标记（若适用）
 - **stdout 末尾**（非最后 stage）：`下一步：调 workflow discuss 加载 <next_stage> stage 提示词`
 - **stdout 末尾**（最后 stage）：`下一步：调 workflow done 标记完成`
 
 ### 8.6 `gate spike --skip`（特殊跳过）
 - **干啥**：跳过整个 spike stage
+- **前置**：当前 `state.current_stage` 必须是 `spike`；用户已经明确决定本次没有需要实际验证的不确定性
 - **流程**：
   1. 标记 `state.spike_skipped=True`
   2. 标记 `state.stages.spike.gate.{discussion_complete,code_validated,user_confirmed}=True`（绕过三道门）
   3. 标记 `state.stages.spike.status="done"`
-  4. 推进 `current_stage` = 下一 stage
-  5. 写 journal：spike 跳过 / 阶段推进
+  4. 删除 `.workflow_loop/spike_tmp/` 中可能残留的临时内容
+  5. 推进 `current_stage` = 下一 stage
+  6. 写 journal：spike 跳过 / 阶段推进，并记录清理路径
 - **stdout 末尾**：`下一步：调 workflow discuss 加载 <next_stage> stage 提示词`
 
 ### 8.7 `status`
@@ -1009,7 +1062,7 @@ State Snapshot 中记录架构完成度：
 
 ### 10.4 主题前的命名规则
 - `spec`：`spec/product.md` + `spec/feature_*.md`
-- `spike`：`spec/spike_<临时名>.md`
+- `spike`：`spec/spike_index.md` + `spec/spike_<english-name>.md`；清单项使用 `SP-001` 等编号，文件名使用小写英文和下划线
 - `reproduce`：`bug/<YYYY-MM-DD_HHmm-<bug描述>>.md`
 - `code_design`/`revise_code_design`/`update_code_design`/`project_design_init`：`spec/architecture_code_design.md`（文档级产出，不属于某个功能主题）
 
@@ -1079,7 +1132,7 @@ bug/
 | `overview` 命令 | 文档百科非开工阻塞；需要时后置（CONTEXT.md "Legacy CLI Removal"） |
 | journal 的查询/grep 命令 | 第一版只做追加 + status 摘要 |
 | bug 册的查询命令 | 第一版只做沉淀 |
-| 内容结构校验 | 只查文件存在 + 内容哈希，内容结构归 Standardized_Repository 管 |
+| 所有阶段都做统一的文档语义校验 | 第一版只对能够稳定判断的内容写代码校验；当前 `spike` 已检查清单、八章、固定字段、结果一致性、阻塞状态和设计哈希，其余阶段仍主要检查文件存在和内容哈希 |
 | 抽象词自动封禁 | 词本身不能判断内容是否清楚；全局规范要求 AI 自查并由用户确认 |
 | 安装时静默安装 + 直接开跑 | 安装必须独立完成，再由 AI 调 `start` |
 | 升级流程 | 第一版不做，升级流程后置单独设计 |
@@ -1099,6 +1152,7 @@ bug/
 - [x] Stage 7 步模式 + 3 道闸 + Verification Invalidation（哈希对象 + 清零检查 + 失效链）+ StageStrategy ABC + stdout 驱动原则（第 6 节）
 - [x] 全局写作规范：AGENTS.md 核心规则 + discuss 每阶段完整加载 + 正式文档/聊天分级审查 + 不做关键词封禁（第 6.7 节）
 - [x] 产品设计文档规则：背景与目标依据、用户与执行角色区分、产品规则归位、修 bug 场景边界（第 7.1、7.4 节）
+- [x] 穿刺规则：真实场景、用户决定执行项、清单与详情绑定、结构化门2、设计基线哈希、`bugfix` 边界和临时内容清理（第 3、5、6、7.3、8.6、10 节）
 - [x] Stage 详典：14 个 stage 的角色/提示词/规范/产物/`code_validate`/`on_advance`/instruction（第 7 节）
 - [x] 命令清单：start + discuss + gate（三种 flag + spike --skip）+ status + done + abort + install-project + 每条 stdout 末尾的"下一步"（第 8 节）
 - [x] 架构文档双阶段：preliminary_done / detailed_done + 同一文件两阶段 + `update_code_design` 末环强制（第 9 节）
@@ -1116,5 +1170,6 @@ bug/
 - Stage 命名：`acceptance`/`qa` 混用 + `generate_code_design` → 拆 `acceptance_plan`/`acceptance` 和 `test_plan`/`test`；废弃 `generate_code_design`，统一 `update_code_design`；新增 `project_design_init`/`revise_code_design`
 - 命令：无 `abort` + `done` 二次确认 → 新增 `abort` + `done` 不二次确认
 - 机制：无 Verification Invalidation + 无 Architecture Gate Marks + 无 Clean Confirm + 无 Optional Spike --skip → 全部新增
+- 穿刺：只检查任意 `spike_*.md` → 当前工作流清单 + 每项结论 + 固定状态 + 阻塞检查 + 产品/代码设计修改哈希校验
 
-**等待用户审查。审查通过后开始改代码：搭包布局 → 自下而上写代码 → 写测试 → install.sh → 验证。**
+**当前状态**：穿刺流程代码、提示词、产品文档和代码设计已经同步；完整测试已通过。当前工作流停在 `spike` 第二道门之前，穿刺结论通过代码校验后还需要用户完成第三道门确认。

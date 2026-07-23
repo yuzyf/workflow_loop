@@ -72,12 +72,13 @@ def test_bugfix_with_uninitialized(tmp_path):
     assert names[0] == "project_design_init"
     # 验证第 2 个 stage 是 reproduce（bugfix 特有：先复现）
     assert names[1] == "reproduce"
-    # 验证第 3 个 stage 是 fix_plan（bugfix 特有：修复计划）
-    assert names[2] == "fix_plan"
+    # 验证 reproduce 后先进入可选 spike，再进入 fix_plan
+    assert names[2] == "spike"
+    assert names[3] == "fix_plan"
     # 验证末段 stage 是 update_code_design
     assert names[-1] == "update_code_design"
-    # 验证总 stage 数为 9
-    assert len(names) == 9
+    # 验证总 stage 数为 10
+    assert len(names) == 10
 
 
 # 测试 bugfix 意图在 project_design 已初始化时跳过 project_design_init
@@ -94,10 +95,11 @@ def test_bugfix_with_initialized(tmp_path):
     assert "project_design_init" not in names
     # 验证第 1 个 stage 是 reproduce
     assert names[0] == "reproduce"
-    # 验证第 2 个 stage 是 fix_plan
-    assert names[1] == "fix_plan"
-    # 验证总 stage 数为 8
-    assert len(names) == 8
+    # 验证第 2 个 stage 是 spike，第 3 个 stage 是 fix_plan
+    assert names[1] == "spike"
+    assert names[2] == "fix_plan"
+    # 验证总 stage 数为 9
+    assert len(names) == 9
 
 
 # 测试传入未知 intent 时抛 ValueError（防止拼写错误静默通过）

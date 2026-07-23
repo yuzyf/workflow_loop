@@ -2,7 +2,7 @@ import os
 import shutil
 from abc import ABC, abstractmethod
 
-# spike stage 的 throwaway 代码存放目录（相对项目根）
+# spike stage 的临时代码、样本和原始输出目录（相对项目根）
 # spike stage on_advance 时删除这个目录下的所有内容
 SPIKE_TMP_DIR = os.path.join(".workflow_loop", "spike_tmp")
 
@@ -55,9 +55,9 @@ class StageStrategy(ABC):
         return (False, f"文件未产出: {missing}")
 
     # stage 推进时的钩子（gate --confirmed 通过后、推进到下一 stage 前调用）
-    # 默认 no-op；spike stage 重写：删除 .workflow_loop/spike_tmp/ 下所有 throwaway 代码
-    def on_advance(self, project_root: str) -> None:
-        pass
+    # 默认 no-op；spike stage 重写：删除 .workflow_loop/spike_tmp/ 下所有临时内容
+    def on_advance(self, project_root: str) -> list[str]:
+        return []
 
     # 附加提示词/规范路径列表（discuss 命令额外加载）
     # 默认空列表；project_design_init 重写：加载 spec + code_design 两组
@@ -69,10 +69,10 @@ class StageStrategy(ABC):
     def instruction(self) -> str: ...
 
 
-# 清理 spike stage 的 throwaway 代码
+# 清理 spike stage 的临时代码、样本和原始输出
 # 删除 .workflow_loop/spike_tmp/ 下的所有内容（保留目录本身）
 # 在 spike stage 的 on_advance 里调用（gate spike --confirmed 时）
-# 这样 throwaway 代码在推进到 plan 前被自动清理，只保留结论文档 spec/spike_*.md
+# 这样临时代码在推进到 plan 或 fix_plan 前被自动清理，只保留穿刺清单和结论文档
 def clean_spike_tmp(project_root: str) -> list[str]:
     # 拼出 spike_tmp 的完整路径
     tmp_dir = os.path.join(project_root, SPIKE_TMP_DIR)

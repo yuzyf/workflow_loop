@@ -1,8 +1,16 @@
 import hashlib
 import os
+import re
 import subprocess
 
 from .state import WorkflowState, StageState, GateState
+
+
+# product.md 功能清单中的本地 Markdown 链接
+# 只接受 spec/ 下的小写英文 feature_*.md，外部链接和其它文件不算产品功能文档
+PRODUCT_FEATURE_LINK_RE = re.compile(
+    r"\[[^\]]+\]\((?:\./)?(feature_[a-z0-9_]+\.md)(?:#[^)]+)?\)"
+)
 
 
 # 计算单个文件的 SHA256 哈希
@@ -17,6 +25,45 @@ def compute_file_hash(project_root: str, rel_path: str) -> str | None:
     # 读文件二进制内容，算 SHA256
     with open(full_path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
+
+
+# 读取 product.md 中真实链接的功能文档路径
+# 产品设计整体哈希以这里返回的文件为准，不扫描目录里的废弃 feature_*.md
+def get_linked_product_design_paths(project_root: str) -> list[str]:
+    product_path = os.path.join(project_root, "spec", "product.md")
+    paths = [os.path.join("spec", "product.md")]
+    if not os.path.exists(product_path):
+        return paths
+
+    with open(product_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    for filename in PRODUCT_FEATURE_LINK_RE.findall(content):
+        paths.append(os.path.join("spec", filename))
+    return sorted(set(paths))
+
+
+# 对一组文档计算稳定的整体 SHA256
+# 路径也参与哈希，所以新增、删除或替换链接都会改变结果
+def compute_document_set_hash(project_root: str, rel_paths: list[str]) -> str:
+    parts = []
+    for rel_path in sorted(set(rel_paths)):
+        file_hash = compute_file_hash(project_root, rel_path)
+        parts.append(f"{rel_path}:{file_hash or '<missing>'}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+# 计算产品总说明及其功能清单链接文档的整体哈希
+def compute_product_design_hash(project_root: str) -> tuple[str | None, list[str]]:
+    paths = get_linked_product_design_paths(project_root)
+    if compute_file_hash(project_root, os.path.join("spec", "product.md")) is None:
+        return (None, paths)
+    return (compute_document_set_hash(project_root, paths), paths)
+
+
+# 计算代码设计文档哈希
+def compute_code_design_hash(project_root: str) -> str | None:
+    return compute_file_hash(project_root, os.path.join("spec", "architecture_code_design.md"))
 
 
 # 计算项目代码快照的哈希（impl_hash 的一部分）

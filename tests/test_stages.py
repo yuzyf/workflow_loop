@@ -1,4 +1,4 @@
-from workflow_loop.stages.stages import ProjectDesignInitStage, SpecStage
+from workflow_loop.stages.stages import ProjectDesignInitStage, SpecStage, SpikeStage
 
 
 def _write(path, content="ready"):
@@ -58,3 +58,20 @@ def test_project_design_init_loads_specialized_and_shared_documents():
         ("Template_Repository/code_design/code_design.md", "Standardized_Repository/code_design/code_design.md"),
     ]
     assert "必须查看代码和测试" in stage.instruction()
+
+
+def test_spike_stage_uses_index_as_artifact_entry():
+    stage = SpikeStage()
+
+    assert stage.artifact_paths() == ["spec/spike_index.md"]
+    assert "真实场景中的技术不确定性" in stage.instruction()
+
+
+def test_spike_stage_advance_returns_cleaned_paths(tmp_path):
+    stage = SpikeStage()
+    _write(tmp_path / ".workflow_loop" / "spike_tmp" / "api_probe" / "result.json")
+
+    cleaned = stage.on_advance(str(tmp_path))
+
+    assert cleaned == ["api_probe"]
+    assert list((tmp_path / ".workflow_loop" / "spike_tmp").iterdir()) == []

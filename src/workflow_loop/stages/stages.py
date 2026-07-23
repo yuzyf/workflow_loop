@@ -1,6 +1,7 @@
 import glob
 import os
 
+from ..spike_validation import validate_spike_stage
 from .base import StageStrategy, clean_spike_tmp
 
 
@@ -78,17 +79,17 @@ class CodeDesignStage(StageStrategy):
         return "初步代码架构阶段：从已确认产品设计推导代码分层、关键节点和功能代码过程，产出 spec/architecture_code_design.md"
 
 
-# 穿刺 stage：识别风险、写 throwaway 代码到 .workflow_loop/spike_tmp/
-# 写结论文档 spec/spike_<临时名>.md，推进时自动清理 throwaway 代码
+# 穿刺 stage：识别并验证真实场景中的技术不确定性
+# 正常执行时写清单和结论文档；需要临时代码时放入 spike_tmp，推进时自动清理
 class SpikeStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "spike"
 
     # 期望产出的文件路径列表（相对项目根）
-    # 这里只列 spec/ 目录，code_validate 会查 spike_*.md
+    # 清单是正常穿刺的固定入口；选择全部跳过时由 gate spike --skip 绕过
     def artifact_paths(self) -> list[str]:
-        return ["spec/"]
+        return ["spec/spike_index.md"]
 
     # 角色文档路径（相对 .workflow_loop/），spike 无角色文档返回 None
     def role_doc_path(self) -> str | None:
@@ -103,29 +104,22 @@ class SpikeStage(StageStrategy):
         return "Standardized_Repository/spike/spike.md"
 
     # 门禁的代码侧校验（第 2 道闸）
-    # 检查 spec/ 目录存在 + 至少有一个 spike_*.md 结论文档
+    # 检查清单、每份结论文档、固定字段、阻塞状态和设计文档哈希
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 spec/ 目录的完整路径
-        spec_dir = os.path.join(project_root, "spec")
-        # spec/ 目录不存在 → 直接判失败
-        if not os.path.exists(spec_dir):
-            return (False, "spec/ 目录不存在")
-        # 列出 spec/ 下所有 spike_*.md 结论文档
-        spike_files = [f for f in os.listdir(spec_dir) if f.startswith("spike_") and f.endswith(".md")]
-        # 没有任何 spike_*.md → 判失败
-        if not spike_files:
-            return (False, "spec/ 下没有 spike_*.md 结论文档")
-        # 找到结论文档 → 通过，列出文件名
-        return (True, f"穿刺结论文档存在: {spike_files}")
+        return validate_spike_stage(project_root)
 
     # stage 推进时的钩子（gate --confirmed 通过后、推进到下一 stage 前调用）
-    # spike stage 重写：删除 .workflow_loop/spike_tmp/ 下所有 throwaway 代码
-    def on_advance(self, project_root: str) -> None:
-        clean_spike_tmp(project_root)
+    # spike stage 重写：删除 .workflow_loop/spike_tmp/ 下所有临时内容
+    def on_advance(self, project_root: str) -> list[str]:
+        return clean_spike_tmp(project_root)
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "穿刺阶段：问用户哪些功能要穿刺、识别风险、写 throwaway 代码到 .workflow_loop/spike_tmp/、写结论文档 spec/spike_<临时名>.md"
+        return (
+            "穿刺阶段：先查产品设计、代码设计、相关代码和运行事实，识别真实场景中的技术不确定性；"
+            "用户决定执行清单或全部跳过。正常执行时写 spec/spike_index.md 和每项结论文档，"
+            "需要临时代码时放入 .workflow_loop/spike_tmp/，并在进入计划前同步受影响的设计文档。"
+        )
 
 
 # 计划 stage：把穿刺结论转成可执行计划

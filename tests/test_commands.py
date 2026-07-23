@@ -3,15 +3,15 @@ import subprocess
 import sys
 import shutil
 
-# workflow CLI 的安装路径（~/.local/bin/workflow）
-WORKFLOW_CMD = os.path.join(os.path.expanduser("~"), ".local", "bin", "workflow")
+# 使用当前 pytest 解释器加载仓库源码，避免测试误跑全局安装的旧版本
+WORKFLOW_CMD = [sys.executable, "-m", "workflow_loop.cli"]
 
 
 # 测试辅助函数：在指定 cwd 下执行 workflow 命令，返回 (returncode, stdout, stderr)
 def _run(args, cwd):
     # 启动子进程执行 workflow 命令
     result = subprocess.run(
-        [WORKFLOW_CMD] + args,
+        WORKFLOW_CMD + args,
         cwd=cwd, capture_output=True, text=True, timeout=30,
     )
     # 返回三元组
@@ -26,6 +26,104 @@ def _setup_project(tmp_path):
     code, out, err = _run(["install-project"], str(tmp_path))
     # 验证安装成功
     assert code == 0, f"install-project failed: {out} {err}"
+
+
+def _advance_to_spike(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    spec_dir = os.path.join(str(tmp_path), "spec")
+    os.makedirs(spec_dir)
+    with open(os.path.join(spec_dir, "product.md"), "w") as f:
+        f.write("# Product\n\n[功能](./feature_example.md)\n")
+    with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
+        f.write("# 【功能】Example\n")
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    _run(["gate", "spec"], str(tmp_path))
+    _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
+        f.write("# Architecture\n")
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
+    _run(["gate", "code_design"], str(tmp_path))
+    _run(["gate", "code_design", "--confirmed"], str(tmp_path))
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        return __import__("json").load(f)["workflow_id"]
+
+
+def _write_valid_spike_documents(tmp_path, workflow_id):
+    spec_dir = os.path.join(str(tmp_path), "spec")
+    with open(os.path.join(spec_dir, "spike_index.md"), "w") as f:
+        f.write(f"""# 【穿刺】穿刺清单
+
+- 工作流编号：{workflow_id}
+
+## SP-001 确认真实接口返回
+
+- 真实场景：用户执行真实业务操作
+- 要验证的不确定性：接口实际返回哪些字段
+- 验证结果用于决定什么：决定接口解析和错误处理
+- 结论文档：[确认真实接口返回](./spike_real_api_response.md)
+- 穿刺状态：已确认
+- 是否阻塞后续：否
+- 产品设计影响：无需修改
+- 代码设计影响：无需修改
+- 后续处理阶段：无
+""")
+    with open(os.path.join(spec_dir, "spike_real_api_response.md"), "w") as f:
+        f.write(f"""# 【穿刺】确认真实接口返回
+
+- 工作流编号：{workflow_id}
+- 穿刺项编号：SP-001
+
+## 1. 真实场景与不确定性
+
+用户执行真实业务操作时，代码需要读取真实接口返回字段。
+
+## 2. 验证结果用于决定什么
+
+结果用于决定接口解析和错误处理怎样设计。
+
+## 3. 已知事实与验证范围
+
+- 当前代码没有保存真实返回。
+- 本次只调用真实只读接口。
+
+## 4. 验证方法
+
+- 使用的方法：调用真实只读接口
+- 临时内容位置：无
+- 执行步骤：执行真实请求并保存脱敏输出
+- 外部影响：只读，不修改外部数据
+
+## 5. 实际执行记录
+
+- 执行时间：2026-07-23T12:00:00+08:00
+- 运行环境：macOS，测试接口版本 v1
+- 实际命令：curl 调用真实接口，凭据已省略
+- 真实输入或样本：真实账号下的只读查询，响应哈希 abc123
+- 执行失败：无
+
+## 6. 实际观察结果
+
+接口返回 data.items、error.code 和 error.message。
+
+## 7. 结论
+
+- 结果状态：已确认
+- 是否阻塞后续：否
+- 已确认内容：确认真实成功和失败返回字段
+- 仍未确认内容：无
+
+## 8. 对后续工作的影响
+
+- 产品设计影响：无需修改
+- 产品设计更新位置：无
+- 代码设计影响：无需修改
+- 代码设计更新位置：无
+- 剩余风险：无
+- 后续处理阶段：无
+- 后续需要检查什么：无
+""")
 
 
 # 测试 workflow start 无 intent 且无 active Run 时：列出可选意图
@@ -240,6 +338,217 @@ def test_gate_skip_only_for_spike(tmp_path):
     assert code == 1
     # 验证提示 spike（说明 --skip 只允许 spike）
     assert "spike" in out
+
+
+def test_gate_cannot_skip_spike_before_current_stage(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    code, out, _ = _run(["gate", "spike", "--skip"], str(tmp_path))
+
+    assert code == 1
+    assert "当前 stage 是 spec" in out
+    assert "下一步：" in out
+    assert "workflow discuss" in out
+    assert "workflow gate spec --discuss-done" in out
+
+
+def test_gate_rejects_all_normal_operations_for_non_current_stage(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    for flags in (["--discuss-done"], [], ["--confirmed"]):
+        code, out, _ = _run(["gate", "spike", *flags], str(tmp_path))
+        assert code == 1
+        assert "当前 stage 是 spec" in out
+        assert "不能操作 spike" in out
+        assert "下一步：" in out
+        assert "workflow discuss" in out
+        assert "workflow gate spec --discuss-done" in out
+
+
+def test_wrong_stage_gate_prints_plan_stage_next_step(tmp_path):
+    _setup_project(tmp_path)
+    _advance_to_spike(tmp_path)
+    _run(["gate", "spike", "--skip"], str(tmp_path))
+
+    code, out, _ = _run(["gate", "spike", "--discuss-done"], str(tmp_path))
+
+    assert code == 1
+    assert "当前 stage 是 plan" in out
+    assert "不能操作 spike" in out
+    assert "下一步：" in out
+    assert "workflow discuss" in out
+    assert "workflow gate plan --discuss-done" in out
+
+
+def test_entering_spike_records_product_and_code_design_baseline(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    spec_dir = os.path.join(str(tmp_path), "spec")
+    os.makedirs(spec_dir)
+    with open(os.path.join(spec_dir, "product.md"), "w") as f:
+        f.write("# Product\n\n[功能](./feature_example.md)\n")
+    with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
+        f.write("# 【功能】Example\n")
+
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    _run(["gate", "spec"], str(tmp_path))
+    _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
+        f.write("# Architecture\n")
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
+    _run(["gate", "code_design"], str(tmp_path))
+    code, out, _ = _run(["gate", "code_design", "--confirmed"], str(tmp_path))
+    assert code == 0, out
+
+    with open(os.path.join(str(tmp_path), ".workflow_loop", "state.json")) as f:
+        data = __import__("json").load(f)
+
+    assert data["current_stage"] == "spike"
+    assert data["spike_baseline"]["captured_at"] is not None
+    assert data["spike_baseline"]["product_design_hash"] is not None
+    assert data["spike_baseline"]["code_design_hash"] is not None
+    assert data["spike_baseline"]["product_design_paths"] == [
+        "spec/feature_example.md",
+        "spec/product.md",
+    ]
+
+
+def test_spike_discuss_prints_real_uncertainty_rules(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    spec_dir = os.path.join(str(tmp_path), "spec")
+    os.makedirs(spec_dir)
+    with open(os.path.join(spec_dir, "product.md"), "w") as f:
+        f.write("# Product\n\n[功能](./feature_example.md)\n")
+    with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
+        f.write("# 【功能】Example\n")
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    _run(["gate", "spec"], str(tmp_path))
+    _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
+        f.write("# Architecture\n")
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
+    _run(["gate", "code_design"], str(tmp_path))
+    _run(["gate", "code_design", "--confirmed"], str(tmp_path))
+
+    code, out, _ = _run(["discuss"], str(tmp_path))
+
+    assert code == 0
+    assert "技术不确定性验证工程师" in out
+    assert "真实场景" in out
+    assert "已经能从现有事实确认的内容不需要穿刺" in out
+    assert "spec/spike_index.md" in out
+
+
+def test_old_spike_state_migrates_artifact_path_even_with_baseline(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    spec_dir = os.path.join(str(tmp_path), "spec")
+    os.makedirs(spec_dir)
+    with open(os.path.join(spec_dir, "product.md"), "w") as f:
+        f.write("# Product\n\n[功能](./feature_example.md)\n")
+    with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
+        f.write("# 【功能】Example\n")
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    _run(["gate", "spec"], str(tmp_path))
+    _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
+        f.write("# Architecture\n")
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
+    _run(["gate", "code_design"], str(tmp_path))
+    _run(["gate", "code_design", "--confirmed"], str(tmp_path))
+
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        data = __import__("json").load(f)
+    assert data["spike_baseline"]["captured_at"] is not None
+    data["stages"]["spike"]["artifact_paths"] = ["spec/"]
+    with open(state_path, "w") as f:
+        __import__("json").dump(data, f)
+
+    code, out, _ = _run(["gate", "spike", "--discuss-done"], str(tmp_path))
+
+    assert code == 0, out
+    assert "['spec/spike_index.md']" in out
+    with open(state_path) as f:
+        migrated = __import__("json").load(f)
+    assert migrated["stages"]["spike"]["artifact_paths"] == ["spec/spike_index.md"]
+
+
+def test_old_spike_state_marks_missing_baseline_without_using_current_files(tmp_path):
+    _advance_to_spike(tmp_path)
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        data = __import__("json").load(f)
+    data["spike_baseline"] = {
+        "captured_at": None,
+        "product_design_hash": None,
+        "product_design_paths": [],
+        "code_design_hash": None,
+        "legacy_unavailable": False,
+    }
+    with open(state_path, "w") as f:
+        __import__("json").dump(data, f)
+
+    code, out, _ = _run(["discuss"], str(tmp_path))
+
+    assert code == 0, out
+    with open(state_path) as f:
+        migrated = __import__("json").load(f)
+    assert migrated["spike_baseline"]["captured_at"] is None
+    assert migrated["spike_baseline"]["product_design_hash"] is None
+    assert migrated["spike_baseline"]["code_design_hash"] is None
+    assert migrated["spike_baseline"]["legacy_unavailable"] is True
+
+
+def test_spike_confirmation_revalidates_documents_after_gate_two(tmp_path):
+    workflow_id = _advance_to_spike(tmp_path)
+    _write_valid_spike_documents(tmp_path, workflow_id)
+    _run(["gate", "spike", "--discuss-done"], str(tmp_path))
+    code, out, _ = _run(["gate", "spike"], str(tmp_path))
+    assert code == 0, out
+    assert "代码校验通过" in out
+
+    for filename in ["spike_index.md", "spike_real_api_response.md"]:
+        path = os.path.join(str(tmp_path), "spec", filename)
+        with open(path) as f:
+            content = f.read()
+        with open(path, "w") as f:
+            f.write(content.replace("是否阻塞后续：否", "是否阻塞后续：是"))
+
+    code, out, _ = _run(["gate", "spike", "--confirmed"], str(tmp_path))
+
+    assert code == 0
+    assert "用户确认前校验失败" in out
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        data = __import__("json").load(f)
+    assert data["current_stage"] == "spike"
+    assert data["stages"]["spike"]["gate"]["code_validated"] is False
+    assert data["stages"]["spike"]["gate"]["user_confirmed"] is False
+
+
+def test_spike_confirmation_cleans_tmp_and_records_journal(tmp_path):
+    workflow_id = _advance_to_spike(tmp_path)
+    _write_valid_spike_documents(tmp_path, workflow_id)
+    spike_tmp = os.path.join(str(tmp_path), ".workflow_loop", "spike_tmp", "api_probe")
+    os.makedirs(spike_tmp)
+    with open(os.path.join(spike_tmp, "result.json"), "w") as f:
+        f.write("{}")
+    _run(["gate", "spike", "--discuss-done"], str(tmp_path))
+    _run(["gate", "spike"], str(tmp_path))
+
+    code, out, _ = _run(["gate", "spike", "--confirmed"], str(tmp_path))
+
+    assert code == 0, out
+    assert not os.path.exists(spike_tmp)
+    journal_path = os.path.join(str(tmp_path), ".workflow_loop", "journal.jsonl")
+    with open(journal_path) as f:
+        journal = f.read()
+    assert '"action": "spike 清理"' in journal
+    assert '"cleaned_paths": ["api_probe"]' in journal
 
 
 # 测试 workflow gate 强制顺序：第 2 道闸（code_validated）不能在第 1 道闸（discussion_complete）未过时直接 --confirmed

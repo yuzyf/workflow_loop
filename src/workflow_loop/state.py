@@ -65,6 +65,23 @@ class VerificationState:
     test_result_hash: str | None = None
 
 
+# 穿刺阶段开始时的设计文档基线
+# 门2用它判断穿刺结论要求修改设计时，相关文档是否真的发生了变化
+@dataclass
+class SpikeBaselineState:
+    # 记录基线的时间；非空表示已经完成基线记录，即使某个文件当时不存在
+    captured_at: str | None = None
+    # spec/product.md 及其功能清单链接文档的整体 SHA256 哈希
+    product_design_hash: str | None = None
+    # 参与产品设计整体哈希的相对路径，便于状态检查和问题定位
+    product_design_paths: list[str] = field(default_factory=list)
+    # spec/architecture_code_design.md 的 SHA256 哈希
+    code_design_hash: str | None = None
+    # 旧工作流已经进入 spike，但旧 state.json 没有保存入场基线
+    # True 表示无法可靠还原穿刺开始前的设计内容，不能假装当前文件就是旧基线
+    legacy_unavailable: bool = False
+
+
 # 整个 workflow Run 的当前快照，对应 state.json 的完整结构
 # 每次 CLI 调用都是新进程，state 必须落盘，下次进程启动时读回来
 @dataclass
@@ -99,6 +116,8 @@ class WorkflowState:
     architecture: ArchitectureState = field(default_factory=ArchitectureState)
     # 验证绑定哈希，见 VerificationState
     verification: VerificationState = field(default_factory=VerificationState)
+    # 穿刺进入时的产品设计和代码设计基线
+    spike_baseline: SpikeBaselineState = field(default_factory=SpikeBaselineState)
     # 自由扩展口子（hooks 等后面用，第一版为空）
     meta: dict = field(default_factory=dict)
 
@@ -143,6 +162,8 @@ def state_from_dict(data: dict) -> WorkflowState:
     arch_data = data.get("architecture", {})
     # 读 verification 字段（验证绑定哈希）
     verification_data = data.get("verification", {})
+    # 读 spike_baseline 字段；旧 state.json 没有时按未记录处理
+    spike_baseline_data = data.get("spike_baseline", {})
     # 重建最外层的 WorkflowState
     return WorkflowState(
         workflow_id=data["workflow_id"],
@@ -166,6 +187,13 @@ def state_from_dict(data: dict) -> WorkflowState:
             test_plan_hash=verification_data.get("test_plan_hash"),
             acceptance_plan_hash=verification_data.get("acceptance_plan_hash"),
             test_result_hash=verification_data.get("test_result_hash"),
+        ),
+        spike_baseline=SpikeBaselineState(
+            captured_at=spike_baseline_data.get("captured_at"),
+            product_design_hash=spike_baseline_data.get("product_design_hash"),
+            product_design_paths=spike_baseline_data.get("product_design_paths", []),
+            code_design_hash=spike_baseline_data.get("code_design_hash"),
+            legacy_unavailable=spike_baseline_data.get("legacy_unavailable", False),
         ),
         meta=data.get("meta", {}),
     )

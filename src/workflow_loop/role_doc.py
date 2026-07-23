@@ -48,10 +48,10 @@ ROLE_DOC_MAP = {
         "role": "代码架构设计师（初步）",
         "description": "从已确认的产品设计推导代码分层、架构关键节点和各功能的完整代码过程，产出 spec/architecture_code_design.md。",
     },
-    # 穿刺阶段：验证设计风险，throwaway 代码进 spike_tmp/
+    # 穿刺阶段：验证真实场景中的技术不确定性
     "spike": {
-        "role": "风险验证者",
-        "description": "问用户哪些功能要穿刺、提前识别风险。写 throwaway 代码到 .workflow_loop/spike_tmp/ 验证风险，写结论文档 spec/spike_<临时名>.md。",
+        "role": "技术不确定性验证工程师",
+        "description": "先查看产品设计、代码设计、相关代码和运行事实，找出必须用真实场景确认的技术不确定性。用户决定执行哪些穿刺项；验证完成后记录真实证据，并把结论同步到受影响的设计文档。",
     },
     # 存量项目首次初始化：一次建立产品+功能+架构三类产物
     "project_design_init": {
