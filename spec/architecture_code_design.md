@@ -8,7 +8,7 @@
 
 维护者可以从本文看清：产品设计文档生成和技术不确定性验证分别经过哪些代码环节；命令、阶段规则、状态文件、提示词和门禁怎样协作；关键判断和文件写入发生在哪里；哪些行为已经有测试或运行证据；哪些内容仍只能由 AI 和用户判断。
 
-本文最初由 `code_design`（初步代码架构）阶段生成，当前仍处于 `spike`（技术不确定性验证）阶段。此前把正式功能实施写成穿刺结论不符合穿刺代码边界，相关穿刺清单和结论文档已经移除；本文只记录当前真实代码和已经通过的测试，不能代替后续实施记录、测试结果和用户验收。
+本文最初由 `code_design`（初步代码架构）阶段生成，当前工作流处于 `test_plan`（测试计划）阶段。产品设计、初步代码设计、穿刺决定和验收计划已经完成；本文继续记录当前真实代码和已经通过的测试，不能代替后续实施记录、测试结果和用户验收。
 
 ### 1.2 设计依据
 
@@ -27,8 +27,8 @@
 
 | 结论 | 证据状态 | 依据 |
 |---|---|---|
-| 命令入口、阶段路径、三道门禁、阶段产物基线、项目初始化证据、缺陷复现校验、穿刺结构化校验和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-24 运行完整测试，92 项通过；测试覆盖文件基线只记录一次、产品与架构旧文件不能冒充本阶段产物、项目初始化调查证据、缺陷复现和根因固定字段、门3重新校验以及穿刺清理 |
-| 当前项目处于 `acceptance_plan`（验收计划）阶段，产品设计、初步代码设计和穿刺阶段已经完成，其中穿刺由用户确认跳过 | 运行确认 | 2026-07-24 使用当前仓库代码执行 `.venv/bin/workflow status` |
+| 命令入口、阶段路径、三道门禁、阶段产物基线、项目初始化证据、缺陷复现校验、穿刺结构化校验、验收计划结构校验、最终回归与整体验收固定门禁和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-24 运行完整测试，102 项通过；测试覆盖验收计划追踪、缺陷主题登记、主题路径安全校验、最终回归必须通过、整体验收必须通过和门3重新校验 |
+| 当前项目处于 `test_plan`（测试计划）阶段，产品设计、初步代码设计、穿刺和验收计划阶段已经完成，其中穿刺由用户确认跳过 | 运行确认 | 2026-07-24 使用当前仓库代码执行 `.venv/bin/workflow status` |
 | 包内穿刺模板、穿刺规范与当前项目运行副本内容一致 | 文件确认 | 2026-07-23 对两组文件执行逐字节比较，结果一致 |
 | 新项目安装后会得到包内保存的阶段提示词和规范 | 运行确认、测试确认 | 安装器从 `src/workflow_loop/data/` 复制资源；安装和提示词内容测试通过 |
 | AI 是否真的完成事实调查、证据是否来自真实场景、两个候选是否语义重复 | 未由程序确认 | 当前由穿刺规范要求 AI 展示证据，再由用户审查；程序只检查工作流编号、结构、状态、阻塞和设计哈希等可明确判断的内容 |
@@ -66,6 +66,8 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 - 任意穿刺项仍阻塞后续时不能进入计划；结论影响设计时必须先更新相应文档。
 - 穿刺之后先制定验收计划，再制定测试计划，最后制定实施或修复计划。
 - 各主题分别实施、测试和验收；全部主题完成后必须执行最终全量回归和整体验收。
+- 每条验收条件通过项目根 `traceability.md` 追踪到测试计划、实施计划、实施记录、测试结果、验收结果和最终代码设计。
+- 修 bug 时，主题验收通过不能直接关闭缺陷；回归失败写“回归失败，重新处理中”，最终回归和整体验收都通过后才写“已修复并验收”。
 
 ## 3. 产品设计如何决定代码架构
 
@@ -84,7 +86,11 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 | 修 bug 的穿刺不能改变产品行为 | `bugfix` 中出现“产品设计影响：需要修改”时门2直接拒绝 | `validate_spike_stage()` 的意图分支 | 为修 bug 验证技术不确定性 |
 | 修 bug 时只在项目设计未初始化时先生成产品文档 | 项目必须保存跨工作流的初始化状态，路径生成时据此决定是否前置初始化阶段 | `ProjectState.project_design_initialized`、`build_stage_path()` | 修 bug 前初始化 |
 | 验收计划先于测试计划和实施计划 | 三种意图的阶段路径必须固定为 `acceptance_plan → test_plan → plan/fix_plan` | `path_composer.py` 的三条路径常量 | 后续计划阶段 |
+| 验收计划不属于测试资料 | 验收计划模板和规范必须放在 `Template_Repository/acceptance/` 与 `Standardized_Repository/acceptance/`，`qa/` 只保留测试相关资源 | `AcceptancePlanStage.prompt_doc_path()`、`standard_doc_path()` | 验收计划阶段 |
 | 各主题可以分别推进，完成后再做全量回归 | 顶层路径使用 `topic_execution` 统筹主题内部执行，再进入 `regression_test` 和 `overall_acceptance` | `TopicExecutionStage`、`RegressionTestStage`、`OverallAcceptanceStage` | 后续执行阶段 |
+| 最终全量回归和整体验收没有通过时不能继续 | 固定结果字段必须由 Python 门禁读取，不能只依赖 Markdown 规范提醒 | `validate_final_regression_result()`、`validate_overall_acceptance_result()` | 最终回归和整体验收 |
+| 每条验收条件都能查到后续文档和结果 | 各阶段确认时只更新追踪表中自己负责的列，不能覆盖旧工作流 | `traceability.py` 的 `validate_structure()`、`update_for_stage()`；`cli.py` 的 `apply_stage_completion_updates()` | 验收计划及后续阶段 |
+| 修 bug 只有最终通过才能关闭 | 主题执行、回归失败和整体验收分别追加缺陷状态，不能改写原复现事实 | `bug_record.py`；`cli.py` 的固定记录更新分支 | 修 bug |
 | 从零重做不能沿用旧设计产物 | 开始时发现旧产物必须先获得清场确认，确认后删除约定目录并重置初始化状态 | `detect_clean_artifacts()`、`clean_artifacts()`、`cmd_start()` | 从零生成 |
 | 后续验证只对当前代码和计划有效 | 上游实施、测试计划或验收计划改变时，已通过的下游门禁必须失效 | `VerificationState`、`check_invalidation()` | 当前产品文档未单独定义；属于全项目约束 |
 | 每条命令都要告诉 AI 下一步做什么 | 所有改变流程的命令必须在输出末尾给出下一条操作 | `print_next_step()` 和各 `cmd_*()` 命令 | 所有场景及后续阶段 |
@@ -98,7 +104,7 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 ```mermaid
 flowchart TB
     L1["命令与 AI 协作层<br/>承接用户提出需求、AI 调命令和 stdout 下一步<br/>src/workflow_loop/cli.py"]
-    L2["工作流规则层<br/>决定阶段路径、阶段产物和结构化门禁校验<br/>path_composer.py / stages/ / role_doc.py / artifact_validation.py / spike_validation.py"]
+    L2["工作流规则层<br/>决定阶段路径、阶段产物、结构化门禁、追踪表和缺陷状态更新<br/>path_composer.py / stages/ / artifact_validation.py / spike_validation.py / traceability.py / bug_record.py"]
     L3["状态与一致性层<br/>保存当前 Run、阶段产物基线、主题历史、穿刺设计基线、验证哈希和审计记录<br/>state.py / project.py / verification.py / journal.py"]
     L4["提示词与安装资源层<br/>保存模板、规范和安装到目标项目的运行骨架<br/>data/ / installer.py / install.sh / pyproject.toml"]
 
@@ -119,6 +125,7 @@ flowchart TB
   - `cmd_start()`：启动或检查工作流。
   - `cmd_discuss()`：完整打印当前阶段的角色、全局写作规范、模板、流程规范和产出要求。
   - `cmd_gate()`：执行讨论完成、代码校验、用户确认三道门禁，并推进阶段。
+  - `apply_stage_completion_updates()`：中文职责是第三道门确认前，更新当前阶段负责的需求交付追踪列；修 bug 时同时追加缺陷处理状态。
   - `print_next_step()`：在命令输出末尾打印下一条操作。
   - `current_stage_next_instruction()`：中文职责是根据当前阶段和三道门的状态，生成不会跨阶段的下一步命令。
 - **对外约定**：调用方传入命令行参数；成功时得到当前状态和下一步；调用了错误阶段时同时得到当前阶段和正确的下一步命令；其它门禁顺序错误或项目未安装时打印明确错误并退出。
@@ -136,6 +143,8 @@ flowchart TB
   - [src/workflow_loop/role_doc.py](../src/workflow_loop/role_doc.py)：`ROLE_DOC_MAP`，即阶段角色和中文职责说明。
   - [src/workflow_loop/artifact_validation.py](../src/workflow_loop/artifact_validation.py)：比较阶段文件基线，检查项目初始化调查证据和缺陷复现文档。
   - [src/workflow_loop/spike_validation.py](../src/workflow_loop/spike_validation.py)：解析穿刺清单和结论文档，执行穿刺门2的结构化校验。
+  - [src/workflow_loop/traceability.py](../src/workflow_loop/traceability.py)：校验当前工作流在 `traceability.md` 中的九列追踪结构，并在各阶段确认时只更新该阶段负责的列。
+  - [src/workflow_loop/bug_record.py](../src/workflow_loop/bug_record.py)：在缺陷记录末尾追加主题验收、回归失败和整体验收结果，并同步 `bug/index.md` 状态，不改写原复现事实。
 - **对外约定**：`build_stage_path()` 接收 `from_scratch`、`product_change` 或 `bugfix`，返回有顺序的阶段对象；未知意图直接抛出错误。每个阶段对象提供统一方法供 CLI 调用。
 - **关键逻辑**：`product_change` 和 `bugfix` 只有在 `project_design_initialized=false` 时前置 `ProjectDesignInitStage`；三种意图都包含可选 `SpikeStage`；`bugfix` 在 `reproduce → spike` 后进入共享后半截的 `acceptance_plan → test_plan → fix_plan`。
 - **验证位置**：[tests/test_path_composer.py](../tests/test_path_composer.py)、[tests/test_stages.py](../tests/test_stages.py)。
@@ -175,7 +184,7 @@ flowchart TB
 - **上游**：AI 调用 `workflow start --intent <意图>`。
 - **主要处理**：检查安装和活跃工作流；从零设计时检查是否需要清场；读取项目初始化状态；生成阶段对象；初始化每个阶段的门禁状态。三种路径在穿刺后统一进入 `acceptance_plan → test_plan → plan/fix_plan → topic_execution → regression_test → overall_acceptance → update_code_design`。
 - **下游**：调用 `save_state()` 写入 `.workflow_loop/state.json`，调用 `append_entry()` 记录启动和路径，最后提示执行 `workflow discuss`。
-- **状态和数据**：写入 `workflow_id`、`intent`、`stage_path`、`current_stage`、每个阶段的 `GateState`；验收计划确认后写入 `topics`，并把主题登记到项目级 `topic_history`。
+- **状态和数据**：写入 `workflow_id`、`intent`、`stage_path`、`current_stage`、每个阶段的 `GateState`。从零开发和修改产品在验收计划确认时写入 `topics` 并登记项目级 `topic_history`；修 bug 在缺陷复现确认时完成这一步，验收计划只能复用已有主题。
 - **失败结果**：项目未安装、已有活跃工作流或意图非法时停止；发现旧产物但没有清场确认时不删除、不启动。
 - **验证位置**：`test_start_*`、`test_active_run_guard`、`test_from_scratch_path`、`test_product_change_*`、`test_bugfix_*`。
 
@@ -185,7 +194,7 @@ flowchart TB
 - **对应产品内容**：需求讨论、共同理解确认、正式产品文档生成、已有代码调查和穿刺候选识别。
 - **代码位置**：`src/workflow_loop/cli.py` 中的 `cmd_discuss()`、`load_doc_content()`；`src/workflow_loop/stages/stages.py` 中各阶段的文档路径方法。
 - **上游**：当前工作流已经启动，AI 调用 `workflow discuss`。
-- **主要处理**：根据当前阶段获得角色；读取全局写作规范；读取阶段模板和规范；对 `ProjectDesignInitStage` 继续读取产品模板、产品规范、代码架构模板和代码设计规范。当前阶段是 `spike` 且旧状态没有入场基线时，只标记“旧基线无法还原”，不使用当前文件冒充穿刺开始前的设计。
+- **主要处理**：根据当前阶段获得角色；读取全局写作规范；按阶段需要读取模板和规范；固定门禁没有独立规范文件时不打印空的“流程规范”部分；对 `ProjectDesignInitStage` 继续读取产品模板、产品规范、代码架构模板和代码设计规范。当前阶段是 `spike` 且旧状态没有入场基线时，只标记“旧基线无法还原”，不使用当前文件冒充穿刺开始前的设计。
 - **下游**：完整打印给 AI，并记录“提示词加载”和“角色文档加载”。
 - **状态和数据**：只追加 journal，不改变阶段门禁。
 - **失败结果**：没有工作流、工作流已结束、阶段实现不存在时停止；某个 Markdown 不存在时把缺失路径打印出来。
@@ -197,9 +206,9 @@ flowchart TB
 - **对应产品内容**：用户确认共同理解或穿刺执行清单后才能写正式产物，用户检查产物后才能作为后续依据。
 - **代码位置**：`src/workflow_loop/cli.py` 中的 `cmd_gate()`；`src/workflow_loop/state.py` 中的 `GateState`。
 - **上游**：AI 分别调用 `workflow gate <stage> --discuss-done`、`workflow gate <stage>`、`workflow gate <stage> --confirmed`。
-- **主要处理**：所有门禁先检查命令中的阶段是否等于 `current_stage`（当前阶段）；不相等时拒绝操作，并根据当前阶段的三道门状态打印正确的下一步。第一道门把用户的讨论完成确认写为 `discussion_complete=true`，程序不检查聊天记录；对 `spec`、`project_design_init`、`revise_code_design` 和 `reproduce` 同时调用 `ensure_stage_artifact_baseline()` 保存修改前文件哈希。第二道门调用当前阶段的 `code_validate()`；第三道门推进前重新执行上游失效检查和 `code_validate()`，当前文件仍有效时才写 `user_confirmed=true`、阶段状态 `done` 并进入下一阶段。真正进入 `spike` 时调用 `ensure_spike_baseline()`；`gate spike --skip` 清理临时目录并直接进入后续计划阶段。
-- **下游**：更新状态文件和 journal；架构阶段更新架构标记；项目设计初始化完成时更新项目级初始化状态。
-- **状态和数据**：写 `.workflow_loop/state.json`、`.workflow_loop/project.json` 和 `.workflow_loop/journal.jsonl`。
+- **主要处理**：所有门禁先检查命令中的阶段是否等于 `current_stage`（当前阶段）；不相等时拒绝操作，并根据当前阶段的三道门状态打印正确的下一步。第一道门把用户的讨论完成确认写为 `discussion_complete=true`，程序不检查聊天记录；对 `spec`、`project_design_init`、`revise_code_design` 和 `reproduce` 同时调用 `ensure_stage_artifact_baseline()` 保存修改前文件哈希。第二道门调用当前阶段的 `code_validate()`；验收计划门禁检查追踪表和主题计划，最终回归门禁只接受当前工作流的“回归状态：通过”，整体验收门禁先复核回归通过，再接受当前工作流的“整体验收状态：通过”。第三道门推进前重新执行上游失效检查和 `code_validate()`；当前文件仍有效后，先调用 `apply_stage_completion_updates()` 更新追踪表和缺陷状态。固定记录更新成功后，才写 `user_confirmed=true`、阶段状态 `done` 并进入下一阶段。真正进入 `spike` 时调用 `ensure_spike_baseline()`；`gate spike --skip` 清理临时目录并直接进入后续计划阶段。
+- **下游**：更新状态文件、追踪表、缺陷记录和 journal；架构阶段更新架构标记；项目设计初始化完成时更新项目级初始化状态。
+- **状态和数据**：写 `.workflow_loop/state.json`、`.workflow_loop/project.json`、`.workflow_loop/journal.jsonl`、`traceability.md`；修 bug 时还可能写 `bug/<缺陷记录>.md` 和 `bug/index.md`。
 - **失败结果**：跨阶段调用时不推进，并显示当前阶段和正确命令；跳过前一道门、产物缺失、门2后产物被改坏或上游验证失效时也不推进。
 - **验证位置**：`test_gate_order_enforced`、`test_gate_rejects_all_normal_operations_for_non_current_stage`、`test_spike_confirmation_revalidates_documents_after_gate_two`、各阶段 `code_validate` 测试和命令测试。
 
@@ -255,10 +264,28 @@ flowchart TB
 - **对应流程**：`bugfix` 中的 `reproduce`（缺陷复现）阶段。
 - **代码位置**：`src/workflow_loop/stages/stages.py` 中的 `ReproduceStage.code_validate()`；`src/workflow_loop/artifact_validation.py` 中的 `validate_reproduce_documents()`。
 - **上游**：用户确认复现讨论完成时，`cmd_gate()` 保存 `bug/index.md` 和已有缺陷记录的文件哈希；AI 使用真实环境和真实输入复现缺陷。
-- **主要处理**：要求 `bug/index.md` 和至少一份缺陷记录相对基线发生变化；检查文件名、当前工作流编号、索引链接、七个章节、真实运行环境、真实输入、复现状态“已复现”、根因状态“已确认”、根因说明、根因位置和根因证据。
-- **下游**：门2通过后等待用户核对证据；门3确认后进入 `spike`，只讨论修复仍依赖的技术不确定性。
+- **主要处理**：要求 `bug/index.md` 和至少一份缺陷记录相对基线发生变化；检查文件名、当前工作流编号、索引链接、七个章节、真实运行环境、真实输入、复现状态“已复现”、根因状态“已确认”、根因说明、根因位置、根因证据和唯一验收主题。同一工作流的多份缺陷记录不能使用重复主题。
+- **下游**：门2通过后等待用户核对证据；门3确认时把缺陷记录中的主题写入当前工作流和项目主题历史，再进入 `spike`，只讨论修复仍依赖的技术不确定性。
 - **失败结果**：索引未更新、只有旧文件、文件名错误、复现或根因没有确认、缺少真实条件或根因证据时停留在 `reproduce`。
 - **验证位置**：`test_reproduce_stage_requires_current_structured_bug_record_and_index`、`test_reproduce_stage_rejects_arbitrary_markdown`。
+
+### 5.9 需求交付追踪和缺陷状态更新
+
+- **为什么关键**：验收条件、测试、实施、结果和代码设计如果只分别写在不同文件里，维护者无法判断它们是不是同一条需求链路；修 bug 如果只改索引状态，也可能在主题验收通过时被错误地提前关闭。
+- **对应产品规则**：每条验收条件都要追踪到后续文档和结果；修 bug 必须经过主题验收、最终全量回归和整体验收，最后才能写“已修复并验收”；原始缺陷复现事实不能被后续结果覆盖。
+- **代码位置**：
+  - `src/workflow_loop/traceability.py`：中文职责是读取和校验项目根 `traceability.md`，按当前工作流找到每条验收条件，并更新当前阶段负责的列。
+  - `src/workflow_loop/bug_record.py`：中文职责是向缺陷记录第八节追加后续处理结果，并更新 `bug/index.md` 的最后状态。
+  - `src/workflow_loop/cli.py` 的 `apply_stage_completion_updates()`：中文职责是把阶段确认和上述两个写入动作绑在一起；固定记录写入失败时，不允许第三道门推进。
+- **上游**：验收计划阶段创建当前工作流章节和九列表格；每条验收条件独占一行。修 bug 的主题在 `reproduce` 确认时登记，验收计划只复用这个主题。
+- **主要处理**：
+  1. `test_plan` 确认时，只补“测试项”列；`plan` 或 `fix_plan` 确认时，只补“实施计划与任务”列。
+  2. `topic_execution` 确认前，必须确认每个主题都有当前工作流的实施记录、`测试结果：通过` 和 `验收结果：通过`；确认后补实施记录、测试结果和验收结果列。
+  3. `regression_test` 确认时补最终全量回归结果；`overall_acceptance` 确认时补整体验收结果；`update_code_design` 确认时补最终代码设计链接。
+  4. 修 bug 的主题验收通过后，缺陷记录追加实施记录、测试结果和主题验收结果链接，状态只写“主题验收通过，待全量回归”；最终回归失败改写为“回归失败，重新处理中”；只有整体验收通过后才写“已修复并验收”。原复现阶段的前七节不被重写。
+- **下游**：`traceability.md` 保存当前工作流的最新链路，同时保留旧工作流章节；各阶段的详细文档保存具体步骤、证据和结果，追踪表不复制这些正文。
+- **失败结果**：追踪表缺失、列数错误、当前工作流章节缺少主题、后续状态留空、结果文件缺少当前工作流编号或明确通过字段、缺陷记录缺少对应主题时，门禁失败并停在当前阶段。
+- **验证位置**：[tests/test_traceability.py](../tests/test_traceability.py)、[tests/test_bug_record.py](../tests/test_bug_record.py)、[tests/test_stages.py](../tests/test_stages.py)、[tests/test_commands.py](../tests/test_commands.py)。
 
 ## 6. 各产品功能的代码设计
 
@@ -457,7 +484,7 @@ flowchart TD
 
 ### 7.5 全局写作规范和阶段提示词
 
-所有阶段共同加载 `Standardized_Repository/global/document_writing.md`。产品设计阶段、项目初始化阶段和穿刺阶段再加载各自模板与规范。穿刺模板只定义 `spike_index.md` 和详情文档怎样写；穿刺规范定义怎样调查、让用户选择、执行真实验证、更新设计和通过门禁。这样全局表达规则、产物结构和执行流程各自只维护一处。
+所有阶段共同加载 `Standardized_Repository/global/document_writing.md`。产品设计阶段、项目初始化阶段、穿刺阶段和验收计划阶段再加载各自模板与规范。验收计划资源位于 `acceptance/`，测试资源位于 `qa/`。最终全量回归与整体验收的通过条件属于固定程序规则，不再建立重复的规范文件；AI 执行提示和结果入口仍由模板说明，门禁以 Python 校验为准。这样全局表达规则、可变文档结构和固定程序约束各自只维护一处。
 
 当前安装器会把包内资源复制到目标项目的 `.workflow_loop/`。同版本重复安装采用零修改策略，因此已经安装的其他项目不会自动获得本次提示词更新。
 

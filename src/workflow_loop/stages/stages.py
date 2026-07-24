@@ -4,12 +4,22 @@ import os
 from ..artifact_validation import (
     PROJECT_INIT_EVIDENCE_PATH,
     changed_stage_paths,
+    validate_acceptance_plan_documents,
+    validate_downstream_traceability,
+    validate_final_regression_result,
+    validate_overall_acceptance_result,
     validate_project_design_init_evidence,
     validate_reproduce_documents,
+    validate_topic_execution_results,
 )
 from ..spike_validation import validate_spike_stage
 from ..state import load_state
-from ..topic import candidate_topics, current_workflow_topics, missing_topic_files
+from ..topic import (
+    candidate_topics,
+    current_workflow_topics,
+    list_acceptance_plan_topics,
+    missing_topic_files,
+)
 from .base import StageStrategy, clean_spike_tmp
 
 
@@ -200,6 +210,19 @@ class PlanStage(StageStrategy):
         # 没有任何计划文件 → 判失败
         if not plan_files:
             return (False, "plan/ 下没有计划 .md 文件")
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        topics = current_workflow_topics(project_root)
+        if not topics:
+            return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan")
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
         # 找到计划文件 → 通过，列出文件名
         return (True, f"计划文档存在: {plan_files}")
 
@@ -209,16 +232,16 @@ class PlanStage(StageStrategy):
 
 
 # 验收计划 stage：制定什么算完成的验收计划
-# 产出 acceptance/<topic>_plan.md，后续 acceptance stage 按这个执行验收
+# 产出 traceability.md + acceptance/<topic>_plan.md
 class AcceptancePlanStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "acceptance_plan"
 
     # 期望产出的文件路径列表（相对项目根）
-    # 这里只列 acceptance/ 目录，code_validate 会查 *_plan.md
+    # traceability.md 是跨阶段追踪入口；acceptance/ 下保存每个主题的验收计划
     def artifact_paths(self) -> list[str]:
-        return ["acceptance/"]
+        return ["traceability.md", "acceptance/"]
 
     # 角色文档路径（相对 .workflow_loop/），acceptance_plan 无角色文档返回 None
     def role_doc_path(self) -> str | None:
@@ -226,11 +249,11 @@ class AcceptancePlanStage(StageStrategy):
 
     # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/qa/acceptance_plan.md"
+        return "Template_Repository/acceptance/acceptance_plan.md"
 
     # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/qa/acceptance_plan.md"
+        return "Standardized_Repository/acceptance/acceptance_plan.md"
 
     # 门禁的代码侧校验（第 2 道闸）
     # 检查 acceptance/ 目录存在 + 本次至少新增一个未使用过的主题计划
@@ -245,18 +268,41 @@ class AcceptancePlanStage(StageStrategy):
         # 没有任何 *_plan.md → 判失败
         if not plan_files:
             return (False, "acceptance/ 下没有 *_plan.md 文件")
-        # 当前 Run 已记录主题时复核这些主题；否则从历史中排除旧主题，找本次新增主题。
-        topics = candidate_topics(project_root)
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+
+        if state.intent == "bugfix":
+            topics = current_workflow_topics(project_root)
+            if not topics:
+                return (False, "修 bug 的验收主题必须先在缺陷复现阶段确定")
+            plan_topics = list_acceptance_plan_topics(project_root)
+            if sorted(plan_topics) != sorted(topics):
+                return (
+                    False,
+                    f"修 bug 的验收计划主题必须与缺陷记录一致；缺陷主题 {topics}，计划主题 {plan_topics}",
+                )
+        else:
+            # 当前 Run 已记录主题时复核这些主题；否则从历史中排除旧主题，找本次新增主题。
+            topics = candidate_topics(project_root)
         if not topics:
             return (False, "没有找到本次新增的验收主题；主题名称不能复用项目历史中的名称")
         missing = missing_topic_files(project_root, "acceptance", "_plan.md", topics)
         if missing:
             return (False, f"缺少验收计划文档: {missing}")
-        return (True, f"本次验收主题: {topics}")
+        return validate_acceptance_plan_documents(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "验收计划阶段：先确定本次需求的全部验收主题，再为每个主题写清什么算完成，产出 acceptance/<topic>_plan.md"
+        return (
+            "验收计划阶段：从零开发和修改产品先确定本次需求的全部验收主题；"
+            "修 bug 复用缺陷复现阶段已经确认的主题。为每个主题写清什么算完成，"
+            "产出 traceability.md + acceptance/<topic>_plan.md。"
+        )
 
 
 # 测试计划 stage：把验收条件转换为可执行测试范围
@@ -302,6 +348,13 @@ class TestPlanStage(StageStrategy):
         missing = missing_topic_files(project_root, "qa", "_plan.md", topics)
         if missing:
             return (False, f"缺少测试计划文档: {missing}")
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
         return (True, f"测试计划覆盖全部主题: {topics}")
 
     # 该 stage 的指令文本，打印给 AI 看
@@ -422,11 +475,11 @@ class AcceptanceStage(StageStrategy):
 
     # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/qa/acceptance.md"
+        return "Template_Repository/acceptance/acceptance.md"
 
     # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/qa/acceptance.md"
+        return "Standardized_Repository/acceptance/acceptance.md"
 
     # 门禁的代码侧校验（第 2 道闸）
     # 检查 acceptance/ 目录存在 + 至少有一个 *_result.md 验收结果文件
@@ -497,6 +550,23 @@ class TopicExecutionStage(StageStrategy):
                 False,
                 f"主题执行结果不完整: 测试缺失={missing_tests}, 验收缺失={missing_acceptance}",
             )
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
+        result_ok, result_detail = validate_topic_execution_results(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not result_ok:
+            return (False, result_detail)
         return (True, f"全部主题已经分别完成实施、测试和验收: {topics}")
 
     def instruction(self) -> str:
@@ -522,10 +592,28 @@ class RegressionTestStage(StageStrategy):
         return "Template_Repository/qa/final_regression.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/qa/final_regression.md"
+        return None
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        topics = current_workflow_topics(project_root)
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
+        return validate_final_regression_result(project_root, state.workflow_id)
 
     def instruction(self) -> str:
-        return "最终全量回归阶段：全部主题完成后，对全部已合并代码运行全量回归，产出 qa/final_regression_result.md"
+        return (
+            "最终全量回归阶段：全部主题完成后，对全部已合并代码运行全量回归；"
+            "产出 qa/final_regression_result.md，并明确写当前工作流编号和“回归状态：通过”。"
+            "未通过时门禁拒绝进入整体验收。"
+        )
 
 
 class OverallAcceptanceStage(StageStrategy):
@@ -541,13 +629,30 @@ class OverallAcceptanceStage(StageStrategy):
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/qa/overall_acceptance.md"
+        return "Template_Repository/acceptance/overall_acceptance.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/qa/overall_acceptance.md"
+        return None
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        topics = current_workflow_topics(project_root)
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
+        return validate_overall_acceptance_result(project_root, state.workflow_id)
 
     def instruction(self) -> str:
-        return "整体验收阶段：最终全量回归通过后，由用户确认整个需求是否完成，产出 acceptance/overall_result.md"
+        return (
+            "整体验收阶段：代码先确认最终全量回归已通过，再由用户确认整个需求是否完成；"
+            "产出 acceptance/overall_result.md，并明确写当前工作流编号和“整体验收状态：通过”。"
+        )
 
 
 # 详细架构收尾 stage：写入/更新 spec/architecture_code_design.md
@@ -573,6 +678,23 @@ class UpdateCodeDesignStage(StageStrategy):
     # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/code_design/update_code_design.md"
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        architecture_path = os.path.join(project_root, "spec", "architecture_code_design.md")
+        if not os.path.isfile(architecture_path):
+            return (False, "spec/architecture_code_design.md 不存在")
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        topics = current_workflow_topics(project_root)
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
+        return (True, "最终代码设计文档存在，追踪表已准备好记录最终代码设计")
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
@@ -861,6 +983,19 @@ class FixPlanStage(StageStrategy):
         # 没有任何修复计划文件 → 判失败
         if not plan_files:
             return (False, "plan/ 下没有修复计划 .md 文件")
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        topics = current_workflow_topics(project_root)
+        if not topics:
+            return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan")
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
         # 找到修复计划文件 → 通过，列出文件名
         return (True, f"修复计划文档存在: {plan_files}")
 

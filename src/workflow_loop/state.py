@@ -110,7 +110,7 @@ class WorkflowState:
     aborted_at: str | None = None
     # 旧版单主题字段。只用于读取旧 state.json；新流程使用 topics。
     topic: str | None = None
-    # 本次需求的全部验收主题。主题在 acceptance_plan 确认时确定。
+    # 本次需求的全部验收主题。修 bug 在 reproduce 确认，其他意图在 acceptance_plan 确认。
     topics: list[str] = field(default_factory=list)
     # 从零做清场确认标记：workflow start --intent from_scratch --confirm-clean 时置 true
     clean_confirmed: bool = False

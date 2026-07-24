@@ -85,6 +85,8 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   ├─ project.py                       # .workflow_loop/project.json 读写
   │   ├─ path_composer.py                 # build_stage_path(intent, project_root)
   │   ├─ verification.py                  # SHA256 哈希 + 失效清零逻辑
+  │   ├─ traceability.py                  # 需求交付追踪表结构校验与阶段更新
+  │   ├─ bug_record.py                    # 缺陷结果追加与 bug 索引状态更新
   │   ├─ spike_validation.py              # 穿刺清单/详情解析 + spike 门2校验
   │   ├─ installer.py                     # workflow install-project 子命令实现
   │   ├─ role_doc.py                      # 文档概览 + stage 角色定义
@@ -223,7 +225,7 @@ AI 回复用户和编写正式文档时：
 | `ended_at` | str\|null | `done` 时写（`run_status=completed`）；`abort` 时为 null |
 | `aborted_at` | str\|null | `abort` 时写（`run_status=aborted`）；`done` 时为 null |
 | `topic` | str\|null | 旧版单主题兼容字段；新流程不再以它作为主题主数据 |
-| `topics` | list[str] | 本次需求的全部验收主题；`acceptance_plan` 用户确认时写入 |
+| `topics` | list[str] | 本次需求的全部验收主题；`from_scratch`、`product_change` 在 `acceptance_plan` 用户确认时写入，`bugfix` 在 `reproduce` 用户确认时写入 |
 | `clean_confirmed` | bool | 从零做清场确认标记；`workflow start --intent from_scratch --confirm-clean` 时置 true |
 | `spike_skipped` | bool | spike 跳过标记；`gate spike --skip` 时置 true |
 | `stage_path` | list[str] | PathComposer 在 start 时解析出的完整 stage 名顺序；固定不再变 |
@@ -275,7 +277,7 @@ AI 回复用户和编写正式文档时：
 | `installer_version` | str | 安装时写入；用于重复安装保护判断 |
 | `installed_at` | str | 安装时间 ISO 8601 UTC |
 | `project_design_initialized` | bool | 项目设计架构初始化标记；安装时 `false`；`project_design_init` stage `--confirmed` 后置 `true`；`from_scratch` 在 `spec` + `code_design` 都 `--confirmed` 后置 `true` |
-| `topic_history` | list[str] | 已经在 `acceptance_plan` 确认过的主题；跨 Run 保留，防止主题重名 |
+| `topic_history` | list[str] | 项目历史中已经确认过的主题；`bugfix` 在 `reproduce` 确认，其他意图在 `acceptance_plan` 确认；跨 Run 保留，防止主题重名 |
 
 ### 3.3 journal.jsonl（历史记录）
 
@@ -303,7 +305,7 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 | 验证失效 | 上游 hash 变化清零下游时 | `from_stage`, `to_stage`, `reason` |
 | 门禁用户确认 | `gate --confirmed` 时 | `stage`, `passed` |
 | 阶段推进 | `--confirmed` 推进时 | `from`, `to` |
-| 主题确定 | `plan`/`fix_plan` `--confirmed` 时 | `topic` |
+| 主题确定 | `bugfix` 的 `reproduce` 或其他意图的 `acceptance_plan` `--confirmed` 时 | `topics` |
 | 架构标记 | preliminary/detailed 设置时 | `mark`, `stage` |
 | spike 跳过 | `gate spike --skip` 时 | `cleaned_paths` |
 | spike 清理 | spike `on_advance` 时 | `cleaned_paths` |
@@ -393,10 +395,12 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 
 ### 4.6 Clean Scope（清场范围）
 - **整目录删除**：只要 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中存在文件，就删除命中的整个目录及其中全部内容。放在这些目录中的非 workflow 文件也会一起删除。
-- **不删除目录外内容**：`.workflow_loop/Template_Repository/` 与 `Standardized_Repository/` 全部内容；`.workflow_loop/project.json` 本身（只更新初始化字段）；上述六个目录之外的源代码、`.git` 和项目文件；`.workflow_loop/` 运行时骨架本身。
+- **删除根文件**：项目根存在 `traceability.md` 时一并删除，避免新的从零开发工作流继承旧需求的交付追踪记录。
+- **不删除其他目录外内容**：`.workflow_loop/Template_Repository/` 与 `Standardized_Repository/` 全部内容；`.workflow_loop/project.json` 本身（只更新初始化字段）；上述六个目录和 `traceability.md` 之外的源代码、`.git` 和项目文件；`.workflow_loop/` 运行时骨架本身。
 
 **Clean Detect List**（监测清单）：
 - 监测：项目根下 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中**已存在且含文件**的路径
+- 监测：项目根下已存在的 `traceability.md`
 - 不监测：`.workflow_loop/Template_Repository/**`、`.workflow_loop/Standardized_Repository/**`
 - 有命中 → 打印将删清单，需 `--confirm-clean`；全无命中 → 直接开工
 
@@ -493,7 +497,7 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 
 [S4] AI 写产出文件
      → 可能是多个文件（spec: product.md + feature_*.md）
-     → 主题在 acceptance_plan 确认后写入 state.topics，后续测试计划和主题执行复用（见第 10 节）
+     → from_scratch/product_change 的主题在 acceptance_plan 确认后写入 state.topics；bugfix 的主题已在 reproduce 确认，acceptance_plan 只能复用（见第 10 节）
      → spike stage 特殊：清单写入 spec/spike_index.md，每项结论写入 spec/spike_<english-name>.md；只有需要时才把临时代码和原始证据放入 .workflow_loop/spike_tmp/
 
 [S5] 代码校验门禁（第 2 道闸）
@@ -516,13 +520,14 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
      → 前置：命令中的 stage 等于 state.current_stage，且 code_validated=True
      → 重新执行 Verification Invalidation 和 stage.code_validate(project_root)
      → 当前文件已变化或重新校验失败：code_validated=False，停留在当前 stage
+     → 阶段确认前更新 traceability.md；bugfix 按阶段追加缺陷结果，更新失败则不推进
      → 标记 user_confirmed = True
      → 调 stage.on_advance(project_root)（spike 清理临时代码并记录清理 journal）
      → **记录上游 hash**（见 6.4）：acceptance_plan、test_plan、topic_execution、regression_test 记录对应 verification hash
      → **设置 Architecture Gate Marks**（见第 9 节）：本 stage 是 code_design/revise_code_design/project_design_init/update_code_design 时，置对应 mark
      → **设置 project_design_initialized**（见 4.4）：本 stage 是 project_design_init 或 from_scratch 的 spec+code_design 都确认后
      → 推进 state.current_stage = 下一 stage
-     → 写 journal: 门禁用户确认 passed / 阶段推进 <stage>→<next> / 主题确定（若 acceptance_plan）/ 架构标记（若适用）
+     → 写 journal: 门禁用户确认 passed / 阶段推进 <stage>→<next> / 追踪表更新 / 缺陷状态更新 / 主题确定（若为 bugfix 的 reproduce 或其他意图的 acceptance_plan）/ 架构标记（若适用）
 ```
 
 ### 6.2 3 道闸（顺序硬性，CONTEXT.md "Gate Policy"）
@@ -770,8 +775,8 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/code_design/update_code_design.md` |
 | 规范 | `Standardized_Repository/code_design/update_code_design.md` |
 | 产物 | 写入/更新 `spec/architecture_code_design.md` |
-| `code_validate` | 检查文件存在；bugfix 无结构变化时显式确认"无结构变化"（不省略 stage） |
-| `on_advance` | 置 `architecture.detailed_done=true` |
+| `code_validate` | 检查文件和当前工作流追踪表存在；bugfix 无结构变化时显式确认"无结构变化"（不省略 stage） |
+| 门3确认处理 | 更新追踪表的最终代码设计列，并置 `architecture.detailed_done=true` |
 | instruction | "详细架构收尾：写入/更新 spec/architecture_code_design.md，反映最终被验证和接受的真实结构" |
 
 **强制**：所有工作意图在 `regression_test` 通过且 `overall_acceptance` 经用户确认之后必须经过 `update_code_design`。
@@ -781,14 +786,18 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 验收计划制定者 |
-| 提示词 | `Template_Repository/qa/acceptance_plan.md` |
-| 规范 | `Standardized_Repository/qa/acceptance_plan.md` |
-| 产物 | `acceptance/<topic>_plan.md` |
-| `code_validate` | 至少存在一个本次新增、且没有在项目历史中使用过的主题计划 |
-| 门3确认处理 | 把主题列表写入 `state.topics` 和项目 `topic_history`；记录 `verification.acceptance_plan_hash` |
-| instruction | "验收计划阶段：确定全部验收主题，并为每个主题写清什么算完成" |
+| 提示词 | `Template_Repository/acceptance/acceptance_plan.md` |
+| 规范 | `Standardized_Repository/acceptance/acceptance_plan.md` |
+| 产物 | 项目根 `traceability.md` + `acceptance/<topic>_plan.md` |
+| `code_validate` | 校验当前工作流追踪章节、九列交付链路、每个主题的六个固定章节、`AC-01` 形式的验收条件、逐条追踪行、初始状态和上下游路径；`bugfix` 额外校验计划主题与缺陷记录中已确认的主题完全一致 |
+| 门3确认处理 | `from_scratch`、`product_change` 把主题列表写入 `state.topics` 和项目 `topic_history`；`bugfix` 只复核 `reproduce` 已登记的主题；三种意图都记录 `verification.acceptance_plan_hash` |
+| instruction | "从零开发和修改产品先确定全部验收主题；修 bug 复用缺陷复现阶段已经确认的主题。为每个主题写清什么算完成，并建立需求交付追踪表" |
 
-具体讨论问题、验收条件字段和文档正文结构不在本轮流程框架里定义，后续单独完善提示词与规范。
+**讨论顺序**：`from_scratch` 和 `product_change` 先让用户确认完整主题清单，再逐个主题讨论验收条件。`bugfix` 不重新讨论主题名称，只讨论缺陷记录中既有主题的验收范围和验收条件。
+
+**主题计划结构**：每份 `acceptance/<topic>_plan.md` 固定包含“本次需求与验收目标、产品设计依据、验收范围、验收条件、完成判定、上下游文档”。每条验收条件必须写清“条件与触发、预期结果、产品设计或缺陷依据”，不能写测试环境、测试数据、执行命令、代码方案或实施步骤。
+
+**需求交付追踪表**：`traceability.md` 按工作流编号分段，每条验收条件单独占一行。验收计划阶段填写来源、主题和验收条件；测试计划和实施计划列写“待制定”，实施记录、测试结果和验收结果列写“待执行”，最终代码设计列写“待更新”。后续阶段只更新自己负责的列：`test_plan` 更新测试计划，`plan/fix_plan` 更新实施计划，`topic_execution` 更新实施记录、主题测试结果和主题验收结果，`regression_test` 更新最终回归结果，`overall_acceptance` 更新整体验收结果，`update_code_design` 更新最终代码设计。验收计划哈希只计算主题计划文件，不包含持续更新的追踪表。
 
 ### 7.8 test_plan（测试计划制定）
 
@@ -798,8 +807,8 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/qa/test_plan.md` |
 | 规范 | `Standardized_Repository/qa/test_plan.md` |
 | 产物 | `qa/<topic>_plan.md` + 更新 `qa/index.md` |
-| `code_validate` | `state.topics` 中每个主题都有同名 `qa/<topic>_plan.md` |
-| 门3确认处理 | 记录 `verification.test_plan_hash` |
+| `code_validate` | `state.topics` 中每个主题都有同名 `qa/<topic>_plan.md`，并且当前工作流追踪表存在 |
+| 门3确认处理 | 记录 `verification.test_plan_hash`，更新追踪表的测试计划列 |
 | instruction | "根据已确认的验收主题制定测试计划，不执行测试，也不改变主题" |
 
 具体测试项字段和文档正文结构后续单独完善。
@@ -812,7 +821,8 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/plan/plan.md` |
 | 规范 | `Standardized_Repository/plan/plan.md` |
 | 产物 | `plan/index.md` + 至少一份实施计划文档 |
-| `code_validate` | 检查 `plan/index.md` 和实施计划文档存在 |
+| `code_validate` | 检查 `plan/index.md`、实施计划文档和当前工作流追踪表存在 |
+| 门3确认处理 | 更新追踪表的实施计划与任务列 |
 | instruction | "根据已确认的验收计划和测试计划制定实施步骤；不在这里重新确定主题" |
 
 实施计划文档可以按实施任务拆分，不要求与验收主题一一对应。具体正文结构后续单独完善。
@@ -825,7 +835,8 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/plan/fix_plan.md` |
 | 规范 | `Standardized_Repository/plan/fix_plan.md` |
 | 产物 | `plan/index.md` + 至少一份修复实施计划文档 |
-| `code_validate` | 同 plan |
+| `code_validate` | 同 plan，且检查当前工作流追踪表存在 |
+| 门3确认处理 | 更新追踪表的实施计划与任务列 |
 | instruction | "根据已确认的验收计划和测试计划制定修复步骤；不在这里重新确定主题" |
 
 ### 7.11 topic_execution（按主题执行）
@@ -836,11 +847,11 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/execution/topic_execution.md` |
 | 规范 | `Standardized_Repository/execution/topic_execution.md` |
 | 产物 | 实际代码、实施记录、每个主题的测试结果与验收结果 |
-| `code_validate` | `state.topics` 中每个主题都有测试结果和验收结果，且存在实施记录 |
-| 门3确认处理 | 记录实施代码快照与全部主题测试结果哈希 |
+| `code_validate` | 当前工作流追踪表存在；`state.topics` 中每个主题都有实施记录、当前工作流编号匹配且写“测试结果：通过”的测试结果、当前工作流编号匹配且写“验收结果：通过”的主题验收结果 |
+| 门3确认处理 | 记录实施代码快照与全部主题测试结果哈希，更新追踪表的实施记录、测试结果和验收结果列；bugfix 追加“主题验收通过，待全量回归” |
 | instruction | "分别推进各主题的实施、测试和验收；全部主题完成后才结束本阶段" |
 
-该阶段只固定顶层边界。主题内部使用什么命令、状态字段和文档结构，后续讨论后再实现。
+固定字段和阶段结果由程序校验；测试项、测试数据、实施任务和主题内部文档结构仍由后续提示词和规范讨论决定。
 
 ### 7.12 regression_test（最终全量回归）
 
@@ -848,10 +859,10 @@ class StageStrategy(ABC):
 |---|---|
 | 角色 | 最终回归测试执行者 |
 | 提示词 | `Template_Repository/qa/final_regression.md` |
-| 规范 | `Standardized_Repository/qa/final_regression.md` |
+| 规范 | 无独立规范文件；固定通过条件由 `RegressionTestStage.code_validate()` 执行 |
 | 产物 | `qa/final_regression_result.md` |
-| `code_validate` | 检查最终全量回归结果文件存在 |
-| 门3确认处理 | 记录 `verification.regression_test_result_hash` |
+| `code_validate` | 检查当前工作流追踪表、结果文件中的工作流编号和固定字段“回归状态：通过”；未通过时不能进入整体验收 |
+| 门3确认处理 | 记录 `verification.regression_test_result_hash`，更新追踪表的测试结果列；bugfix 失败时在门2记录“回归失败，重新处理中” |
 | instruction | "全部主题完成后，对全部已合并代码执行最终全量回归" |
 
 ### 7.13 overall_acceptance（整体验收）
@@ -859,10 +870,11 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 整体验收执行者 |
-| 提示词 | `Template_Repository/qa/overall_acceptance.md` |
-| 规范 | `Standardized_Repository/qa/overall_acceptance.md` |
+| 提示词 | `Template_Repository/acceptance/overall_acceptance.md` |
+| 规范 | 无独立规范文件；固定通过条件由 `OverallAcceptanceStage.code_validate()` 执行 |
 | 产物 | `acceptance/overall_result.md` |
-| `code_validate` | 检查整体验收结果文件存在 |
+| `code_validate` | 先复核当前工作流追踪表和最终全量回归已经通过，再检查结果绑定当前工作流编号，并且明确写“整体验收状态：通过” |
+| 门3确认处理 | 更新追踪表的验收结果列；bugfix 追加“已修复并验收”并更新 `bug/index.md` |
 | `on_advance` | no-op |
 | instruction | "最终全量回归通过后，由用户确认整个需求是否完成" |
 
@@ -874,11 +886,12 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/reproduce/reproduce.md` |
 | 规范 | `Standardized_Repository/reproduce/reproduce.md` |
 | 产物 | `bug/<YYYY-MM-DD_HHmm-<bug描述>>.md` + 更新 `bug/index.md` |
-| `code_validate` | 比较讨论完成时的文件基线，要求 `bug/index.md` 和至少一份本次缺陷记录发生变化；检查文件名、当前工作流编号、索引链接、七个固定章节、真实环境与输入、复现状态“已复现”、根因状态“已确认”、根因说明、位置和证据 |
+| `code_validate` | 比较讨论完成时的文件基线，要求 `bug/index.md` 和至少一份本次缺陷记录发生变化；检查文件名、当前工作流编号、索引链接、七个固定复现章节、真实环境与输入、复现状态“已复现”、根因状态“已确认”、根因说明、位置、证据和唯一验收主题 |
+| 门3确认处理 | 从本次缺陷记录读取主题，写入 `state.topics` 和项目 `topic_history`；一份缺陷记录对应一个主题，同一工作流内主题不能重复 |
 | `on_advance` | no-op |
-| instruction | "缺陷复现阶段：使用真实环境和真实输入复现缺陷并确认根因，产出 bug/<YYYY-MM-DD_HHmm-缺陷描述>.md 并更新 bug/index.md" |
+| instruction | "缺陷复现阶段：使用真实环境和真实输入复现缺陷、确认根因，并根据修复后用户必须恢复的结果确定验收主题；产出 bug/<YYYY-MM-DD_HHmm-缺陷描述>.md 并更新 bug/index.md" |
 
-**注意**：reproduce 用自己的 bug 描述做文件名，不用主题。程序只能检查文档结构、状态、链接、文件变化和明确字段，不能证明证据没有伪造；第三道门仍由用户核对真实复现过程和根因证据。
+**注意**：reproduce 用 bug 描述做文件名，验收主题写在缺陷记录字段中，不用主题替代缺陷文件名。缺陷记录不预先链接尚未生成的验收文档；后续验收计划和验收结果链接回缺陷记录。程序只能检查文档结构、状态、链接、文件变化和明确字段，不能证明证据没有伪造；第三道门仍由用户核对真实复现过程、根因证据和主题名称。
 
 ---
 
@@ -953,14 +966,15 @@ class StageStrategy(ABC):
 - **流程**：
   1. 重新执行上游失效检查和当前 stage 的 `code_validate()`，写 journal“门禁确认前复核”
   2. 重新校验失败时清除 `code_validated`，停留在当前阶段并要求重新执行门2
-  3. 标记 `user_confirmed=True`，stage 状态改 `done`
-  4. 调 `stage.on_advance(project_root)`；spike 清理临时代码并写 journal“spike 清理”
-  5. **记录 verification hash**（若 stage 是 acceptance_plan/test_plan/topic_execution/regression_test）
-  6. **设置 Architecture Gate Marks**（若 stage 是 code_design/revise_code_design/project_design_init/update_code_design）
-  7. **设置 project_design_initialized**（若 stage 是 project_design_init，或 from_scratch 的 spec+code_design 都已确认）
-  8. **写入 topics 并登记项目主题历史**（若 stage 是 acceptance_plan）
-  9. 推进 `state.current_stage` = 下一 stage（或 `"completed"` 临时中间态，由 done 确认）
-  10. 写 journal：门禁用户确认 / 阶段推进 / 主题确定 / 架构标记（若适用）
+  3. 更新当前阶段负责的 `traceability.md` 列；bugfix 在主题执行和整体验收阶段追加缺陷状态。更新失败时不推进
+  4. 标记 `user_confirmed=True`，stage 状态改 `done`
+  5. 调 `stage.on_advance(project_root)`；spike 清理临时代码并写 journal“spike 清理”
+  6. **记录 verification hash**（若 stage 是 acceptance_plan/test_plan/topic_execution/regression_test）
+  7. **设置 Architecture Gate Marks**（若 stage 是 code_design/revise_code_design/project_design_init/update_code_design）
+  8. **设置 project_design_initialized**（若 stage 是 project_design_init，或 from_scratch 的 spec+code_design 都已确认）
+  9. **写入 topics 并登记项目主题历史**（`bugfix` 在 `reproduce`；`from_scratch`、`product_change` 在 `acceptance_plan`）
+  10. 推进 `state.current_stage` = 下一 stage（或 `"completed"` 临时中间态，由 done 确认）
+  11. 写 journal：门禁用户确认 / 阶段推进 / 追踪表更新 / 缺陷状态更新 / 主题确定 / 架构标记（若适用）
 - **stdout 末尾**（非最后 stage）：`下一步：调 workflow discuss 加载 <next_stage> stage 提示词`
 - **stdout 末尾**（最后 stage）：`下一步：调 workflow done 标记完成`
 
@@ -995,7 +1009,7 @@ class StageStrategy(ABC):
   4. 解除 Active Run Guard，允许之后重新 `start --intent`
 - **不**再向用户二次确认"整轮结束"
 - **不**删除产物
-- **不**在 done 时改写 `bug/index.md` 等文档（bug 类产物以 reproduce 等路径上 Stage 的门禁产出为准）
+- **不**在 done 时改写 `bug/index.md` 等文档（缺陷状态由主题执行、回归和整体验收阶段按实际结果更新）
 - **stdout 末尾**：`工作流完成。本次 workflow 结束。`
 
 ### 8.9 `abort`
@@ -1060,13 +1074,15 @@ State Snapshot 中记录架构完成度：
 主题是验收计划根据已确认需求拆出的可独立验收结果名称。主题文字本身就是唯一标识，并且在项目历史中不能重复。
 
 ### 10.2 何时定
-- 三种意图都在 **`acceptance_plan` stage** 用户确认时确定，写入 `state.topics`
-- 同时把主题写入 `.workflow_loop/project.json` 的 `topic_history`，后续 Workflow Run 不得重复使用
-- `start` 不要求主题；spec、reproduce、前段架构和 spike 可以尚无主题
+- `from_scratch` 和 `product_change` 在 **`acceptance_plan` stage** 先确认完整主题清单，再写入 `state.topics`
+- `bugfix` 在 **`reproduce` stage** 根据每份缺陷修复后必须恢复的用户结果确定主题；一份缺陷记录对应一个主题，验收计划只能复用
+- 主题确认时同时写入 `.workflow_loop/project.json` 的 `topic_history`，后续 Workflow Run 不得重复使用
+- `start` 不要求主题；`from_scratch`、`product_change` 的 spec、前段架构和 spike 可以尚无主题；`bugfix` 进入 spike 前必须已经有主题
 
 ### 10.3 如何复用
 - 验收计划、测试计划、主题测试结果和主题验收结果使用同一个主题名称
 - 实施计划和实施记录只要求写清关联主题，不强制与主题一一对应
+- 修 bug 的验收计划不能新增、改名、拆分或合并缺陷复现阶段确认的主题
 
 ### 10.4 主题前的命名规则
 - `spec`：`spec/product.md` + `spec/feature_*.md`
@@ -1094,16 +1110,17 @@ bug/
   └─ YYYY-MM-DD_HHmm-<bug描述>.md   # 单个 bug 记录
 ```
 
-`index.md` 结构：
+`index.md` 至少包含：
 ```markdown
-| 日期 | 主题 | 根因 | 修复方案 | 状态 |
-|---|---|---|---|---|
-| 2026-07-20 | 用户认证系统 | ... | ... | 已修复 |
+| Bug 记录 | 现象 | 根因 | 状态 |
+|---|---|---|---|
+| [缺陷名称](./2026-07-24_1200-缺陷描述.md) | 一句话现象 | 一句话根因 | 根因已确认 |
 ```
 
 ### 11.3 何时沉淀
 - bugfix 的 `reproduce` stage 已经写 `bug/<...>.md` + 更新 `bug/index.md`（在 stage 内门禁产出，不是 done 时偷偷沉淀）
-- `done` 命令**不**改写 `bug/index.md`（CONTEXT.md "Done Command" 明确）
+- `topic_execution` 通过后写“主题验收通过，待全量回归”；最终回归失败后写“回归失败，重新处理中”；整体验收通过后写“已修复并验收”
+- `done` 命令**不**改写 `bug/index.md`；缺陷状态由主题执行、回归和整体验收阶段按实际结果更新。
 
 ### 11.4 查询用法
 任何人遇到重复问题时，先查 `bug/index.md`，有记录直接用，不用重新走 bugfix 流程。
@@ -1166,7 +1183,7 @@ bug/
 - [x] Stage 详典：顶层阶段的角色、提示词、规范、产物和门禁边界（第 7 节）
 - [x] 命令清单：start + discuss + gate（三种 flag + spike --skip）+ status + done + abort + install-project + 每条 stdout 末尾的"下一步"（第 8 节）
 - [x] 架构文档双阶段：preliminary_done / detailed_done + 同一文件两阶段 + `update_code_design` 末环强制（第 9 节）
-- [x] 主题规则：acceptance_plan 确定主题 + 项目历史唯一 + 后续计划与执行复用（第 10 节）
+- [x] 主题规则：从零开发和修改产品在 acceptance_plan 确定主题，修 bug 在 reproduce 确定主题；项目历史唯一，后续计划与执行复用（第 10 节）
 - [x] bug 册：被动沉淀 + reproduce stage 内产出 + done 不改写 bug/index.md（第 11 节）
 - [x] 扩展点：加 stage / 加 intent / 加门禁类型 / 加 on_advance / 加 hooks / 加自动路由（第 12 节）
 - [x] 第一版不做清单（第 13 节）

@@ -2,11 +2,24 @@ import os
 import re
 
 from .state import load_state
+from .traceability import validate_structure as validate_traceability_structure
 from .verification import compute_file_hashes
 
 
 PROJECT_INIT_EVIDENCE_PATH = os.path.join("spec", "project_design_init_evidence.md")
+TRACEABILITY_PATH = "traceability.md"
+FINAL_REGRESSION_RESULT_PATH = os.path.join("qa", "final_regression_result.md")
+OVERALL_ACCEPTANCE_RESULT_PATH = os.path.join("acceptance", "overall_result.md")
 BUG_FILENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}-.+\.md$")
+ACCEPTANCE_CRITERION_RE = re.compile(r"^###\s+(AC-\d{2,})：?.*$", re.MULTILINE)
+ACCEPTANCE_PLAN_SECTIONS = [
+    "1. 本次需求与验收目标",
+    "2. 产品设计依据",
+    "3. 验收范围",
+    "4. 验收条件",
+    "5. 完成判定",
+    "6. 上下游文档",
+]
 CODE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".java", ".kt", ".kts",
     ".py", ".pyi", ".go", ".rs", ".swift", ".m", ".mm", ".js", ".jsx",
@@ -33,6 +46,28 @@ def _section(content: str, heading: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def _workflow_section(content: str, workflow_id: str) -> str | None:
+    match = re.search(
+        rf"^##\s+{re.escape(workflow_id)}\s*$\n(.*?)(?=^##\s+|\Z)",
+        content,
+        re.MULTILINE | re.DOTALL,
+    )
+    return match.group(1).strip() if match else None
+
+
+def _markdown_table_rows(content: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or not stripped.endswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if not cells or all(re.fullmatch(r"[-:]+", cell) for cell in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
 def _has_real_text(value: str | None, *, allow_none: bool = False) -> bool:
     if value is None:
         return False
@@ -47,6 +82,14 @@ def _has_real_text(value: str | None, *, allow_none: bool = False) -> bool:
         or "<" in normalized
         or "todo" in lowered
     )
+
+
+def _is_safe_topic_name(value: str | None) -> bool:
+    """主题会进入文件名和路径，不能包含路径分隔符或目录跳转。"""
+    if not _has_real_text(value):
+        return False
+    normalized = value.strip()
+    return normalized not in {".", ".."} and os.path.basename(normalized) == normalized
 
 
 def changed_stage_paths(
@@ -177,6 +220,7 @@ def validate_reproduce_documents(
         "7. 修复仍存在的不确定性",
     ]
 
+    topics: list[str] = []
     for rel_path in changed_bug_docs:
         filename = os.path.basename(rel_path)
         if not BUG_FILENAME_RE.match(filename):
@@ -191,6 +235,10 @@ def validate_reproduce_documents(
             return (False, f"{filename} 必须写“复现状态：已复现”")
         if _field(content, "根因状态") != "已确认":
             return (False, f"{filename} 必须写“根因状态：已确认”")
+        topic = _field(content, "验收主题")
+        if not _is_safe_topic_name(topic):
+            return (False, f"{filename} 必须写清唯一验收主题")
+        topics.append(topic or "")
 
         for heading in required_sections:
             if not _has_real_text(_section(content, heading), allow_none=heading.startswith("7.")):
@@ -207,4 +255,198 @@ def validate_reproduce_documents(
             if not _has_real_text(_field(root_section, label)):
                 return (False, f"{filename} 必须写清{label}")
 
-    return (True, f"本阶段 bug 记录已复现并确认根因: {changed_bug_docs}")
+    duplicates = sorted({topic for topic in topics if topics.count(topic) > 1})
+    if duplicates:
+        return (False, f"多份缺陷记录使用了重复验收主题: {duplicates}")
+
+    return (
+        True,
+        f"本阶段 bug 记录已复现、确认根因并确定验收主题: {dict(zip(changed_bug_docs, topics))}",
+    )
+
+
+def validate_acceptance_plan_documents(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """校验主题验收计划和当前工作流的需求交付追踪表。"""
+    traceability_ok, traceability_detail = validate_traceability_structure(
+        project_root,
+        workflow_id,
+        topics,
+        require_initial_statuses=True,
+    )
+    if not traceability_ok:
+        return False, traceability_detail
+
+    traceability_full_path = os.path.join(project_root, TRACEABILITY_PATH)
+    if not os.path.isfile(traceability_full_path):
+        return (False, f"{TRACEABILITY_PATH} 不存在")
+
+    traceability_content = _read_text(project_root, TRACEABILITY_PATH)
+    workflow_content = _workflow_section(traceability_content, workflow_id)
+    if workflow_content is None:
+        return (False, f"{TRACEABILITY_PATH} 缺少当前工作流章节: {workflow_id}")
+
+    traceability_rows = [
+        row
+        for row in _markdown_table_rows(workflow_content)
+        if len(row) == 9 and row[0] != "需求来源与设计依据"
+    ]
+    if not traceability_rows:
+        return (False, f"{TRACEABILITY_PATH} 当前工作流章节没有九列交付链路记录")
+
+    all_criteria: list[str] = []
+    for topic in topics:
+        rel_path = os.path.join("acceptance", f"{topic}_plan.md")
+        full_path = os.path.join(project_root, rel_path)
+        if not os.path.isfile(full_path):
+            return (False, f"缺少验收计划文档: {rel_path}")
+
+        content = _read_text(project_root, rel_path)
+        for heading in ACCEPTANCE_PLAN_SECTIONS:
+            if _section(content, heading) is None:
+                return (False, f"{rel_path} 缺少“{heading}”")
+
+        criterion_ids = ACCEPTANCE_CRITERION_RE.findall(content)
+        if not criterion_ids:
+            return (False, f"{rel_path} 至少需要一条 AC-01 形式的验收条件")
+        if len(criterion_ids) != len(set(criterion_ids)):
+            return (False, f"{rel_path} 存在重复验收条件编号")
+        if "../traceability.md" not in content:
+            return (False, f"{rel_path} 的上下游文档没有链接 ../traceability.md")
+        if f"../qa/{topic}_plan.md" not in content:
+            return (False, f"{rel_path} 没有写下游测试计划路径 qa/{topic}_plan.md")
+
+        for criterion_id in criterion_ids:
+            expected_topic_path = f"acceptance/{topic}_plan.md"
+            matching_rows = [
+                row
+                for row in traceability_rows
+                if expected_topic_path in row[1] and criterion_id in row[2]
+            ]
+            if len(matching_rows) != 1:
+                return (
+                    False,
+                    f"{TRACEABILITY_PATH} 中主题“{topic}”的 {criterion_id} 必须且只能占一行",
+                )
+            row = matching_rows[0]
+            expected_statuses = ["待制定", "待制定", "待执行", "待执行", "待执行", "待更新"]
+            if row[3:] != expected_statuses:
+                return (
+                    False,
+                    f"{TRACEABILITY_PATH} 中主题“{topic}”的 {criterion_id} 后续状态必须是 {expected_statuses}",
+                )
+            all_criteria.append(f"{topic}:{criterion_id}")
+
+    return (
+        True,
+        f"验收计划结构完整，追踪表逐条覆盖 {len(all_criteria)} 条验收条件: {topics}",
+    )
+
+
+def validate_downstream_traceability(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """后续阶段共用的追踪表门禁，不要求测试计划正文结构。"""
+    return validate_traceability_structure(project_root, workflow_id, topics)
+
+
+def _validate_topic_result_file(
+    project_root: str,
+    rel_path: str,
+    workflow_id: str,
+    status_label: str,
+) -> tuple[bool, str]:
+    full_path = os.path.join(project_root, rel_path)
+    if not os.path.isfile(full_path):
+        return False, f"{rel_path} 不存在"
+    content = _read_text(project_root, rel_path)
+    if _field(content, "工作流编号") != workflow_id:
+        return False, f"{rel_path} 的工作流编号与当前工作流不一致"
+    if _field(content, status_label) != "通过":
+        return False, f"{rel_path} 必须明确写“{status_label}：通过”"
+    return True, ""
+
+
+def validate_topic_execution_results(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """主题执行阶段必须同时留下通过的测试结果和主题验收结果。"""
+    failures = []
+    for topic in topics:
+        test_ok, test_detail = _validate_topic_result_file(
+            project_root,
+            os.path.join("qa", f"{topic}_result.md"),
+            workflow_id,
+            "测试结果",
+        )
+        acceptance_ok, acceptance_detail = _validate_topic_result_file(
+            project_root,
+            os.path.join("acceptance", f"{topic}_result.md"),
+            workflow_id,
+            "验收结果",
+        )
+        if not test_ok:
+            failures.append(test_detail)
+        if not acceptance_ok:
+            failures.append(acceptance_detail)
+    if failures:
+        return False, "；".join(failures)
+    return True, f"全部主题测试结果和主题验收结果都明确通过: {topics}"
+
+
+def validate_final_regression_result(
+    project_root: str,
+    workflow_id: str,
+) -> tuple[bool, str]:
+    """最终全量回归只有明确记录当前工作流通过时才能过门禁。"""
+    full_path = os.path.join(project_root, FINAL_REGRESSION_RESULT_PATH)
+    if not os.path.isfile(full_path):
+        return (False, f"{FINAL_REGRESSION_RESULT_PATH} 不存在")
+
+    content = _read_text(project_root, FINAL_REGRESSION_RESULT_PATH)
+    if _field(content, "工作流编号") != workflow_id:
+        return (False, "最终全量回归结果中的工作流编号与当前工作流不一致")
+
+    status = _field(content, "回归状态")
+    if status != "通过":
+        return (
+            False,
+            "最终全量回归没有明确写“回归状态：通过”，不能进入整体验收",
+        )
+    return (True, "最终全量回归已明确通过")
+
+
+def validate_overall_acceptance_result(
+    project_root: str,
+    workflow_id: str,
+) -> tuple[bool, str]:
+    """整体验收必须建立在已通过的最终回归上，并明确记录当前工作流通过。"""
+    regression_ok, regression_detail = validate_final_regression_result(
+        project_root,
+        workflow_id,
+    )
+    if not regression_ok:
+        return (False, regression_detail)
+
+    full_path = os.path.join(project_root, OVERALL_ACCEPTANCE_RESULT_PATH)
+    if not os.path.isfile(full_path):
+        return (False, f"{OVERALL_ACCEPTANCE_RESULT_PATH} 不存在")
+
+    content = _read_text(project_root, OVERALL_ACCEPTANCE_RESULT_PATH)
+    if _field(content, "工作流编号") != workflow_id:
+        return (False, "整体验收结果中的工作流编号与当前工作流不一致")
+
+    status = _field(content, "整体验收状态")
+    if status != "通过":
+        return (
+            False,
+            "整体验收没有明确写“整体验收状态：通过”，不能进入代码设计收尾",
+        )
+    return (True, "最终全量回归和整体验收都已明确通过")

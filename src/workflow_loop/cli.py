@@ -9,6 +9,8 @@ from . import role_doc as role_doc_mod
 from . import project as project_mod
 from . import verification as verification_mod
 from . import installer as installer_mod
+from . import bug_record as bug_record_mod
+from . import traceability as traceability_mod
 from . import topic as topic_mod
 from .path_composer import build_stage_path, INTENT_CHOICES
 from .stages import ProjectDesignInitStage
@@ -23,6 +25,8 @@ GLOBAL_WRITING_STANDARD_PATH = "Standardized_Repository/global/document_writing.
 # from_scratch 清场时探测的过程产物目录列表（Clean Detect List）
 # 这些目录下有文件时需要 --confirm-clean 才能删除
 CLEAN_DETECT_DIRS = ["spec", "plan", "acceptance", "qa", "impl", "bug"]
+# from_scratch 清场时需要一起删除的项目根文件
+CLEAN_DETECT_FILES = ["traceability.md"]
 
 
 # 打印 stdout 末尾的"下一步"指令（stdout 驱动原则的核心）
@@ -195,7 +199,21 @@ def ensure_stage_path_current(project_root: str, wf_state: state_mod.WorkflowSta
 
     expected_names = [stage.name() for stage in stage_instances]
     if wf_state.stage_path == expected_names:
-        return False
+        artifact_paths_changed = False
+        for stage in stage_instances:
+            stage_state = wf_state.stages.get(stage.name())
+            expected_artifacts = stage.artifact_paths()
+            if stage_state is not None and stage_state.artifact_paths != expected_artifacts:
+                stage_state.artifact_paths = expected_artifacts
+                artifact_paths_changed = True
+        if artifact_paths_changed:
+            journal_mod.append_entry(
+                project_root,
+                "阶段产物路径迁移",
+                "workflow.py",
+                stage_path=expected_names,
+            )
+        return artifact_paths_changed
 
     old_names = wf_state.stage_path
     old_stages = wf_state.stages
@@ -300,6 +318,9 @@ def detect_clean_artifacts(project_root: str) -> list[str]:
             # 有文件 → 加入待删清单
             if has_files:
                 found.append(dir_name)
+    for file_name in CLEAN_DETECT_FILES:
+        if os.path.isfile(os.path.join(project_root, file_name)):
+            found.append(file_name)
     # 返回有内容的目录列表
     return found
 
@@ -325,6 +346,11 @@ def clean_artifacts(project_root: str) -> list[str]:
             if has_files:
                 shutil.rmtree(dir_path)
                 cleaned.append(dir_name)
+    for file_name in CLEAN_DETECT_FILES:
+        file_path = os.path.join(project_root, file_name)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+            cleaned.append(file_name)
     # 返回已清理的目录列表
     return cleaned
 
@@ -499,11 +525,13 @@ def cmd_discuss(args) -> None:
 
     # 加载全局写作规范（所有 stage 共用）
     global_writing_content = load_doc_content(project_root, GLOBAL_WRITING_STANDARD_PATH)
+    prompt_path = stage.prompt_doc_path()
+    standard_path = stage.standard_doc_path()
     # 加载模版提示词（Prompt Full Print：完整正文）
-    print("当前路径：", stage.prompt_doc_path())
-    prompt_content = load_doc_content(project_root, stage.prompt_doc_path())
-    # 加载规范词（完整正文）
-    standard_content = load_doc_content(project_root, stage.standard_doc_path())
+    print("当前路径：", prompt_path or "内置代码规则")
+    prompt_content = load_doc_content(project_root, prompt_path) if prompt_path else None
+    # 规范文件只承载需要 AI 阅读的可变写作规则。固定门禁规则直接由代码执行。
+    standard_content = load_doc_content(project_root, standard_path) if standard_path else None
     # 加载角色定义
     role_doc = role_doc_mod.get_role_doc(stage.name())
 
@@ -520,11 +548,13 @@ def cmd_discuss(args) -> None:
     print(f"\n【全局写作规范】")
     print(global_writing_content)
     # 打印提示词全文
-    print(f"\n【流程模版】")
-    print(prompt_content)
+    if prompt_content is not None:
+        print(f"\n【流程模版】")
+        print(prompt_content)
     # 打印规范词全文
-    print(f"\n【流程规范】")
-    print(standard_content)
+    if standard_content is not None:
+        print(f"\n【流程规范】")
+        print(standard_content)
 
     # 打印附加提示词/规范（project_design_init 加载 spec + code_design 两组）
     for extra_prompt_path, extra_standard_path in stage.additional_doc_paths():
@@ -554,6 +584,68 @@ def cmd_discuss(args) -> None:
         f"用这个提示词和用户讨论。讨论完用户说'完毕'后，"
         f"调 `workflow gate {stage.name()} --discuss-done`"
     )
+
+
+def apply_stage_completion_updates(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    stage_name: str,
+) -> list[str]:
+    """执行阶段确认后必须落盘的追踪表和缺陷状态更新。"""
+    topics = topic_mod.current_workflow_topics(project_root)
+    if stage_name in {
+        "test_plan",
+        "plan",
+        "fix_plan",
+        "topic_execution",
+        "regression_test",
+        "overall_acceptance",
+        "update_code_design",
+    }:
+        detail = traceability_mod.update_for_stage(
+            project_root,
+            wf_state.workflow_id,
+            topics,
+            stage_name,
+        )
+        journal_mod.append_entry(
+            project_root,
+            "需求交付追踪更新",
+            "workflow.py",
+            stage=stage_name,
+            details=detail,
+        )
+        updates = [detail]
+    else:
+        updates = []
+
+    if wf_state.intent != "bugfix":
+        return updates
+
+    if stage_name == "topic_execution":
+        detail = bug_record_mod.record_topic_acceptance_pass(
+            project_root,
+            wf_state.workflow_id,
+            topics,
+        )
+    elif stage_name == "overall_acceptance":
+        detail = bug_record_mod.record_overall_acceptance_pass(
+            project_root,
+            wf_state.workflow_id,
+            topics,
+        )
+    else:
+        return updates
+
+    journal_mod.append_entry(
+        project_root,
+        "缺陷状态更新",
+        "workflow.py",
+        stage=stage_name,
+        details=detail,
+    )
+    updates.append(detail)
+    return updates
 
 
 # gate 命令：3 道闸的总入口 + spike --skip
@@ -720,6 +812,35 @@ def cmd_gate(args) -> None:
 
         # 校验不通过
         if not passed:
+            if (
+                stage_name == "regression_test"
+                and wf_state.intent == "bugfix"
+                and bug_record_mod.has_explicit_regression_failure(
+                    project_root,
+                    wf_state.workflow_id,
+                )
+            ):
+                try:
+                    failure_detail = bug_record_mod.record_regression_failure(
+                        project_root,
+                        wf_state.workflow_id,
+                        topic_mod.current_workflow_topics(project_root),
+                    )
+                    journal_mod.append_entry(
+                        project_root,
+                        "缺陷状态更新",
+                        "workflow.py",
+                        stage=stage_name,
+                        details=failure_detail,
+                    )
+                except ValueError as exc:
+                    journal_mod.append_entry(
+                        project_root,
+                        "缺陷状态更新失败",
+                        "workflow.py",
+                        stage=stage_name,
+                        details=str(exc),
+                    )
             # 之前通过过门2，但产物后来被改坏时，旧的通过标记必须失效
             gate.code_validated = False
             gate.user_confirmed = False
@@ -794,21 +915,53 @@ def cmd_gate(args) -> None:
         print_next_step(f"修正文档后重新调 `workflow gate {stage_name}`")
         return
 
+    # 修 bug 在 reproduce（缺陷复现）确认时确定并登记验收主题。
+    if stage_name == "reproduce" and wf_state.intent == "bugfix":
+        topics = topic_mod.list_reproduce_topics(project_root, wf_state.workflow_id)
+        if not topics:
+            print("错误：缺陷复现记录没有验收主题")
+            print_next_step("在 bug/<缺陷记录>.md 中补充验收主题后重新执行缺陷复现门禁")
+            return
+        try:
+            project_mod.register_topics(project_root, topics)
+        except ValueError as exc:
+            print(f"错误：{exc}")
+            print_next_step("修改重复的主题名称后重新执行缺陷复现门禁")
+            return
+        wf_state.topics = topics
+        wf_state.topic = topics[0] if len(topics) == 1 else None
+        journal_mod.append_entry(
+            project_root,
+            "主题确定",
+            "user",
+            stage="reproduce",
+            topics=topics,
+        )
+
     # acceptance_plan（验收计划）确认时，从计划文件名确定本次全部主题并登记历史。
-    if stage_name == "acceptance_plan":
-        topics = topic_mod.candidate_topics(project_root)
+    # bugfix 主题已经在 reproduce 确认，这里只复核，不再登记或新增。
+    elif stage_name == "acceptance_plan":
+        if wf_state.intent == "bugfix":
+            topics = topic_mod.current_workflow_topics(project_root)
+            if not topics:
+                print("错误：修 bug 的验收主题必须先在缺陷复现阶段确定")
+                print_next_step("返回 reproduce 阶段补充验收主题")
+                return
+        else:
+            topics = topic_mod.candidate_topics(project_root)
         if not topics:
             print("错误：没有找到本次新增的验收主题")
             print_next_step("补充 acceptance/<topic>_plan.md 后重新执行验收计划门禁")
             return
-        previous_topics = set(wf_state.topics or ([wf_state.topic] if wf_state.topic else []))
-        new_topics = [topic for topic in topics if topic not in previous_topics]
-        try:
-            project_mod.register_topics(project_root, new_topics)
-        except ValueError as exc:
-            print(f"错误：{exc}")
-            print_next_step("修改重复的主题名称后重新执行验收计划门禁")
-            return
+        if wf_state.intent != "bugfix":
+            previous_topics = set(wf_state.topics or ([wf_state.topic] if wf_state.topic else []))
+            new_topics = [topic for topic in topics if topic not in previous_topics]
+            try:
+                project_mod.register_topics(project_root, new_topics)
+            except ValueError as exc:
+                print(f"错误：{exc}")
+                print_next_step("修改重复的主题名称后重新执行验收计划门禁")
+                return
         wf_state.topics = topics
         wf_state.topic = topics[0] if len(topics) == 1 else None
         journal_mod.append_entry(
@@ -817,6 +970,21 @@ def cmd_gate(args) -> None:
             "user",
             topics=topics,
         )
+
+    # 阶段确认前先写入固定的追踪表和缺陷状态；更新失败时不推进阶段。
+    try:
+        apply_stage_completion_updates(
+            project_root,
+            wf_state,
+            stage_name,
+        )
+    except ValueError as exc:
+        gate.user_confirmed = False
+        state_mod.save_state(project_root, wf_state)
+        print(f"═══ {stage_name} 固定记录更新失败 ═══")
+        print(f"详情: {exc}")
+        print_next_step(f"补齐固定记录后重新调 `workflow gate {stage_name} --confirmed`")
+        return
 
     # 标记用户确认
     gate.user_confirmed = True

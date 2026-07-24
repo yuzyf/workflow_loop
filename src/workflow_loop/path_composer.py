@@ -31,7 +31,7 @@ FROM_SCRATCH_PATH = [
     # 穿刺阶段：验证真实场景中的技术不确定性，写清单和每项结论；临时代码按需进入 spike_tmp/
     # 可选 stage，可通过 gate spike --skip 跳过
     SpikeStage,
-    # 验收计划阶段：制定什么算完成，产出 acceptance/<topic>_plan.md
+    # 验收计划阶段：制定什么算完成，产出 traceability.md + acceptance/<topic>_plan.md
     AcceptancePlanStage,
     # 测试计划阶段：把验收条件转为可执行测试范围，产出 qa/<topic>_plan.md
     TestPlanStage,
@@ -80,7 +80,7 @@ PRODUCT_CHANGE_BASE = [
 # 在共享后半截中使用 fix_plan 制定修复实施计划
 # 末段 update_code_design 即使无结构变化也必须走，在门禁中显式确认"无结构变化"
 BUGFIX_BASE = [
-    # 复现阶段：复现 bug + 根因分析，产出 bug/<...>.md + 更新 bug/index.md
+    # 复现阶段：复现 bug + 根因分析，并确定一份缺陷记录对应的验收主题
     ReproduceStage,
     # 穿刺阶段：验证修复仍依赖的真实技术不确定性；没有时由用户确认跳过
     SpikeStage,

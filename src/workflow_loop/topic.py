@@ -1,4 +1,5 @@
 import os
+import re
 
 from .project import load_project
 from .state import load_state
@@ -16,6 +17,28 @@ def list_acceptance_plan_topics(project_root: str) -> list[str]:
         for filename in os.listdir(acceptance_dir)
         if filename.endswith(suffix) and filename != suffix
     )
+
+
+def list_reproduce_topics(project_root: str, workflow_id: str | None = None) -> list[str]:
+    """从当前工作流的缺陷复现记录读取验收主题。"""
+    bug_dir = os.path.join(project_root, "bug")
+    if not os.path.isdir(bug_dir):
+        return []
+
+    topics: list[str] = []
+    for filename in sorted(os.listdir(bug_dir)):
+        if not filename.endswith(".md") or filename == "index.md":
+            continue
+        with open(os.path.join(bug_dir, filename), "r", encoding="utf-8") as f:
+            content = f.read()
+        if workflow_id is not None:
+            workflow_match = re.search(r"^-\s*工作流编号：\s*(.+?)\s*$", content, re.MULTILINE)
+            if workflow_match is None or workflow_match.group(1).strip() != workflow_id:
+                continue
+        topic_match = re.search(r"^-\s*验收主题：\s*(.+?)\s*$", content, re.MULTILINE)
+        if topic_match is not None:
+            topics.append(topic_match.group(1).strip())
+    return topics
 
 
 def current_workflow_topics(project_root: str) -> list[str]:

@@ -69,6 +69,7 @@ def _write_valid_spike_documents(tmp_path, workflow_id):
 - 代码设计影响：无需修改
 - 后续处理阶段：无
 """)
+
     with open(os.path.join(spec_dir, "spike_real_api_response.md"), "w") as f:
         f.write(f"""# 【穿刺】确认真实接口返回
 
@@ -126,6 +127,60 @@ def _write_valid_spike_documents(tmp_path, workflow_id):
 """)
 
 
+def _write_valid_acceptance_documents(tmp_path, workflow_id, topics):
+    acceptance_dir = os.path.join(str(tmp_path), "acceptance")
+    os.makedirs(acceptance_dir, exist_ok=True)
+    rows = []
+    for topic in topics:
+        with open(os.path.join(acceptance_dir, f"{topic}_plan.md"), "w") as f:
+            f.write(f"""# 【验收主题】{topic}
+
+## 1. 本次需求与验收目标
+
+用户完成 {topic}。
+
+## 2. 产品设计依据
+
+- [产品设计](../spec/product.md)
+
+## 3. 验收范围
+
+- 验收 {topic}。
+
+## 4. 验收条件
+
+### AC-01：{topic}完成
+
+- 条件与触发：用户执行 {topic}。
+- 预期结果：用户得到 {topic} 的结果。
+- 产品设计依据：[产品设计](../spec/product.md)
+
+## 5. 完成判定
+
+- AC-01 通过。
+
+## 6. 上下游文档
+
+- [需求交付追踪表](../traceability.md)
+- `../qa/{topic}_plan.md`
+""")
+        rows.append(
+            f"| [产品设计](./spec/product.md) | "
+            f"[{topic}](./acceptance/{topic}_plan.md) | "
+            f"AC-01：{topic}完成 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |"
+        )
+
+    with open(os.path.join(str(tmp_path), "traceability.md"), "w") as f:
+        f.write(f"""# 需求交付追踪表
+
+## {workflow_id}
+
+### 交付链路
+
+| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
+|---|---|---|---|---|---|---|---|---|
+{chr(10).join(rows)}
+""")
 # 测试 workflow start 无 intent 且无 active Run 时：列出可选意图
 def test_start_no_intent_no_run(tmp_path):
     # 初始化项目
@@ -467,14 +522,33 @@ def test_old_plan_first_state_migrates_to_acceptance_plan_first(tmp_path):
     assert migrated["stages"]["plan"]["gate"]["discussion_complete"] is False
 
 
+def test_status_refreshes_acceptance_plan_artifact_paths_without_stage_order_change(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        data = __import__("json").load(f)
+    data["stages"]["acceptance_plan"]["artifact_paths"] = ["acceptance/"]
+    with open(state_path, "w") as f:
+        __import__("json").dump(data, f)
+
+    code, out, _ = _run(["status"], str(tmp_path))
+
+    assert code == 0, out
+    with open(state_path) as f:
+        migrated = __import__("json").load(f)
+    assert migrated["stages"]["acceptance_plan"]["artifact_paths"] == [
+        "traceability.md",
+        "acceptance/",
+    ]
+
+
 def test_acceptance_plan_confirmation_records_topics_and_project_history(tmp_path):
     _advance_to_spike(tmp_path)
     _run(["gate", "spike", "--skip"], str(tmp_path))
-    acceptance_dir = os.path.join(str(tmp_path), "acceptance")
-    os.makedirs(acceptance_dir)
-    for topic in ["上传文件", "查看状态"]:
-        with open(os.path.join(acceptance_dir, f"{topic}_plan.md"), "w") as f:
-            f.write(f"# {topic}\n")
+    with open(os.path.join(str(tmp_path), ".workflow_loop", "state.json")) as f:
+        workflow_id = __import__("json").load(f)["workflow_id"]
+    _write_valid_acceptance_documents(tmp_path, workflow_id, ["上传文件", "查看状态"])
 
     _run(["gate", "acceptance_plan", "--discuss-done"], str(tmp_path))
     code, out, _ = _run(["gate", "acceptance_plan"], str(tmp_path))

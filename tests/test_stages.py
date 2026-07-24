@@ -4,6 +4,8 @@ from workflow_loop.stages.stages import (
     AcceptancePlanStage,
     ProjectDesignInitStage,
     ReproduceStage,
+    RegressionTestStage,
+    OverallAcceptanceStage,
     ReviseCodeDesignStage,
     SpecStage,
     SpikeStage,
@@ -87,6 +89,7 @@ def _write_reproduce_documents(tmp_path):
 - 工作流编号：2026-07-24-1200-test
 - 复现状态：已复现
 - 根因状态：已确认
+- 验收主题：上传真实文件后成功完成处理
 
 ## 1. 缺陷现象
 
@@ -119,6 +122,58 @@ def _write_reproduce_documents(tmp_path):
 ## 7. 修复仍存在的不确定性
 
 暂无
+""")
+
+
+def _write_acceptance_documents(tmp_path, workflow_id, topics):
+    rows = []
+    for topic in topics:
+        _write(tmp_path / "acceptance" / f"{topic}_plan.md", f"""# 【验收主题】{topic}
+
+## 1. 本次需求与验收目标
+
+用户完成 {topic}。
+
+## 2. 产品设计依据
+
+- [产品设计](../spec/product.md)
+
+## 3. 验收范围
+
+- 验收 {topic}。
+
+## 4. 验收条件
+
+### AC-01：{topic}完成
+
+- 条件与触发：用户执行 {topic}。
+- 预期结果：用户得到 {topic} 的结果。
+- 产品设计依据：[产品设计](../spec/product.md)
+
+## 5. 完成判定
+
+- AC-01 通过。
+
+## 6. 上下游文档
+
+- [需求交付追踪表](../traceability.md)
+- `../qa/{topic}_plan.md`
+""")
+        rows.append(
+            f"| [产品设计](./spec/product.md) | "
+            f"[{topic}](./acceptance/{topic}_plan.md) | "
+            f"AC-01：{topic}完成 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |"
+        )
+
+    _write(tmp_path / "traceability.md", f"""# 需求交付追踪表
+
+## {workflow_id}
+
+### 交付链路
+
+| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
+|---|---|---|---|---|---|---|---|---|
+{chr(10).join(rows)}
 """)
 
 
@@ -242,7 +297,7 @@ def test_reproduce_stage_requires_current_structured_bug_record_and_index(tmp_pa
     ok, detail = stage.code_validate(str(tmp_path))
 
     assert ok is True
-    assert "已复现并确认根因" in detail
+    assert "已复现、确认根因并确定验收主题" in detail
 
 
 def test_reproduce_stage_rejects_arbitrary_markdown(tmp_path):
@@ -255,6 +310,23 @@ def test_reproduce_stage_rejects_arbitrary_markdown(tmp_path):
 
     assert ok is False
     assert "文件名不符合" in detail
+
+
+def test_reproduce_stage_rejects_topic_that_escapes_acceptance_directory(tmp_path):
+    stage = ReproduceStage()
+    _save_stage_baseline(tmp_path, stage, ["bug/index.md"])
+    _write_reproduce_documents(tmp_path)
+    bug_path = tmp_path / "bug" / "2026-07-24_1200-上传失败.md"
+    content = bug_path.read_text(encoding="utf-8")
+    bug_path.write_text(
+        content.replace("验收主题：上传真实文件后成功完成处理", "验收主题：../错误路径"),
+        encoding="utf-8",
+    )
+
+    ok, detail = stage.code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "唯一验收主题" in detail
 
 
 def test_project_design_init_rejects_legacy_chinese_feature_filename(tmp_path):
@@ -299,7 +371,11 @@ def test_spike_stage_advance_returns_cleaned_paths(tmp_path):
 
 def test_acceptance_plan_finds_new_topics_and_test_plan_requires_same_topics(tmp_path):
     create_project(str(tmp_path))
-    _write(tmp_path / "acceptance" / "上传文件_plan.md")
+    save_state(str(tmp_path), WorkflowState(
+        workflow_id="test",
+        intent="from_scratch",
+    ))
+    _write_acceptance_documents(tmp_path, "test", ["上传文件"])
 
     ok, detail = AcceptancePlanStage().code_validate(str(tmp_path))
     assert ok is True
@@ -325,8 +401,7 @@ def test_acceptance_plan_keeps_current_topics_and_accepts_new_unique_topic(tmp_p
         intent="from_scratch",
         topics=["上传文件"],
     ))
-    _write(tmp_path / "acceptance" / "上传文件_plan.md")
-    _write(tmp_path / "acceptance" / "查看状态_plan.md")
+    _write_acceptance_documents(tmp_path, "test", ["上传文件", "查看状态"])
 
     ok, detail = AcceptancePlanStage().code_validate(str(tmp_path))
 
@@ -342,16 +417,78 @@ def test_topic_execution_requires_results_for_every_topic(tmp_path):
         intent="from_scratch",
         topics=["上传文件", "查看状态"],
     ))
+    _write_acceptance_documents(tmp_path, "test", ["上传文件", "查看状态"])
     _write(tmp_path / "impl" / "upload_task.md")
-    _write(tmp_path / "qa" / "上传文件_result.md")
-    _write(tmp_path / "qa" / "查看状态_result.md")
-    _write(tmp_path / "acceptance" / "上传文件_result.md")
+    _write(tmp_path / "qa" / "上传文件_result.md", "- 工作流编号：test\n- 测试结果：通过\n")
+    _write(tmp_path / "qa" / "查看状态_result.md", "- 工作流编号：test\n- 测试结果：通过\n")
+    _write(tmp_path / "acceptance" / "上传文件_result.md", "- 工作流编号：test\n- 验收结果：通过\n")
 
     ok, detail = TopicExecutionStage().code_validate(str(tmp_path))
     assert ok is False
     assert "查看状态_result.md" in detail
 
-    _write(tmp_path / "acceptance" / "查看状态_result.md")
+    _write(tmp_path / "acceptance" / "查看状态_result.md", "- 工作流编号：test\n- 验收结果：通过\n")
     ok, detail = TopicExecutionStage().code_validate(str(tmp_path))
     assert ok is True
     assert "全部主题" in detail
+
+
+def test_final_regression_requires_current_workflow_and_passed_status(tmp_path):
+    save_state(str(tmp_path), WorkflowState(
+        workflow_id="2026-07-24-1200-test",
+        intent="from_scratch",
+        topics=["上传文件"],
+    ))
+    _write_acceptance_documents(tmp_path, "2026-07-24-1200-test", ["上传文件"])
+    stage = RegressionTestStage()
+
+    _write(tmp_path / "qa" / "final_regression_result.md", """# 最终全量回归结果
+
+- 工作流编号：2026-07-24-1200-test
+- 回归状态：失败
+""")
+    ok, detail = stage.code_validate(str(tmp_path))
+    assert ok is False
+    assert "不能进入整体验收" in detail
+
+    _write(tmp_path / "qa" / "final_regression_result.md", """# 最终全量回归结果
+
+- 工作流编号：2026-07-24-1200-test
+- 回归状态：通过
+""")
+    ok, detail = stage.code_validate(str(tmp_path))
+    assert ok is True
+    assert "明确通过" in detail
+
+
+def test_overall_acceptance_requires_passed_regression_and_acceptance(tmp_path):
+    save_state(str(tmp_path), WorkflowState(
+        workflow_id="2026-07-24-1200-test",
+        intent="from_scratch",
+        topics=["上传文件"],
+    ))
+    _write_acceptance_documents(tmp_path, "2026-07-24-1200-test", ["上传文件"])
+    stage = OverallAcceptanceStage()
+    _write(tmp_path / "qa" / "final_regression_result.md", """# 最终全量回归结果
+
+- 工作流编号：2026-07-24-1200-test
+- 回归状态：通过
+""")
+    _write(tmp_path / "acceptance" / "overall_result.md", """# 整体验收结果
+
+- 工作流编号：2026-07-24-1200-test
+- 整体验收状态：未通过
+""")
+
+    ok, detail = stage.code_validate(str(tmp_path))
+    assert ok is False
+    assert "不能进入代码设计收尾" in detail
+
+    _write(tmp_path / "acceptance" / "overall_result.md", """# 整体验收结果
+
+- 工作流编号：2026-07-24-1200-test
+- 整体验收状态：通过
+""")
+    ok, detail = stage.code_validate(str(tmp_path))
+    assert ok is True
+    assert "都已明确通过" in detail

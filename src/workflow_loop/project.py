@@ -28,7 +28,7 @@ class ProjectState:
     # from_scratch 在 spec + code_design 都 --confirmed 后置 true
     # PathComposer 用这个字段决定 product_change/bugfix 是否前置 project_design_init
     project_design_initialized: bool = False
-    # 已经在验收计划阶段确认过的主题名称。跨 Workflow Run 保留，防止重复命名。
+    # 已经确认过的验收主题名称。修 bug 在 reproduce 确认，其他意图在 acceptance_plan 确认。
     topic_history: list[str] = field(default_factory=list)
 
 

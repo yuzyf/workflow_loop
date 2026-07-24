@@ -18,7 +18,7 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
   - YYYY-MM-DD_HHmm-<bug描述>.md：单个 bug 记录
   - index.md：bug 索引表
 
-【qa/】测试与验收
+【qa/】测试
   - <topic>_plan.md：测试计划
   - <topic>_result.md：测试执行结果
   - final_regression_result.md：全部主题完成后的最终全量回归结果
@@ -29,11 +29,14 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
   - <topic>_result.md：验收执行结果
   - overall_result.md：最终全量回归通过后的整体验收结果
 
+【traceability.md】需求交付追踪表
+  - 按工作流编号记录需求、验收主题、验收条件和后续阶段的对应位置
+
 【impl/】实施记录
   - 一个实施任务一份 .md：文件名由实施计划确定，不要求与验收主题同名
 
 验收计划、测试计划和主题测试/验收结果使用同一个主题名。
-主题在 acceptance_plan stage 确定；实施计划和实施记录围绕这些验收主题组织，但不要求一一对应。"""
+从零开发和修改产品在 acceptance_plan stage 确定主题；修 bug 在 reproduce stage 确定主题。实施计划和实施记录围绕这些验收主题组织，但不要求一一对应。"""
 
 # stage 名 → 角色定义的映射表
 # discuss 命令用 get_role_doc(stage_name) 拿角色定义，打印给 AI 看
@@ -83,7 +86,7 @@ ROLE_DOC_MAP = {
     # 验收计划制定阶段
     "acceptance_plan": {
         "role": "验收计划制定者",
-        "description": "根据已确认需求确定全部验收主题，并为每个主题制定什么算完成。产出 acceptance/<topic>_plan.md。",
+        "description": "根据已确认需求确定或复用全部验收主题，并为每个主题制定什么算完成。产出 traceability.md 和 acceptance/<topic>_plan.md。",
     },
     # 测试计划制定阶段
     "test_plan": {
@@ -111,16 +114,16 @@ ROLE_DOC_MAP = {
     },
     "regression_test": {
         "role": "最终回归测试执行者",
-        "description": "全部主题完成后，对全部已合并代码执行最终全量回归。产出 qa/final_regression_result.md。",
+        "description": "全部主题完成后，对全部已合并代码执行最终全量回归。产出 qa/final_regression_result.md；只有代码门禁确认“回归状态：通过”后才能继续。",
     },
     "overall_acceptance": {
         "role": "整体验收执行者",
-        "description": "最终全量回归通过后，由用户确认整个需求是否完成。产出 acceptance/overall_result.md。",
+        "description": "代码先复核最终全量回归已经通过，再由用户确认整个需求是否完成。产出 acceptance/overall_result.md；代码门禁和第三道用户确认都通过后才能继续。",
     },
     # bug 复现阶段：复现+根因分析
     "reproduce": {
         "role": "bug 复现者",
-        "description": "使用真实场景复现缺陷并确认根因，记录环境、输入、步骤、结果和根因证据，产出缺陷记录并更新 bug/index.md。",
+        "description": "使用真实场景复现缺陷并确认根因，根据修复后用户应该恢复得到的结果确定一个验收主题，产出缺陷记录并更新 bug/index.md。",
     },
 }
 

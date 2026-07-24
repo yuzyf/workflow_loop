@@ -51,16 +51,15 @@ def test_install_project_copies_templates(tmp_path):
     assert os.path.exists(os.path.join(template_dir, "plan", "plan.md"))
     # 验证 plan/fix_plan.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "plan", "fix_plan.md"))
-    # 验证 qa/acceptance_plan.md 模板存在
-    assert os.path.exists(os.path.join(template_dir, "qa", "acceptance_plan.md"))
-    # 验证 qa/acceptance.md 模板存在
-    assert os.path.exists(os.path.join(template_dir, "qa", "acceptance.md"))
+    # 验证 acceptance/ 下的验收计划和主题验收模板存在
+    assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance_plan.md"))
+    assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance.md"))
     # 验证 qa/test_plan.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "qa", "test_plan.md"))
     # 验证 qa/test.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "qa", "test.md"))
     assert os.path.exists(os.path.join(template_dir, "qa", "final_regression.md"))
-    assert os.path.exists(os.path.join(template_dir, "qa", "overall_acceptance.md"))
+    assert os.path.exists(os.path.join(template_dir, "acceptance", "overall_acceptance.md"))
     assert os.path.exists(os.path.join(template_dir, "execution", "topic_execution.md"))
     # 验证 impl/impl.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "impl", "impl.md"))
@@ -172,6 +171,21 @@ def test_install_project_copies_structured_reproduce_rules(tmp_path):
     assert "根因状态：已确认" in standard
     assert "bug/index.md" in standard
     assert "程序不能判断证据是否伪造" in standard
+
+
+def test_install_project_separates_acceptance_templates_and_code_gated_final_stages(tmp_path):
+    install_project(str(tmp_path))
+    workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
+    template_dir = os.path.join(workflow_dir, "Template_Repository")
+    standardized_dir = os.path.join(workflow_dir, "Standardized_Repository")
+
+    assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance_plan.md"))
+    assert os.path.exists(os.path.join(standardized_dir, "acceptance", "acceptance_plan.md"))
+    assert not os.path.exists(os.path.join(template_dir, "qa", "acceptance_plan.md"))
+    assert not os.path.exists(os.path.join(standardized_dir, "qa", "acceptance_plan.md"))
+
+    assert not os.path.exists(os.path.join(standardized_dir, "qa", "final_regression.md"))
+    assert not os.path.exists(os.path.join(standardized_dir, "qa", "overall_acceptance.md"))
 
 
 # 测试 install_project 覆盖 AGENTS.md（首次安装写入 workflow_loop 契约）

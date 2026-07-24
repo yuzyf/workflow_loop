@@ -1,5 +1,10 @@
 {
   "installer_version": "0.1.0",
   "installed_at": "2026-07-20T08:10:28+00:00",
-  "project_design_initialized": true
+  "project_design_initialized": true,
+  "topic_history": [
+    "修复缺陷经过主题验收和全量回归后关闭",
+    "需求交付各阶段通过追踪表双向关联",
+    "验收计划按用户需求生成可判断完成条件"
+  ]
 }
