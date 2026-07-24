@@ -107,7 +107,7 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   ├─ test_installer.py
   │   └─ test_commands.py
   ├─ .workflow_loop/                      # 本仓库自己作为被管理项目的运行时骨架
-  │   ├─ project.json                     # 项目级字段（installer_version, project_design_initialized）
+  │   ├─ project.json                     # 项目级字段（安装版本、设计初始化、主题历史）
   │   ├─ state.json                       # 当前 Run 快照（开工后才写）
   │   ├─ journal.jsonl                    # 历史记录（开工后才写）
   │   ├─ Template_Repository/             # 从包内 data/ 复制（项目可定制）
@@ -167,18 +167,21 @@ AI 回复用户和编写正式文档时：
   "ended_at": null,
   "aborted_at": null,
   "topic": null,
+  "topics": [],
   "clean_confirmed": false,
   "spike_skipped": false,
   "stage_path": [
-    "spec", "code_design", "spike", "plan",
-    "acceptance_plan", "test_plan", "impl",
-    "test", "acceptance", "update_code_design"
+    "spec", "code_design", "spike", "acceptance_plan",
+    "test_plan", "plan", "topic_execution",
+    "regression_test", "overall_acceptance", "update_code_design"
   ],
   "stages": {
     "<name>": {
       "status": "pending",
       "artifact_paths": ["..."],
       "artifact_produced_at": null,
+      "artifact_baseline_captured_at": null,
+      "artifact_baseline_hashes": {},
       "gate": {
         "discussion_complete": false,
         "code_validated": false,
@@ -194,7 +197,8 @@ AI 回复用户和编写正式文档时：
     "impl_hash": null,
     "test_plan_hash": null,
     "acceptance_plan_hash": null,
-    "test_result_hash": null
+    "test_result_hash": null,
+    "regression_test_result_hash": null
   },
   "spike_baseline": {
     "captured_at": null,
@@ -218,7 +222,8 @@ AI 回复用户和编写正式文档时：
 | `started_at` | str | ISO 8601 UTC |
 | `ended_at` | str\|null | `done` 时写（`run_status=completed`）；`abort` 时为 null |
 | `aborted_at` | str\|null | `abort` 时写（`run_status=aborted`）；`done` 时为 null |
-| `topic` | str\|null | 主题字符串；`plan`/`fix_plan` stage 的 `--confirmed` 时写入 |
+| `topic` | str\|null | 旧版单主题兼容字段；新流程不再以它作为主题主数据 |
+| `topics` | list[str] | 本次需求的全部验收主题；`acceptance_plan` 用户确认时写入 |
 | `clean_confirmed` | bool | 从零做清场确认标记；`workflow start --intent from_scratch --confirm-clean` 时置 true |
 | `spike_skipped` | bool | spike 跳过标记；`gate spike --skip` 时置 true |
 | `stage_path` | list[str] | PathComposer 在 start 时解析出的完整 stage 名顺序；固定不再变 |
@@ -240,6 +245,8 @@ AI 回复用户和编写正式文档时：
 | `status` | str | `pending` / `in_progress` / `gated` / `done` |
 | `artifact_paths` | list[str] | 期望产出文件路径列表 |
 | `artifact_produced_at` | str\|null | 产出文件首次出现时间戳 |
+| `artifact_baseline_captured_at` | str\|null | 对需要证明本阶段发生修改的阶段，在用户确认讨论完成时记录基线时间 |
+| `artifact_baseline_hashes` | dict[str, str\|null] | 讨论完成时相关文件的 SHA256；文件当时不存在时记录 null，用于识别本阶段新增、修改或删除 |
 | `gate.discussion_complete` | bool | 第 1 道闸（讨论完毕） |
 | `gate.code_validated` | bool | 第 2 道闸（代码校验通过） |
 | `gate.user_confirmed` | bool | 第 3 道闸（用户确认） |
@@ -248,8 +255,7 @@ AI 回复用户和编写正式文档时：
 - 不存 journal（历史在 journal.jsonl）
 - 不存讨论内容（讨论在 AI 和用户之间，不落 workflow）
 - 不存 artifact 内容（只存路径，不存文件内容）
-- 不存 `project_design_initialized`（项目级字段，落 `project.json`，跨 Run 持久，不被新 Run 覆盖）
-- 不存 `installer_version`（同上，落 `project.json`）
+- 不存 `project_design_initialized`、`topic_history`、`installer_version`（项目级字段，落 `project.json`）
 
 ### 3.2 .workflow_loop/project.json（项目级持久字段）
 
@@ -259,7 +265,8 @@ AI 回复用户和编写正式文档时：
 {
   "installer_version": "0.1.0",
   "installed_at": "2026-07-20T10:00:00Z",
-  "project_design_initialized": false
+  "project_design_initialized": false,
+  "topic_history": []
 }
 ```
 
@@ -268,6 +275,7 @@ AI 回复用户和编写正式文档时：
 | `installer_version` | str | 安装时写入；用于重复安装保护判断 |
 | `installed_at` | str | 安装时间 ISO 8601 UTC |
 | `project_design_initialized` | bool | 项目设计架构初始化标记；安装时 `false`；`project_design_init` stage `--confirmed` 后置 `true`；`from_scratch` 在 `spec` + `code_design` 都 `--confirmed` 后置 `true` |
+| `topic_history` | list[str] | 已经在 `acceptance_plan` 确认过的主题；跨 Run 保留，防止主题重名 |
 
 ### 3.3 journal.jsonl（历史记录）
 
@@ -288,6 +296,7 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 | 提示词加载 | `discuss` 时 | `stage`, `prompt_doc`, `standard_doc` |
 | 角色文档加载 | `discuss` 时 | `stage` |
 | 门禁讨论完毕 | `gate --discuss-done` 时 | `stage`, `passed` |
+| 阶段产物基线 | 需要变化校验的 stage 第一次 `gate --discuss-done` 时 | `stage`, `artifact_hashes` |
 | 产出文件检查 | `gate`（无 flag）检查时 | `stage`, `artifact`, `exists` |
 | 门禁代码校验 | `gate`（无 flag）时 | `stage`, `passed`, `details` |
 | 门禁确认前复核 | `gate --confirmed` 推进前重新校验当前产物时 | `stage`, `passed`, `details` |
@@ -314,7 +323,7 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 - state 被多次读改写，journal 只追加，project 跨 Run 持久
 - 崩溃恢复：state 可能损坏，从 journal 可重建
 - 调试：journal 是完整审计日志
-- 项目级字段独立：`project_design_initialized` 不应被新 Run 覆盖
+- 项目级字段独立：`project_design_initialized` 和 `topic_history` 不应被新 Run 覆盖
 
 ### 3.5 State File Lifecycle
 
@@ -383,8 +392,8 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 无论是否发现并删除旧产物，都把 `project.json` 的 `project_design_initialized` 置为 `false`；之后固定走 `spec` → `code_design`（初步）→ ... → 末段 `update_code_design`。
 
 ### 4.6 Clean Scope（清场范围）
-- **删除**（仅项目根产物侧）：`spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 下由 workflow 约定写出的设计/过程文档
-- **不删除**：`.workflow_loop/Template_Repository/` 与 `Standardized_Repository/` 全部内容；`.workflow_loop/project.json` 本身（只更新初始化字段）；源代码、`.git`、与设计产物无关的项目文件；`.workflow_loop/` 运行时骨架本身
+- **整目录删除**：只要 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中存在文件，就删除命中的整个目录及其中全部内容。放在这些目录中的非 workflow 文件也会一起删除。
+- **不删除目录外内容**：`.workflow_loop/Template_Repository/` 与 `Standardized_Repository/` 全部内容；`.workflow_loop/project.json` 本身（只更新初始化字段）；上述六个目录之外的源代码、`.git` 和项目文件；`.workflow_loop/` 运行时骨架本身。
 
 **Clean Detect List**（监测清单）：
 - 监测：项目根下 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中**已存在且含文件**的路径
@@ -411,15 +420,15 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 
 | intent | 条件 | Stage Path |
 |---|---|---|
-| `from_scratch` | 总是 | 清场确认 → `spec` → `code_design`（初步）→ `spike`（可选）→ `plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
-| `product_change` | `project_design_initialized=false` | `project_design_init` → `spec` → `revise_code_design` → `spike`（可选）→ `plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
-| `product_change` | `project_design_initialized=true` | `spec` → `revise_code_design` → `spike`（可选）→ `plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
-| `bugfix` | `project_design_initialized=false` | `project_design_init` → `reproduce` → `spike`（可选）→ `fix_plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
-| `bugfix` | `project_design_initialized=true` | `reproduce` → `spike`（可选）→ `fix_plan` → `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design` |
+| `from_scratch` | 总是 | 清场确认 → `spec` → `code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `product_change` | `project_design_initialized=false` | `project_design_init` → `spec` → `revise_code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `product_change` | `project_design_initialized=true` | `spec` → `revise_code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `bugfix` | `project_design_initialized=false` | `project_design_init` → `reproduce` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `fix_plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `bugfix` | `project_design_initialized=true` | `reproduce` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `fix_plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
 
 **清场确认**不是 stage，是 `from_scratch` 在 `start --intent` 时的前置动作（见 4.5）。
 
-**共享后半截**：所有意图在 `plan`/`fix_plan` 之后都是 `acceptance_plan` → `test_plan` → `impl` → `test` → `acceptance` → `update_code_design`。
+**共享后半截**：`acceptance_plan` → `test_plan` → `plan` / `fix_plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design`。
 
 ### 5.3 Stage 命名规则（CONTEXT.md 强制）
 
@@ -428,13 +437,14 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 - 存量项目首次初始化 stage 名 = `project_design_init`
 - **所有意图**末段详细架构收尾 stage 名 = `update_code_design`
 - 废弃 `generate_code_design`（初步阶段已可能创建同文件，末环不是"首次生成"语义）
-- `acceptance` 拆为 `acceptance_plan`（制定）+ `acceptance`（执行）
-- `qa` 拆为 `test_plan`（制定）+ `test`（执行）
+- `acceptance_plan`、`test_plan`、`plan` / `fix_plan` 各进入一次，分别完成验收计划、测试计划和实施计划
+- `topic_execution` 统筹各主题分别实施、测试和验收，不在顶层路径强制 `impl → test → acceptance` 全局串行
+- `regression_test` 是全部主题完成后的最终全量回归；`overall_acceptance` 是整个需求的最终确认
 - 任何意图不得跳过末段 `update_code_design`
 
 ### 5.4 Optional Spike
 - `spike` 在 `from_scratch` / `product_change` / `bugfix` 路径上**默认在路径中**
-- `bugfix` 中顺序固定为 `reproduce → spike → fix_plan`；`reproduce` 确认缺陷和根因，`spike` 只验证修复仍依赖的具体技术不确定性
+- `bugfix` 前段顺序固定为 `reproduce → spike`，之后进入共享后半截的 `acceptance_plan → test_plan → fix_plan`；`reproduce` 确认缺陷和根因，`spike` 只验证修复仍依赖的具体技术不确定性
 - 用户确认不需要穿刺后，通过显式门禁动作跳过：`workflow gate spike --skip`
 - state 记 `spike_skipped=true`、journal 记跳过并推进下一 Stage
 - 跳过时不要求 `spike_index.md`、结论文档和临时代码，并清理已存在的 `spike_tmp`
@@ -445,8 +455,8 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 
 ### 5.5 路径存储与复用
 - `start --intent` 时调一次 PathComposer，结果存入 `state.stage_path`（list[str]）
-- 后续命令（discuss/gate）读 `state.stage_path` 找当前 stage 对应的 Stage 策略类
-- 不在每次命令调用时重新跑 PathComposer（PathComposer 看清场/`project_design_initialized` 等条件，这些在 start 时就固定）
+- 后续命令（discuss/gate）读 `state.stage_path` 找当前 stage 对应的 Stage 策略类；旧状态首次加载时迁移到新顺序
+- 新 Run 的路径在 `start` 时固定。旧 state 首次迁移时只调整已经确认的新阶段顺序，并保留开工时是否包含 `project_design_init` 的历史决定
 
 ---
 
@@ -478,17 +488,18 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
      → AI 调 `workflow gate <stage> --discuss-done`
      → 前置：命令中的 stage 必须等于 state.current_stage
      → workflow 标记 state.stages.<stage>.gate.discussion_complete = True
+     → 对 spec、project_design_init、revise_code_design、reproduce 记录相关文件当前哈希，作为开始写产物前的基线；重复调用不覆盖基线
      → 写 journal: 门禁讨论完毕 passed
 
 [S4] AI 写产出文件
      → 可能是多个文件（spec: product.md + feature_*.md）
-     → 主题在 plan/fix_plan 定下后，后面 stage 复用主题做文件名（见第 10 节）
+     → 主题在 acceptance_plan 确认后写入 state.topics，后续测试计划和主题执行复用（见第 10 节）
      → spike stage 特殊：清单写入 spec/spike_index.md，每项结论写入 spec/spike_<english-name>.md；只有需要时才把临时代码和原始证据放入 .workflow_loop/spike_tmp/
 
 [S5] 代码校验门禁（第 2 道闸）
      → AI 调 `workflow gate <stage>`（无 flag）
      → 前置：命令中的 stage 等于 state.current_stage，且 discussion_complete=True
-     → **Verification Invalidation 检查**（见 6.4）：进入下游 stage 的第 2 道闸时，先重算上游 hash 比对，不一致则清零本 stage 的所有 gate
+     → **Verification Invalidation 检查**（见 6.4）：先重算上游 hash；不一致则退回最早受影响阶段，清零该阶段及其后续门禁和旧哈希
      → 跑 stage.code_validate(project_root)
      → 默认实现：检查所有 artifact_paths 的文件是否存在
      → 不存在 → 打印"产出文件未就绪"，写 journal: 门禁代码校验 failed
@@ -507,24 +518,24 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
      → 当前文件已变化或重新校验失败：code_validated=False，停留在当前 stage
      → 标记 user_confirmed = True
      → 调 stage.on_advance(project_root)（spike 清理临时代码并记录清理 journal）
-     → **记录上游 hash**（见 6.4）：本 stage 是 impl/test_plan/acceptance_plan/test 时，记录对应 verification hash
+     → **记录上游 hash**（见 6.4）：acceptance_plan、test_plan、topic_execution、regression_test 记录对应 verification hash
      → **设置 Architecture Gate Marks**（见第 9 节）：本 stage 是 code_design/revise_code_design/project_design_init/update_code_design 时，置对应 mark
      → **设置 project_design_initialized**（见 4.4）：本 stage 是 project_design_init 或 from_scratch 的 spec+code_design 都确认后
      → 推进 state.current_stage = 下一 stage
-     → 写 journal: 门禁用户确认 passed / 阶段推进 <stage>→<next> / 主题确定（若 plan/fix_plan）/ 架构标记（若适用）
+     → 写 journal: 门禁用户确认 passed / 阶段推进 <stage>→<next> / 主题确定（若 acceptance_plan）/ 架构标记（若适用）
 ```
 
 ### 6.2 3 道闸（顺序硬性，CONTEXT.md "Gate Policy"）
 
 | 闸 | 字段 | 命令 | 前置条件 | 不满足时报错 |
 |---|---|---|---|---|
-| 1 讨论完毕 | `discussion_complete` | `gate <stage> --discuss-done` | stage 是当前阶段且已 discuss | 当前阶段不一致或尚未加载提示词时拒绝 |
+| 1 讨论完毕 | `discussion_complete` | `gate <stage> --discuss-done` | stage 是当前阶段；用户通过命令确认讨论完成，程序不检查聊天记录或提示词加载记录 | 当前阶段不一致时拒绝 |
 | 2 代码校验 | `code_validated` | `gate <stage>` | stage 是当前阶段且 `discussion_complete=True` | 当前阶段不一致或讨论未完成时拒绝 |
 | 3 用户确认 | `user_confirmed` | `gate <stage> --confirmed` | stage 是当前阶段、`code_validated=True`，并且当前产物重新校验通过 | 当前阶段不一致、未过门2或产物已变化时拒绝 |
 
 **跳步抛错**：直接调 `gate --confirmed` 而没跑前两道 → 报错并提示正确顺序。
 
-**门禁策略第一版**：每个正式 Stage 保留三道门、顺序硬性。`test`（测试执行）与 `acceptance`（验收执行）是强制 Stage，不提供 `--skip`；自动测试不可用时可执行人工测试并记录证据。AI 不得自动替用户验收。
+**门禁策略第一版**：每个正式 Stage 保留三道门、顺序硬性。`topic_execution`（按主题实施、测试和验收）、`regression_test`（最终全量回归）与 `overall_acceptance`（整体验收）是强制 Stage，不提供 `--skip`；自动测试不可用时可执行人工测试并记录证据。AI 不得自动替用户验收。
 
 ### 6.3 StageStrategy ABC 接口
 
@@ -561,16 +572,17 @@ class StageStrategy(ABC):
 
 ### 6.4 Verification Invalidation（验证结果自动失效）
 
-**核心机制**：通过状态只对绑定的上游内容有效。上游变化时下游门禁清零。
+**核心机制**：通过状态只对绑定的上游内容有效。上游变化时，退回最早受影响的顶层阶段，清零该阶段及其后续门禁和旧哈希。
 
 **哈希对象**（SHA256）：
 
 | hash 字段 | 哈希对象 | 记录时机 |
 |---|---|---|
-| `impl_hash` | `impl/<topic>.md` 内容 + `git status --porcelain` + `git diff --stat` 输出（代码修改快照）；非 git 仓库退化为指定目录下代码文件 mtime+size 快照 | `gate impl --confirmed` 时 |
-| `test_plan_hash` | `qa/<topic>_plan.md` 内容 | `gate test_plan --confirmed` 时 |
-| `acceptance_plan_hash` | `acceptance/<topic>_plan.md` 内容 | `gate acceptance_plan --confirmed` 时 |
-| `test_result_hash` | `qa/<topic>_result.md` 内容 | `gate test --confirmed` 时 |
+| `impl_hash` | `impl/` 下全部实施记录 + 当前代码修改快照 | `gate topic_execution --confirmed` 时 |
+| `test_plan_hash` | 本次全部 `qa/<topic>_plan.md` | `gate test_plan --confirmed` 时 |
+| `acceptance_plan_hash` | 本次全部 `acceptance/<topic>_plan.md` | `gate acceptance_plan --confirmed` 时 |
+| `test_result_hash` | 本次全部 `qa/<topic>_result.md` | `gate topic_execution --confirmed` 时 |
+| `regression_test_result_hash` | `qa/final_regression_result.md` | `gate regression_test --confirmed` 时 |
 
 **穿刺设计基线**不属于 Verification Invalidation，但同样使用 SHA256：
 
@@ -579,15 +591,16 @@ class StageStrategy(ABC):
 | `spike_baseline.product_design_hash` | `spec/product.md` + 其功能清单实际链接的 `spec/feature_*.md`，路径和文件哈希共同参与 | 真正进入 `spike` 时记录；旧状态缺失时不自动补造 | spike 门2发现任意项目写“产品设计影响：需要修改”时比较当前值 |
 | `spike_baseline.code_design_hash` | `spec/architecture_code_design.md` | 同上 | spike 门2发现任意项目写“代码设计影响：需要修改”时比较当前值 |
 
-**清零检查**：进入下游 stage 的第 2 道闸（`gate` 无 flag）时，先重算上游 hash 比对：
+**失效检查**：第 2 道门和第 3 道门推进前都重算上游 hash：
 
-| 进入 stage | 检查上游 | 不一致时清零 |
+| 变化来源 | 退回阶段 | 清零范围 |
 |---|---|---|
-| `test` | `impl_hash`（impl 变了吗）、`test_plan_hash`（test_plan 变了吗） | 清零 `test` 与 `acceptance` 的所有 gate |
-| `acceptance` | `test_result_hash`（test 结果变了吗）、`acceptance_plan_hash`（acceptance_plan 变了吗） | 清零 `acceptance` 的所有 gate |
-| `acceptance_plan` | `test_plan_hash`（如果 test_plan 已确认） | 清零 `acceptance` 的所有 gate，并把 `test_plan` 的 `code_validated`/`user_confirmed` 退回 false（discussion_complete 保留） |
+| 验收计划文件或主题集合 | `acceptance_plan` | `acceptance_plan` 及全部后续阶段 |
+| 测试计划文件 | `test_plan` | `test_plan` 及全部后续阶段 |
+| 实施代码、实施记录或主题测试结果 | `topic_execution` | `topic_execution` 及全部后续阶段 |
+| 最终全量回归结果 | `regression_test` | `regression_test`、`overall_acceptance`、`update_code_design` |
 
-**失效动作**：写入 State Snapshot（清零对应 stage 的 gate 字段）+ 写 journal（"验证失效"，记录 from_stage/to_stage/reason）。
+**失效动作**：清零对应门禁和旧哈希，把 `current_stage` 移到最早受影响阶段，写入 State Snapshot，并写 journal（"验证失效"，记录 from_stage/to_stage/reason）。主题内部的选择性失效规则后续在 `topic_execution` 详细设计中补充，本轮不提前实现。
 
 **实现位置**：`src/workflow_loop/verification.py`。
 
@@ -644,7 +657,7 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/spec/spec.md` |
 | 规范 | `Standardized_Repository/spec/spec.md` |
 | 产物 | `spec/product.md` + `spec/feature_<english-name>.md`（可能多个，文件名使用英文，正文使用中文） |
-| `code_validate` | 检查 `spec/product.md` 存在 + 至少一个 `spec/feature_*.md` 存在；阶段进入时记录相关文件路径与内容哈希，校验时比较前后变化（证明产物属于本 Run） |
+| `code_validate` | 检查 `spec/product.md` 存在 + 至少一个 `spec/feature_*.md` 存在；第一次 `--discuss-done` 时记录相关文件路径与内容哈希，校验时比较前后变化（证明产物属于本 Run） |
 | `on_advance` | no-op；`from_scratch` 中若 `code_design` 也已 `--confirmed`，置 `project_design_initialized=true` |
 | instruction | "产品设计阶段：产出 spec/product.md（产品设计说明书 + 功能路由）+ spec/feature_*.md（功能拆分）" |
 
@@ -722,8 +735,8 @@ class StageStrategy(ABC):
 | 角色 | 存量产品与架构分析师 |
 | 提示词 | `Template_Repository/code_design/project_design_init.md`，并附加加载 `Template_Repository/spec/spec.md` + `Template_Repository/code_design/code_design.md` |
 | 规范 | `Standardized_Repository/code_design/project_design_init.md`，并附加加载 `Standardized_Repository/spec/spec.md` + `Standardized_Repository/code_design/code_design.md` |
-| 产物 | `spec/product.md` + 多个 `spec/feature_<english-name>.md` + `spec/architecture_code_design.md`（一次建立） |
-| `code_validate` | 同时校验三类产物都存在 |
+| 产物 | `spec/product.md` + 多个 `spec/feature_<english-name>.md` + `spec/architecture_code_design.md` + `spec/project_design_init_evidence.md`（调查证据） |
+| `code_validate` | 校验产品设计、代码设计和调查证据都存在且相对讨论完成时的基线发生变化；调查证据必须绑定当前工作流编号，列出至少一个真实存在的代码文件，并按运行条件记录命令、结果或无法运行原因 |
 | `on_advance` | 置 `project_design_initialized=true` 与 `architecture.preliminary_done=true` |
 | instruction | "已有项目设计初始化：必须查看代码和测试，具备安全条件时实际运行，一次建立相互一致的 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md" |
 
@@ -731,7 +744,7 @@ class StageStrategy(ABC):
 
 **事实边界**：代码和运行结果用于确认产品当前怎样工作，不能单独证明产品当初为什么诞生或某个功能为什么设计；历史背景无法核实时必须询问用户或标记未确认。
 
-**调查要求**：必须查看项目说明、构建与依赖配置、用户实际入口、关键调用链、状态与外部输入输出、自动化测试。具备安全的本地运行条件时，至少运行现有测试，并在条件允许时构建项目和走主要产品入口。需要生产账号、真实数据、付费服务或外部写入时先取得用户同意。
+**调查要求**：必须查看项目说明、构建与依赖配置、用户实际入口、关键调用链、状态与外部输入输出、自动化测试。具备安全的本地运行条件时，至少运行现有测试，并在条件允许时构建项目和走主要产品入口。需要生产账号、真实数据、付费服务或外部写入时先取得用户同意。调查过程必须写入 `spec/project_design_init_evidence.md`，不能只在聊天中声明已经完成。
 
 **证据状态**：关键结论区分运行确认、测试确认、代码确认、文档或用户确认、未确认和冲突。代码确认表示已经阅读真实调用链和关键逻辑，不等于已经运行。不可达、隐藏、未完成或废弃代码不能直接写成正式产品功能。
 
@@ -761,35 +774,9 @@ class StageStrategy(ABC):
 | `on_advance` | 置 `architecture.detailed_done=true` |
 | instruction | "详细架构收尾：写入/更新 spec/architecture_code_design.md，反映最终被验证和接受的真实结构" |
 
-**强制**：所有工作意图在 `test` 通过且最终 `acceptance` 经用户确认之后必须经过 `update_code_design`。从零做、改产品、修 bug 末环同名；不再使用 `generate_code_design`。
+**强制**：所有工作意图在 `regression_test` 通过且 `overall_acceptance` 经用户确认之后必须经过 `update_code_design`。
 
-### 7.7 plan（计划制定）
-
-| 字段 | 值 |
-|---|---|
-| 角色 | 计划制定者 |
-| 提示词 | `Template_Repository/plan/plan.md` |
-| 规范 | `Standardized_Repository/plan/plan.md` |
-| 产物 | `plan/<topic>.md` + `plan/index.md`（主题在这里定） |
-| `code_validate` | 检查 `plan/index.md` 存在 + 至少一个 `plan/*.md` 文件存在 |
-| `on_advance` | 写 `state.topic`（从讨论决定的主题字符串） |
-| instruction | "计划阶段：产出 plan/<主题>.md + plan/index.md（主题在这里定下，后面 stage 复用）" |
-
-**主题写入时机**：`gate plan --confirmed` 推进落盘时写 `state.topic`。
-
-### 7.8 fix_plan（修复计划制定，bugfix 专用）
-
-| 字段 | 值 |
-|---|---|
-| 角色 | 修复计划制定者 |
-| 提示词 | `Template_Repository/plan/fix_plan.md` |
-| 规范 | `Standardized_Repository/plan/fix_plan.md` |
-| 产物 | `plan/<topic>.md` + 更新 `plan/index.md` |
-| `code_validate` | 同 plan |
-| `on_advance` | 写 `state.topic`（从 bug 反推） |
-| instruction | "修复计划阶段：和用户讨论修复方案，产出 plan/<主题>.md + 更新 plan/index.md（主题从 bug 反推）" |
-
-### 7.9 acceptance_plan（验收计划制定）
+### 7.7 acceptance_plan（验收计划制定）
 
 | 字段 | 值 |
 |---|---|
@@ -797,11 +784,13 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/qa/acceptance_plan.md` |
 | 规范 | `Standardized_Repository/qa/acceptance_plan.md` |
 | 产物 | `acceptance/<topic>_plan.md` |
-| `code_validate` | 校验文件属于当前 Run、文件名与 `state.topic` 一致、每条验收条件可判定且覆盖本次实施计划 |
-| `on_advance` | 记录 `verification.acceptance_plan_hash` |
-| instruction | "验收计划阶段：制定什么算完成的验收计划，产出 acceptance/<topic>_plan.md" |
+| `code_validate` | 至少存在一个本次新增、且没有在项目历史中使用过的主题计划 |
+| 门3确认处理 | 把主题列表写入 `state.topics` 和项目 `topic_history`；记录 `verification.acceptance_plan_hash` |
+| instruction | "验收计划阶段：确定全部验收主题，并为每个主题写清什么算完成" |
 
-### 7.10 test_plan（测试计划制定）
+具体讨论问题、验收条件字段和文档正文结构不在本轮流程框架里定义，后续单独完善提示词与规范。
+
+### 7.8 test_plan（测试计划制定）
 
 | 字段 | 值 |
 |---|---|
@@ -809,51 +798,73 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/qa/test_plan.md` |
 | 规范 | `Standardized_Repository/qa/test_plan.md` |
 | 产物 | `qa/<topic>_plan.md` + 更新 `qa/index.md` |
-| `code_validate` | 校验测试计划属于当前 Run、文件名与 topic 一致、每条验收条件至少被一个测试项或明确人工验收项覆盖 |
-| `on_advance` | 记录 `verification.test_plan_hash` |
-| instruction | "测试计划阶段：把验收条件转换为可执行测试范围、步骤、回归项、边界与证据要求，产出 qa/<topic>_plan.md" |
+| `code_validate` | `state.topics` 中每个主题都有同名 `qa/<topic>_plan.md` |
+| 门3确认处理 | 记录 `verification.test_plan_hash` |
+| instruction | "根据已确认的验收主题制定测试计划，不执行测试，也不改变主题" |
 
-### 7.11 impl（实施执行）
+具体测试项字段和文档正文结构后续单独完善。
 
-| 字段 | 值 |
-|---|---|
-| 角色 | 实施执行者 |
-| 提示词 | `Template_Repository/impl/impl.md` |
-| 规范 | `Standardized_Repository/impl/impl.md` |
-| 产物 | 实际代码修改 + `impl/<topic>.md` 实施记录 |
-| `code_validate` | 校验实施记录与当前 Run/topic 对应，并记录当前代码与实施记录内容哈希 |
-| `on_advance` | 记录 `verification.impl_hash`；清零 `test` 与 `acceptance` 的门禁状态（如果之前有） |
-| instruction | "实施阶段：执行已确认的实施/修复计划并修改真实代码，产出 impl/<topic>.md 实施记录" |
-
-**注意**：impl 不再承担"再制定一份实施计划"的职责。plan/fix_plan 已经制定计划，impl 执行。
-
-### 7.12 test（测试执行）
+### 7.9 plan（实施计划制定）
 
 | 字段 | 值 |
 |---|---|
-| 角色 | 测试执行者 |
-| 提示词 | `Template_Repository/qa/test.md` |
-| 规范 | `Standardized_Repository/qa/test.md` |
-| 产物 | `qa/<topic>_result.md` + 更新 `qa/index.md` |
-| `code_validate` | 校验结果绑定当前代码/实施记录哈希与测试计划哈希；逐项记录 pass/fail/blocked 及命令、日志、截图或人工测试证据；要求所有必测项通过且无未解决 fail/blocked |
-| `on_advance` | 记录 `verification.test_result_hash` |
-| instruction | "测试执行阶段：按照 qa/<topic>_plan.md 执行全部必要测试并记录证据，产出 qa/<topic>_result.md" |
+| 角色 | 实施计划制定者 |
+| 提示词 | `Template_Repository/plan/plan.md` |
+| 规范 | `Standardized_Repository/plan/plan.md` |
+| 产物 | `plan/index.md` + 至少一份实施计划文档 |
+| `code_validate` | 检查 `plan/index.md` 和实施计划文档存在 |
+| instruction | "根据已确认的验收计划和测试计划制定实施步骤；不在这里重新确定主题" |
 
-**强制**：该 Stage 不提供 `--skip`。失败必须回到 `impl`，修改后旧测试与验收状态失效并重新完整测试。
+实施计划文档可以按实施任务拆分，不要求与验收主题一一对应。具体正文结构后续单独完善。
 
-### 7.13 acceptance（最终验收执行）
+### 7.10 fix_plan（修复实施计划制定，bugfix 专用）
 
 | 字段 | 值 |
 |---|---|
-| 角色 | 验收执行者 |
-| 提示词 | `Template_Repository/qa/acceptance.md` |
-| 规范 | `Standardized_Repository/qa/acceptance.md` |
-| 产物 | `acceptance/<topic>_result.md` |
-| `code_validate` | 校验结果绑定验收计划哈希与最新测试结果哈希；逐项给出可复核证据；要求全部适用验收项通过且无阻塞 |
-| `on_advance` | no-op（末段 update_code_design 之前） |
-| instruction | "最终验收阶段：在测试通过后，按照 acceptance/<topic>_plan.md 执行最终验收，产出 acceptance/<topic>_result.md" |
+| 角色 | 修复实施计划制定者 |
+| 提示词 | `Template_Repository/plan/fix_plan.md` |
+| 规范 | `Standardized_Repository/plan/fix_plan.md` |
+| 产物 | `plan/index.md` + 至少一份修复实施计划文档 |
+| `code_validate` | 同 plan |
+| instruction | "根据已确认的验收计划和测试计划制定修复步骤；不在这里重新确定主题" |
 
-**强制**：该 Stage 不提供 `--skip`。门3必须由用户明确确认，AI 不得自动代验收。实现不符合计划时回到 `impl`，之后重新走 `test` 与 `acceptance`；验收计划错误、遗漏或不可判定时回到 `acceptance_plan`，修改后重新检查 `test_plan` 并使旧结果失效。
+### 7.11 topic_execution（按主题执行）
+
+| 字段 | 值 |
+|---|---|
+| 角色 | 按主题执行协调者 |
+| 提示词 | `Template_Repository/execution/topic_execution.md` |
+| 规范 | `Standardized_Repository/execution/topic_execution.md` |
+| 产物 | 实际代码、实施记录、每个主题的测试结果与验收结果 |
+| `code_validate` | `state.topics` 中每个主题都有测试结果和验收结果，且存在实施记录 |
+| 门3确认处理 | 记录实施代码快照与全部主题测试结果哈希 |
+| instruction | "分别推进各主题的实施、测试和验收；全部主题完成后才结束本阶段" |
+
+该阶段只固定顶层边界。主题内部使用什么命令、状态字段和文档结构，后续讨论后再实现。
+
+### 7.12 regression_test（最终全量回归）
+
+| 字段 | 值 |
+|---|---|
+| 角色 | 最终回归测试执行者 |
+| 提示词 | `Template_Repository/qa/final_regression.md` |
+| 规范 | `Standardized_Repository/qa/final_regression.md` |
+| 产物 | `qa/final_regression_result.md` |
+| `code_validate` | 检查最终全量回归结果文件存在 |
+| 门3确认处理 | 记录 `verification.regression_test_result_hash` |
+| instruction | "全部主题完成后，对全部已合并代码执行最终全量回归" |
+
+### 7.13 overall_acceptance（整体验收）
+
+| 字段 | 值 |
+|---|---|
+| 角色 | 整体验收执行者 |
+| 提示词 | `Template_Repository/qa/overall_acceptance.md` |
+| 规范 | `Standardized_Repository/qa/overall_acceptance.md` |
+| 产物 | `acceptance/overall_result.md` |
+| `code_validate` | 检查整体验收结果文件存在 |
+| `on_advance` | no-op |
+| instruction | "最终全量回归通过后，由用户确认整个需求是否完成" |
 
 ### 7.14 reproduce（bug 复现，bugfix 专用）
 
@@ -863,17 +874,17 @@ class StageStrategy(ABC):
 | 提示词 | `Template_Repository/reproduce/reproduce.md` |
 | 规范 | `Standardized_Repository/reproduce/reproduce.md` |
 | 产物 | `bug/<YYYY-MM-DD_HHmm-<bug描述>>.md` + 更新 `bug/index.md` |
-| `code_validate` | 检查 `bug/` 下有 bug 记录 `.md` 文件（非 index.md） |
+| `code_validate` | 比较讨论完成时的文件基线，要求 `bug/index.md` 和至少一份本次缺陷记录发生变化；检查文件名、当前工作流编号、索引链接、七个固定章节、真实环境与输入、复现状态“已复现”、根因状态“已确认”、根因说明、位置和证据 |
 | `on_advance` | no-op |
-| instruction | "复现阶段：和用户讨论 bug 现象、复现步骤，产出 bug/<YYYY-MM-DD_HHmm-<bug描述>>.md + 更新 bug/index.md" |
+| instruction | "缺陷复现阶段：使用真实环境和真实输入复现缺陷并确认根因，产出 bug/<YYYY-MM-DD_HHmm-缺陷描述>.md 并更新 bug/index.md" |
 
-**注意**：reproduce 用自己的 bug 描述做文件名，不用主题。
+**注意**：reproduce 用自己的 bug 描述做文件名，不用主题。程序只能检查文档结构、状态、链接、文件变化和明确字段，不能证明证据没有伪造；第三道门仍由用户核对真实复现过程和根因证据。
 
 ---
 
 ## 8. 命令清单
 
-> **设计约束**：每条命令的 stdout 末尾必须以 `───── 下一步：xxx ─────` 结尾（见第 6.6 节）。`status` 是纯只读，无"下一步"。
+> **设计约束**：每条命令的 stdout 末尾必须给出“下一步”。`status` 在读取旧状态时允许先执行阶段路径迁移，然后根据当前门禁状态打印正确命令。
 
 正式日常命令面：`start`、`discuss`、`gate`、`status`、`done`、`abort`（及已定参数：`--intent`、`--confirm-clean`、`gate spike --skip`、`gate <stage> --discuss-done`、`gate <stage> --confirmed`）。安装命令 `install-project` 是日常 CLI 之外的安装入口，由 `install.sh` 调用。
 
@@ -921,14 +932,14 @@ class StageStrategy(ABC):
 
 ### 8.3 `gate <stage> --discuss-done`
 - **干啥**：标记讨论完毕（第 1 道闸）
-- **前置**：命令中的 stage 必须是 `state.current_stage`，并且该 stage 已 discuss（journal 里有提示词加载记录）
+- **前置**：命令中的 stage 必须是 `state.current_stage`。该命令代表用户已经确认讨论完成，程序不读取聊天记录，也不要求 journal 中存在提示词加载记录。
 - **错误阶段**：拒绝修改状态，并打印当前 stage 和正确的下一步。当前阶段尚未完成讨论时，下一步先给出 `workflow discuss`，并同时说明讨论完成后的 `workflow gate <current_stage> --discuss-done`
-- **流程**：标记 `gate.discussion_complete = True`；写 journal
+- **流程**：标记 `gate.discussion_complete = True`；需要变化校验的阶段同时记录当前文件哈希基线；写 journal。重复调用不覆盖原基线。
 - **stdout 末尾**：`下一步：写产出文件 <artifact_paths>。写完调 workflow gate <stage>`
 
 ### 8.4 `gate <stage>`（无 flag，第 2 道闸代码校验）
 - **前置**：命令中的 stage 必须是 `state.current_stage`，并且 `discussion_complete=True`
-- **Verification Invalidation 检查**：进入下游 stage 的第 2 道闸时，先重算上游 hash 比对，不一致则清零本 stage 的所有 gate，写 journal "验证失效"，提示用户重新写产出
+- **Verification Invalidation 检查**：先重算上游 hash；不一致时退回最早受影响阶段，清零该阶段及其后续门禁和旧哈希，写 journal "验证失效"，并打印退回阶段的下一条命令
 - **流程**：
   1. 跑 `stage.code_validate(project_root)`
   2. 检查产出文件是否存在（写 journal: 产出文件检查）
@@ -944,10 +955,10 @@ class StageStrategy(ABC):
   2. 重新校验失败时清除 `code_validated`，停留在当前阶段并要求重新执行门2
   3. 标记 `user_confirmed=True`，stage 状态改 `done`
   4. 调 `stage.on_advance(project_root)`；spike 清理临时代码并写 journal“spike 清理”
-  5. **记录 verification hash**（若 stage 是 impl/test_plan/acceptance_plan/test）
+  5. **记录 verification hash**（若 stage 是 acceptance_plan/test_plan/topic_execution/regression_test）
   6. **设置 Architecture Gate Marks**（若 stage 是 code_design/revise_code_design/project_design_init/update_code_design）
   7. **设置 project_design_initialized**（若 stage 是 project_design_init，或 from_scratch 的 spec+code_design 都已确认）
-  8. **写入 topic**（若 stage 是 plan/fix_plan）
+  8. **写入 topics 并登记项目主题历史**（若 stage 是 acceptance_plan）
   9. 推进 `state.current_stage` = 下一 stage（或 `"completed"` 临时中间态，由 done 确认）
   10. 写 journal：门禁用户确认 / 阶段推进 / 主题确定 / 架构标记（若适用）
 - **stdout 末尾**（非最后 stage）：`下一步：调 workflow discuss 加载 <next_stage> stage 提示词`
@@ -966,13 +977,13 @@ class StageStrategy(ABC):
 - **stdout 末尾**：`下一步：调 workflow discuss 加载 <next_stage> stage 提示词`
 
 ### 8.7 `status`
-- **干啥**：打印 state + journal 摘要。纯只读，无副作用
+- **干啥**：打印 state + journal 摘要；读取旧版 active 状态时，先迁移到当前阶段顺序并保存
 - **stdout 内容**：
-  - `workflow_id` / `intent` / `run_status` / `current_stage` / `topic` / `started_at` / `ended_at` / `aborted_at`
+  - `workflow_id` / `intent` / `run_status` / `current_stage` / `topics` / `started_at` / `ended_at` / `aborted_at`
   - 各 stage 的 gate 状态（3 道闸 ✓/✗）
   - `architecture.preliminary_done` / `detailed_done`
   - journal 最近 10 条
-- **stdout 末尾**：无（纯只读命令，不驱动下一步；打印友好提示"按之前命令打印的下一步继续"）
+- **stdout 末尾**：根据当前阶段和门禁状态打印下一条命令
 
 ### 8.8 `done`
 - **干啥**：将 Run 标为 `completed`，写结束时间
@@ -1023,7 +1034,7 @@ class StageStrategy(ABC):
    - `from_scratch` 在 `code_design` stage 产出
    - `product_change` 在 `revise_code_design` stage 产出
    - `bugfix` 在 `project_design_init` stage 产出（若 `project_design_initialized=false`）
-2. **详细架构**（代码通过测试与最终验收后）：`acceptance` 之后强制更新/写全，反映最终被验证和接受的真实结构
+2. **详细架构**（最终全量回归和整体验收通过后）：`overall_acceptance` 之后强制更新/写全，反映最终被验证和接受的真实结构
    - 所有意图末段 `update_code_design` stage
 
 ### 9.2 Architecture Gate Marks
@@ -1046,19 +1057,16 @@ State Snapshot 中记录架构完成度：
 ## 10. 主题规则
 
 ### 10.1 主题是什么
-主题 = 文件名里的描述性标题。文件名格式：`<folder>/<YYYY-MM-DD_HHmm-<topic>>.md`。
-
-例：`plan/2026-07-20_1438-用户认证系统.md`、`acceptance/2026-07-20_1438-用户认证系统_result.md`、`qa/2026-07-20_1438-用户认证系统_plan.md`
+主题是验收计划根据已确认需求拆出的可独立验收结果名称。主题文字本身就是唯一标识，并且在项目历史中不能重复。
 
 ### 10.2 何时定
-- `from_scratch` / `product_change`：**`plan` stage** `--confirmed` 时定（写 `state.topic`）
-- `bugfix`：**`fix_plan` stage** `--confirmed` 时定
-
-`start` 不强制 `--topic`；spec / reproduce / 前段架构等可以尚无 topic。
+- 三种意图都在 **`acceptance_plan` stage** 用户确认时确定，写入 `state.topics`
+- 同时把主题写入 `.workflow_loop/project.json` 的 `topic_history`，后续 Workflow Run 不得重复使用
+- `start` 不要求主题；spec、reproduce、前段架构和 spike 可以尚无主题
 
 ### 10.3 如何复用
-- `plan`/`fix_plan` 之后的 stage 强制复用 `state.topic` 做文件名
-- 日期时间用 workflow 启动时间（不是 stage 时间），保证整个 workflow 的文件名时间一致
+- 验收计划、测试计划、主题测试结果和主题验收结果使用同一个主题名称
+- 实施计划和实施记录只要求写清关联主题，不强制与主题一一对应
 
 ### 10.4 主题前的命名规则
 - `spec`：`spec/product.md` + `spec/feature_*.md`
@@ -1066,9 +1074,11 @@ State Snapshot 中记录架构完成度：
 - `reproduce`：`bug/<YYYY-MM-DD_HHmm-<bug描述>>.md`
 - `code_design`/`revise_code_design`/`update_code_design`/`project_design_init`：`spec/architecture_code_design.md`（文档级产出，不属于某个功能主题）
 
-### 10.5 不需要主题的 stage
-- `code_design` / `revise_code_design` / `update_code_design` / `project_design_init`：产出 `spec/architecture_code_design.md`
-- `reproduce`：用 bug 描述做文件名
+### 10.5 不按主题命名的产物
+- `code_design` / `revise_code_design` / `update_code_design` / `project_design_init`：`spec/architecture_code_design.md`
+- `reproduce`：使用 bug 描述
+- `regression_test`：`qa/final_regression_result.md`
+- `overall_acceptance`：`acceptance/overall_result.md`
 
 ---
 
@@ -1132,7 +1142,7 @@ bug/
 | `overview` 命令 | 文档百科非开工阻塞；需要时后置（CONTEXT.md "Legacy CLI Removal"） |
 | journal 的查询/grep 命令 | 第一版只做追加 + status 摘要 |
 | bug 册的查询命令 | 第一版只做沉淀 |
-| 所有阶段都做统一的文档语义校验 | 第一版只对能够稳定判断的内容写代码校验；当前 `spike` 已检查清单、八章、固定字段、结果一致性、阻塞状态和设计哈希，其余阶段仍主要检查文件存在和内容哈希 |
+| 所有阶段都做统一的文档语义校验 | 第一版只检查能够稳定判断的内容；`spec` 和 `revise_code_design` 检查本阶段文件变化，`project_design_init` 检查调查证据和三类内容变化，`reproduce` 检查复现与根因固定字段，`spike` 检查清单、八章、结果一致性、阻塞状态和设计哈希；证据真实性仍由用户确认 |
 | 抽象词自动封禁 | 词本身不能判断内容是否清楚；全局规范要求 AI 自查并由用户确认 |
 | 安装时静默安装 + 直接开跑 | 安装必须独立完成，再由 AI 调 `start` |
 | 升级流程 | 第一版不做，升级流程后置单独设计 |
@@ -1153,10 +1163,10 @@ bug/
 - [x] 全局写作规范：AGENTS.md 核心规则 + discuss 每阶段完整加载 + 正式文档/聊天分级审查 + 不做关键词封禁（第 6.7 节）
 - [x] 产品设计文档规则：背景与目标依据、用户与执行角色区分、产品规则归位、修 bug 场景边界（第 7.1、7.4 节）
 - [x] 穿刺规则：真实场景、用户决定执行项、清单与详情绑定、结构化门2、设计基线哈希、`bugfix` 边界和临时内容清理（第 3、5、6、7.3、8.6、10 节）
-- [x] Stage 详典：14 个 stage 的角色/提示词/规范/产物/`code_validate`/`on_advance`/instruction（第 7 节）
+- [x] Stage 详典：顶层阶段的角色、提示词、规范、产物和门禁边界（第 7 节）
 - [x] 命令清单：start + discuss + gate（三种 flag + spike --skip）+ status + done + abort + install-project + 每条 stdout 末尾的"下一步"（第 8 节）
 - [x] 架构文档双阶段：preliminary_done / detailed_done + 同一文件两阶段 + `update_code_design` 末环强制（第 9 节）
-- [x] 主题规则：plan/fix_plan `--confirmed` 时写入 + 后续 stage 复用 + 文件名格式（第 10 节）
+- [x] 主题规则：acceptance_plan 确定主题 + 项目历史唯一 + 后续计划与执行复用（第 10 节）
 - [x] bug 册：被动沉淀 + reproduce stage 内产出 + done 不改写 bug/index.md（第 11 节）
 - [x] 扩展点：加 stage / 加 intent / 加门禁类型 / 加 on_advance / 加 hooks / 加自动路由（第 12 节）
 - [x] 第一版不做清单（第 13 节）

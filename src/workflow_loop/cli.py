@@ -9,7 +9,9 @@ from . import role_doc as role_doc_mod
 from . import project as project_mod
 from . import verification as verification_mod
 from . import installer as installer_mod
+from . import topic as topic_mod
 from .path_composer import build_stage_path, INTENT_CHOICES
+from .stages import ProjectDesignInitStage
 from .stages.base import StageStrategy, clean_spike_tmp
 
 # stdout 分隔线，用于分隔"命令输出"和"下一步指令"
@@ -151,6 +153,120 @@ def ensure_spike_baseline(
     return True
 
 
+def ensure_stage_artifact_baseline(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    stage: StageStrategy,
+) -> bool:
+    """在开始写产物前保存文件哈希；同一阶段只记录一次。"""
+    stage_state = wf_state.stages.get(stage.name())
+    if stage_state is None or stage_state.artifact_baseline_captured_at is not None:
+        return False
+
+    tracked_paths = stage.change_tracked_paths(project_root)
+    if not tracked_paths:
+        return False
+
+    stage_state.artifact_baseline_captured_at = state_mod.now_iso()
+    stage_state.artifact_baseline_hashes = verification_mod.compute_file_hashes(
+        project_root,
+        tracked_paths,
+    )
+    journal_mod.append_entry(
+        project_root,
+        "阶段产物基线",
+        "workflow.py",
+        stage=stage.name(),
+        artifact_hashes=stage_state.artifact_baseline_hashes,
+    )
+    return True
+
+
+def ensure_stage_path_current(project_root: str, wf_state: state_mod.WorkflowState) -> bool:
+    """把旧工作流状态迁移到当前阶段顺序，并保留已经完成的前置阶段。"""
+    stage_instances = build_stage_path(wf_state.intent, project_root)
+
+    # project_design_init（项目设计初始化）只在开工时决定是否加入路径。
+    # 旧 Run 已经包含它时，即使项目标记后来变为 true，也要保留这段历史。
+    if "project_design_init" in wf_state.stage_path and not any(
+        stage.name() == "project_design_init" for stage in stage_instances
+    ):
+        stage_instances.insert(0, ProjectDesignInitStage())
+
+    expected_names = [stage.name() for stage in stage_instances]
+    if wf_state.stage_path == expected_names:
+        return False
+
+    old_names = wf_state.stage_path
+    old_stages = wf_state.stages
+    new_stages = {}
+    for stage in stage_instances:
+        stage_name = stage.name()
+        if stage_name in old_stages:
+            stage_state = old_stages[stage_name]
+            stage_state.artifact_paths = stage.artifact_paths()
+        else:
+            stage_state = state_mod.StageState(
+                status="pending",
+                artifact_paths=stage.artifact_paths(),
+                artifact_produced_at=None,
+                gate=state_mod.GateState(),
+            )
+        new_stages[stage_name] = stage_state
+
+    # 旧顺序先做 plan/fix_plan。新顺序要求先验收计划、再测试计划、最后实施计划。
+    implementation_plan_name = "fix_plan" if wf_state.intent == "bugfix" else "plan"
+    if (
+        implementation_plan_name in old_names
+        and "acceptance_plan" in old_names
+        and old_names.index(implementation_plan_name) < old_names.index("acceptance_plan")
+        and (
+            new_stages["acceptance_plan"].status != "done"
+            or new_stages["test_plan"].status != "done"
+        )
+    ):
+        new_stages[implementation_plan_name] = state_mod.StageState(
+            status="pending",
+            artifact_paths=new_stages[implementation_plan_name].artifact_paths,
+        )
+
+    # 新增最终全量回归与整体验收后，旧版提前完成的详细架构不能继续算完成。
+    if "regression_test" not in old_names or "overall_acceptance" not in old_names:
+        update_state = new_stages.get("update_code_design")
+        if update_state is not None and update_state.status == "done":
+            new_stages["update_code_design"] = state_mod.StageState(
+                status="pending",
+                artifact_paths=update_state.artifact_paths,
+            )
+            wf_state.architecture.detailed_done = False
+
+    current_stage = "completed"
+    for stage_name in expected_names:
+        if new_stages[stage_name].status != "done":
+            current_stage = stage_name
+            break
+
+    for stage_name, stage_state in new_stages.items():
+        if stage_state.status != "done":
+            stage_state.status = "in_progress" if stage_name == current_stage else "pending"
+
+    previous_path = wf_state.stage_path
+    previous_stage = wf_state.current_stage
+    wf_state.stage_path = expected_names
+    wf_state.stages = new_stages
+    wf_state.current_stage = current_stage
+    journal_mod.append_entry(
+        project_root,
+        "阶段路径迁移",
+        "workflow.py",
+        previous_path=previous_path,
+        current_path=expected_names,
+        previous_stage=previous_stage,
+        current_stage=current_stage,
+    )
+    return True
+
+
 # 从 stage 实例列表里找对应 stage 名的策略实例
 # discuss 和 gate 命令用这个找当前 stage 的策略
 def get_stage_strategy(stage_name: str, state: state_mod.WorkflowState, stage_instances: list[StageStrategy]) -> StageStrategy | None:
@@ -235,6 +351,8 @@ def cmd_start(args) -> None:
         existing = state_mod.load_state(project_root)
         # 有进行中 Run → 提示继续原流程，禁止开新 Run
         if existing is not None and existing.run_status == "active":
+            if ensure_stage_path_current(project_root, existing):
+                state_mod.save_state(project_root, existing)
             print(f"有进行中 Run（workflow_id: {existing.workflow_id}）")
             print(f"当前 stage: {existing.current_stage}")
             print(f"intent: {existing.intent}")
@@ -261,10 +379,10 @@ def cmd_start(args) -> None:
         artifacts = detect_clean_artifacts(project_root)
         # 有产物且无 --confirm-clean → 只打印将删清单，不删、不开 Run
         if artifacts and not args.confirm_clean:
-            print("检测到过程产物：")
+            print("检测到以下过程产物目录包含文件；确认后会删除整个目录及其中全部内容：")
             for d in artifacts:
                 print(f"  {d}/")
-            print("从零做需要清空这些产物。")
+            print("从零做不会保留这些目录中的其他文件。")
             print_next_step("用户确认清场后，调 `workflow start --intent from_scratch --confirm-clean`")
             return
         # 有产物且有 --confirm-clean → 删除产物后继续
@@ -360,6 +478,8 @@ def cmd_discuss(args) -> None:
     if wf_state.run_status != "active":
         print(f"错误：Run 已 {wf_state.run_status}，无法 discuss。")
         sys.exit(1)
+    if ensure_stage_path_current(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
     # 工作流已完成
     if wf_state.current_stage == "completed":
         print("错误：工作流已完成。")
@@ -456,6 +576,8 @@ def cmd_gate(args) -> None:
     if wf_state.run_status != "active":
         print(f"错误：Run 已 {wf_state.run_status}，无法 gate。")
         sys.exit(1)
+    if ensure_stage_path_current(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
 
     # 要过门禁的 stage 名
     stage_name = args.stage
@@ -511,6 +633,13 @@ def cmd_gate(args) -> None:
     stage_state = wf_state.stages[stage_name]
     gate = stage_state.gate
 
+    # 找到当前阶段策略。第一道门需要它确定哪些文件要记录修改前基线。
+    stage_instances = build_stage_path(wf_state.intent, project_root)
+    stage = get_stage_strategy(stage_name, wf_state, stage_instances)
+    if stage is None:
+        print(f"错误：找不到 stage '{stage_name}' 的策略实现")
+        sys.exit(1)
+
     # ── 第 1 道闸：--discuss-done ──
     if args.discuss_done:
         # 兼容旧状态：第一道门前处理产物路径迁移，并标记缺失的入场基线
@@ -522,11 +651,13 @@ def cmd_gate(args) -> None:
         else:
             # 标记讨论完毕
             gate.discussion_complete = True
-            # 保存 state
-            state_mod.save_state(project_root, wf_state)
             # 写 journal：门禁讨论完毕
             journal_mod.append_entry(project_root, "门禁讨论完毕", "user",
                                     stage=stage_name, passed=True)
+        # 讨论结束后、开始写文件前记录基线。重复调用不会覆盖原基线。
+        ensure_stage_artifact_baseline(project_root, wf_state, stage)
+        # 保存 gate 和基线
+        state_mod.save_state(project_root, wf_state)
         # 打印讨论完毕
         print(f"═══ {stage_name} 讨论完毕 ═══")
         print(f"可以写产出文件了")
@@ -549,13 +680,10 @@ def cmd_gate(args) -> None:
         if stage_name == "spike" and ensure_spike_baseline(project_root, wf_state):
             state_mod.save_state(project_root, wf_state)
 
-        # 重建 stage 实例列表
-        stage_instances = build_stage_path(wf_state.intent, project_root)
-        # 找 StageStrategy
-        stage = get_stage_strategy(stage_name, wf_state, stage_instances)
-        if stage is None:
-            print(f"错误：找不到 stage '{stage_name}' 的策略实现")
-            sys.exit(1)
+        # 兼容旧状态：讨论已经完成但没有记录基线时，从当前文件开始记录。
+        # 这样旧文件不能直接通过，必须在记录后再次修改。
+        if ensure_stage_artifact_baseline(project_root, wf_state, stage):
+            state_mod.save_state(project_root, wf_state)
 
         # Verification Invalidation 检查：上游 hash 是否变化
         invalidations = verification_mod.check_invalidation(wf_state, project_root)
@@ -574,7 +702,7 @@ def cmd_gate(args) -> None:
                 print(f"  {from_stage} 变化 → 清零 {to_stages}")
             print(f"请重新写产出后再过门禁")
             # 下一步：重新写产出
-            print_next_step(f"重新写产出文件，写完调 `workflow gate {stage_name}`")
+            print_next_step(current_stage_next_instruction(wf_state))
             return
 
         # 跑 code_validate（第 2 道闸的核心）
@@ -630,12 +758,6 @@ def cmd_gate(args) -> None:
         sys.exit(1)
 
     # 门2通过后文件仍可能变化。门3推进前必须重新检查当前文件，不能只相信旧布尔值。
-    stage_instances = build_stage_path(wf_state.intent, project_root)
-    stage = get_stage_strategy(stage_name, wf_state, stage_instances)
-    if stage is None:
-        print(f"错误：找不到 stage '{stage_name}' 的策略实现")
-        sys.exit(1)
-
     invalidations = verification_mod.check_invalidation(wf_state, project_root)
     if invalidations:
         state_mod.save_state(project_root, wf_state)
@@ -651,7 +773,7 @@ def cmd_gate(args) -> None:
         print("═══ 用户确认前校验失败 ═══")
         for from_stage, to_stages in invalidations:
             print(f"  {from_stage} 变化 → 清零 {to_stages}")
-        print_next_step(f"重新写产出文件，写完调 `workflow gate {stage_name}`")
+        print_next_step(current_stage_next_instruction(wf_state))
         return
 
     passed, details = stage.code_validate(project_root)
@@ -672,6 +794,30 @@ def cmd_gate(args) -> None:
         print_next_step(f"修正文档后重新调 `workflow gate {stage_name}`")
         return
 
+    # acceptance_plan（验收计划）确认时，从计划文件名确定本次全部主题并登记历史。
+    if stage_name == "acceptance_plan":
+        topics = topic_mod.candidate_topics(project_root)
+        if not topics:
+            print("错误：没有找到本次新增的验收主题")
+            print_next_step("补充 acceptance/<topic>_plan.md 后重新执行验收计划门禁")
+            return
+        previous_topics = set(wf_state.topics or ([wf_state.topic] if wf_state.topic else []))
+        new_topics = [topic for topic in topics if topic not in previous_topics]
+        try:
+            project_mod.register_topics(project_root, new_topics)
+        except ValueError as exc:
+            print(f"错误：{exc}")
+            print_next_step("修改重复的主题名称后重新执行验收计划门禁")
+            return
+        wf_state.topics = topics
+        wf_state.topic = topics[0] if len(topics) == 1 else None
+        journal_mod.append_entry(
+            project_root,
+            "主题确定",
+            "user",
+            topics=topics,
+        )
+
     # 标记用户确认
     gate.user_confirmed = True
     # stage 状态改为 done
@@ -687,20 +833,25 @@ def cmd_gate(args) -> None:
             cleaned_paths=cleaned_paths,
         )
 
-    # ── 记录 verification hash ──
-    # impl stage → 记录 impl_hash，清零 test/acceptance（impl 变了下游失效）
-    if stage_name == "impl":
-        wf_state.verification.impl_hash = verification_mod.compute_impl_hash(project_root, wf_state.topic)
-        # 清零 test 和 acceptance 的门禁
-        for sn in ["test", "acceptance"]:
+    # ── 记录 verification hash（验证绑定哈希）──
+    # topic_execution（主题执行）完成后记录实施代码、实施记录和主题测试结果哈希。
+    if stage_name in ("impl", "topic_execution"):
+        wf_state.verification.impl_hash = verification_mod.compute_impl_hash(project_root, wf_state.topics)
+        # 执行结果变化后，最终全量回归和整体验收必须重做。
+        for sn in ["test", "acceptance", "regression_test", "overall_acceptance"]:
             if sn in wf_state.stages:
                 verification_mod.clear_stage_gates(wf_state.stages[sn])
+        if stage_name == "topic_execution":
+            wf_state.verification.test_result_hash = verification_mod.compute_test_result_hash(
+                project_root,
+                wf_state.topics,
+            )
     # test_plan stage → 记录 test_plan_hash
     elif stage_name == "test_plan":
-        wf_state.verification.test_plan_hash = verification_mod.compute_test_plan_hash(project_root, wf_state.topic)
+        wf_state.verification.test_plan_hash = verification_mod.compute_test_plan_hash(project_root, wf_state.topics)
     # acceptance_plan stage → 记录 acceptance_plan_hash，退 test_plan 待检查
     elif stage_name == "acceptance_plan":
-        wf_state.verification.acceptance_plan_hash = verification_mod.compute_acceptance_plan_hash(project_root, wf_state.topic)
+        wf_state.verification.acceptance_plan_hash = verification_mod.compute_acceptance_plan_hash(project_root, wf_state.topics)
         # acceptance_plan 变了 → test_plan 需要重新检查
         if "test_plan" in wf_state.stages:
             wf_state.stages["test_plan"].gate.code_validated = False
@@ -708,7 +859,11 @@ def cmd_gate(args) -> None:
             wf_state.stages["test_plan"].status = "pending"
     # test stage → 记录 test_result_hash
     elif stage_name == "test":
-        wf_state.verification.test_result_hash = verification_mod.compute_test_result_hash(project_root, wf_state.topic)
+        wf_state.verification.test_result_hash = verification_mod.compute_test_result_hash(project_root, wf_state.topics)
+    elif stage_name == "regression_test":
+        wf_state.verification.regression_test_result_hash = (
+            verification_mod.compute_regression_test_result_hash(project_root)
+        )
 
     # ── 设置 Architecture Gate Marks ──
     # 前段架构 stage → preliminary_done
@@ -734,14 +889,6 @@ def cmd_gate(args) -> None:
     elif stage_name == "spec" and wf_state.intent == "from_scratch":
         if "code_design" in wf_state.stages and wf_state.stages["code_design"].gate.user_confirmed:
             project_mod.set_project_design_initialized(project_root, True)
-
-    # ── 写入 topic（plan/fix_plan --confirmed 时）──
-    if stage_name in ("plan", "fix_plan") and wf_state.topic is None:
-        topic = args.topic
-        if topic:
-            wf_state.topic = topic
-            journal_mod.append_entry(project_root, "主题确定", "workflow.py",
-                                    topic=topic)
 
     # 写 journal：门禁用户确认
     journal_mod.append_entry(project_root, "门禁用户确认", "user",
@@ -785,7 +932,7 @@ def cmd_gate(args) -> None:
         print_next_step("调 `workflow done` 标记完成")
 
 
-# status 命令：打印 state + journal 摘要（纯只读，无副作用）
+# status 命令：打印 state + journal 摘要；旧状态会先迁移到当前阶段顺序
 def cmd_status(args) -> None:
     # 定位项目根
     project_root = resolve_project_root()
@@ -798,6 +945,8 @@ def cmd_status(args) -> None:
     if wf_state is None:
         print("还没启动工作流。调 `workflow start` 查看可选意图。")
         return
+    if wf_state.run_status == "active" and ensure_stage_path_current(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
 
     # 打印 state 摘要
     print(f"═══ 工作流状态 ═══")
@@ -805,7 +954,7 @@ def cmd_status(args) -> None:
     print(f"intent: {wf_state.intent}")
     print(f"run_status: {wf_state.run_status}")
     print(f"当前 stage: {wf_state.current_stage}")
-    print(f"主题: {wf_state.topic or '（未定）'}")
+    print(f"主题: {wf_state.topics or '（未定）'}")
     print(f"启动时间: {wf_state.started_at}")
     print(f"结束时间: {wf_state.ended_at or '（未完成）'}")
     print(f"作废时间: {wf_state.aborted_at or '（未作废）'}")
@@ -827,8 +976,7 @@ def cmd_status(args) -> None:
     recent = journal_mod.read_recent(project_root, count=10)
     for entry in recent:
         print(f"  [{entry.get('ts', '')}] {entry.get('action', '')} ({entry.get('actor', '')})")
-    # status 是纯只读命令，不打印"下一步"
-    print(f"\n（status 是只读命令，不改变状态。按之前命令打印的'下一步'继续。）")
+    print(f"\n下一步：{current_stage_next_instruction(wf_state)}")
 
 
 # done 命令：标记 Run 为 completed，写结束时间
@@ -960,11 +1108,7 @@ def main() -> None:
     # --skip：跳过 stage（仅 spike）
     gate_parser.add_argument("--skip", action="store_true",
                              help="跳过 stage（仅 spike）")
-    # --topic：设置主题（plan/fix_plan --confirmed 时用）
-    gate_parser.add_argument("--topic", default=None,
-                             help="设置主题（plan/fix_plan --confirmed 时用）")
-
-    # status 命令（纯只读）
+    # status 命令（旧状态可能先迁移阶段路径）
     subparsers.add_parser("status", help="打印状态摘要")
     # done 命令
     subparsers.add_parser("done", help="标记完成")

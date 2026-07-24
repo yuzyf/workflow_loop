@@ -8,7 +8,7 @@ SPIKE_TMP_DIR = os.path.join(".workflow_loop", "spike_tmp")
 
 
 # Stage 策略基类（ABC）
-# 每个 stage = 一个工作流环节（spec/plan/impl/...）
+# 每个 stage = 一个工作流环节（如 spec、acceptance_plan、topic_execution）
 # 知道：自己叫什么、期望产出什么文件、加载哪个提示词/规范、怎么校验产出、推进时做啥
 # 加新 stage = 加一个子类，在 path_composer.py 的路径列表里插入
 class StageStrategy(ABC):
@@ -57,6 +57,11 @@ class StageStrategy(ABC):
     # stage 推进时的钩子（gate --confirmed 通过后、推进到下一 stage 前调用）
     # 默认 no-op；spike stage 重写：删除 .workflow_loop/spike_tmp/ 下所有临时内容
     def on_advance(self, project_root: str) -> list[str]:
+        return []
+
+    # 需要证明“本阶段确实修改过”的文件范围。
+    # 第一道门记录这些文件的哈希，第二道门比较当前内容；默认阶段不要求变化校验。
+    def change_tracked_paths(self, project_root: str) -> list[str]:
         return []
 
     # 附加提示词/规范路径列表（discuss 命令额外加载）

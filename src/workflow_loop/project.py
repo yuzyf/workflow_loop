@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 
 # project.json 的相对路径（相对于项目根）
@@ -28,6 +28,8 @@ class ProjectState:
     # from_scratch 在 spec + code_design 都 --confirmed 后置 true
     # PathComposer 用这个字段决定 product_change/bugfix 是否前置 project_design_init
     project_design_initialized: bool = False
+    # 已经在验收计划阶段确认过的主题名称。跨 Workflow Run 保留，防止重复命名。
+    topic_history: list[str] = field(default_factory=list)
 
 
 # 生成 ISO 8601 UTC 时间戳（内部用，不对外暴露）
@@ -55,6 +57,7 @@ def load_project(project_root: str) -> ProjectState | None:
         installer_version=data.get("installer_version", INSTALLER_VERSION),
         installed_at=data.get("installed_at", ""),
         project_design_initialized=data.get("project_design_initialized", False),
+        topic_history=data.get("topic_history", []),
     )
 
 
@@ -96,6 +99,20 @@ def set_project_design_initialized(project_root: str, value: bool) -> None:
     # 更新标记
     project.project_design_initialized = value
     # 写回 project.json
+    save_project(project_root, project)
+
+
+def register_topics(project_root: str, topics: list[str]) -> None:
+    """把本次确认的主题写入项目历史；重复主题直接拒绝。"""
+    project = load_project(project_root)
+    if project is None:
+        project = ProjectState(installed_at=_now_iso())
+
+    duplicates = sorted(set(topics) & set(project.topic_history))
+    if duplicates:
+        raise ValueError(f"主题名称已经使用过: {duplicates}")
+
+    project.topic_history.extend(topic for topic in topics if topic not in project.topic_history)
     save_project(project_root, project)
 
 

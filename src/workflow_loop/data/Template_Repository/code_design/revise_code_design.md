@@ -13,9 +13,9 @@
 - 记录已知技术债的变更
 
 ## 约束
-- 这是设计期改架构，不是末段详细收尾。末段 `update_code_design` 在测试与最终验收后才走
+- 这是设计期改架构，不是末段详细收尾。末段 `update_code_design` 在最终全量回归和整体验收后才走
 - 文件已存在（来自 `project_design_init` 或上一轮 `revise_code_design`），本次是修改不是新建
-- 改完后通过门2（`gate revise_code_design`）校验文件有变化，门3用户确认后置 `architecture.preliminary_done=true`
+- 用户确认讨论完成并执行 `workflow gate revise_code_design --discuss-done` 时，程序记录旧文件内容哈希；改完后通过门2（`gate revise_code_design`）比较前后内容，文件没有变化不能通过。门3用户确认后置 `architecture.preliminary_done=true`
 
 ## 产出
 - `spec/architecture_code_design.md`（更新，不是新建）

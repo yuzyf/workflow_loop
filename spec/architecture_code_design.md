@@ -27,8 +27,8 @@
 
 | 结论 | 证据状态 | 依据 |
 |---|---|---|
-| 命令入口、阶段路径、三道门禁、穿刺结构化校验和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-23 运行完整测试，74 项通过；新增测试确认不能跨阶段执行门禁、门3会重新校验当前文件、旧状态不会补造设计基线、穿刺临时目录会清理并记录 journal |
-| 当前项目处于 `spike` 阶段，产品设计和初步代码设计阶段已经完成 | 运行确认 | 2026-07-23 使用当前仓库代码执行 `.venv/bin/workflow status` |
+| 命令入口、阶段路径、三道门禁、阶段产物基线、项目初始化证据、缺陷复现校验、穿刺结构化校验和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-24 运行完整测试，92 项通过；测试覆盖文件基线只记录一次、产品与架构旧文件不能冒充本阶段产物、项目初始化调查证据、缺陷复现和根因固定字段、门3重新校验以及穿刺清理 |
+| 当前项目处于 `acceptance_plan`（验收计划）阶段，产品设计、初步代码设计和穿刺阶段已经完成，其中穿刺由用户确认跳过 | 运行确认 | 2026-07-24 使用当前仓库代码执行 `.venv/bin/workflow status` |
 | 包内穿刺模板、穿刺规范与当前项目运行副本内容一致 | 文件确认 | 2026-07-23 对两组文件执行逐字节比较，结果一致 |
 | 新项目安装后会得到包内保存的阶段提示词和规范 | 运行确认、测试确认 | 安装器从 `src/workflow_loop/data/` 复制资源；安装和提示词内容测试通过 |
 | AI 是否真的完成事实调查、证据是否来自真实场景、两个候选是否语义重复 | 未由程序确认 | 当前由穿刺规范要求 AI 展示证据，再由用户审查；程序只检查工作流编号、结构、状态、阻塞和设计哈希等可明确判断的内容 |
@@ -64,6 +64,8 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 - 穿刺只验证现有事实无法回答、必须实际运行才能确认的技术不确定性；候选和跳过决定都由用户确认。
 - 穿刺必须使用真实场景，不修改正式代码；有外部写入、扣费、发送或删除时再次取得用户同意。
 - 任意穿刺项仍阻塞后续时不能进入计划；结论影响设计时必须先更新相应文档。
+- 穿刺之后先制定验收计划，再制定测试计划，最后制定实施或修复计划。
+- 各主题分别实施、测试和验收；全部主题完成后必须执行最终全量回归和整体验收。
 
 ## 3. 产品设计如何决定代码架构
 
@@ -73,13 +75,16 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 | 用户确认共同理解后才能写正式文档 | 每个阶段必须先记录讨论完成，再允许产物校验和用户确认 | `cmd_gate()` 和 `GateState` 三道门禁 | 所有场景 |
 | AI 需要得到产品模板、讨论规范和全局写作规则 | 当前阶段必须加载完整提示词、规范、角色和产出要求 | `cmd_discuss()`、`load_doc_content()`、`StageStrategy` 文档路径方法 | 所有场景 |
 | 从零设计和修改已有产品都要生成产品总说明与功能文档 | 产品设计阶段必须声明产物，并检查 `product.md` 和至少一个 `feature_*.md` 存在 | `SpecStage.artifact_paths()`、`SpecStage.code_validate()` | 从零生成、更新已有产品 |
-| 已有代码初始化要同时建立产品文档和代码架构文档 | 初始化阶段必须同时加载产品与代码设计规则，并校验三类文件 | `ProjectDesignInitStage.additional_doc_paths()`、`ProjectDesignInitStage.code_validate()` | 根据已有代码建立文档、修 bug 前初始化 |
+| 已有代码初始化要同时建立设计文档和调查证据 | 初始化阶段必须同时加载产品与代码设计规则；门2检查产品设计、代码设计和调查证据都在本阶段变化，并核对证据中的真实代码路径与运行字段 | `ProjectDesignInitStage.additional_doc_paths()`、`ProjectDesignInitStage.code_validate()`、`artifact_validation.py` | 根据已有代码建立文档、修 bug 前初始化 |
+| 缺陷必须真实复现并确认根因后才能进入穿刺 | 缺陷记录和索引必须在本阶段变化，并包含真实环境、输入、实际与期望结果、根因位置和证据 | `ReproduceStage.code_validate()`、`validate_reproduce_documents()` | 修 bug |
 | 从零开发、修改产品和修 bug 都可能需要验证技术不确定性 | 三种路径都必须包含可明确跳过的 `SpikeStage`；修 bug 放在复现和修复计划之间 | `FROM_SCRATCH_PATH`、`PRODUCT_CHANGE_BASE`、`BUGFIX_BASE` | 验证技术不确定性 |
 | 用户决定穿刺清单，旧文档不能冒充当前结果 | 清单和详情必须绑定当前 `workflow_id`，每项使用唯一 `SP-xxx` 编号和真实文档链接 | `spike_validation.py` 的 `parse_spike_index()`、`parse_spike_detail()`、`validate_spike_stage()` | 验证技术不确定性 |
 | 结论要求修改设计时必须证明文档发生变化 | 进入穿刺时记录产品设计和代码设计哈希；门2根据影响字段比较当前哈希 | `SpikeBaselineState`、`ensure_spike_baseline()`、`compute_product_design_hash()`、`compute_code_design_hash()` | 验证技术不确定性 |
 | 任意穿刺项仍阻塞后续时不能进入计划 | 门2必须解析固定状态字段，拒绝“待验证”、非法状态和“是否阻塞后续：是” | `validate_spike_stage()`、`SpikeStage.code_validate()` | 验证技术不确定性 |
 | 修 bug 的穿刺不能改变产品行为 | `bugfix` 中出现“产品设计影响：需要修改”时门2直接拒绝 | `validate_spike_stage()` 的意图分支 | 为修 bug 验证技术不确定性 |
 | 修 bug 时只在项目设计未初始化时先生成产品文档 | 项目必须保存跨工作流的初始化状态，路径生成时据此决定是否前置初始化阶段 | `ProjectState.project_design_initialized`、`build_stage_path()` | 修 bug 前初始化 |
+| 验收计划先于测试计划和实施计划 | 三种意图的阶段路径必须固定为 `acceptance_plan → test_plan → plan/fix_plan` | `path_composer.py` 的三条路径常量 | 后续计划阶段 |
+| 各主题可以分别推进，完成后再做全量回归 | 顶层路径使用 `topic_execution` 统筹主题内部执行，再进入 `regression_test` 和 `overall_acceptance` | `TopicExecutionStage`、`RegressionTestStage`、`OverallAcceptanceStage` | 后续执行阶段 |
 | 从零重做不能沿用旧设计产物 | 开始时发现旧产物必须先获得清场确认，确认后删除约定目录并重置初始化状态 | `detect_clean_artifacts()`、`clean_artifacts()`、`cmd_start()` | 从零生成 |
 | 后续验证只对当前代码和计划有效 | 上游实施、测试计划或验收计划改变时，已通过的下游门禁必须失效 | `VerificationState`、`check_invalidation()` | 当前产品文档未单独定义；属于全项目约束 |
 | 每条命令都要告诉 AI 下一步做什么 | 所有改变流程的命令必须在输出末尾给出下一条操作 | `print_next_step()` 和各 `cmd_*()` 命令 | 所有场景及后续阶段 |
@@ -93,8 +98,8 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 ```mermaid
 flowchart TB
     L1["命令与 AI 协作层<br/>承接用户提出需求、AI 调命令和 stdout 下一步<br/>src/workflow_loop/cli.py"]
-    L2["工作流规则层<br/>决定阶段路径、阶段产物和结构化门禁校验<br/>path_composer.py / stages/ / role_doc.py / spike_validation.py"]
-    L3["状态与一致性层<br/>保存当前 Run、穿刺设计基线、验证哈希和审计记录<br/>state.py / project.py / verification.py / journal.py"]
+    L2["工作流规则层<br/>决定阶段路径、阶段产物和结构化门禁校验<br/>path_composer.py / stages/ / role_doc.py / artifact_validation.py / spike_validation.py"]
+    L3["状态与一致性层<br/>保存当前 Run、阶段产物基线、主题历史、穿刺设计基线、验证哈希和审计记录<br/>state.py / project.py / verification.py / journal.py"]
     L4["提示词与安装资源层<br/>保存模板、规范和安装到目标项目的运行骨架<br/>data/ / installer.py / install.sh / pyproject.toml"]
 
     L1 --> L2
@@ -129,17 +134,18 @@ flowchart TB
   - [src/workflow_loop/stages/base.py](../src/workflow_loop/stages/base.py)：`StageStrategy`，即所有阶段共同遵守的代码接口。
   - [src/workflow_loop/stages/stages.py](../src/workflow_loop/stages/stages.py)：`SpecStage`、`ProjectDesignInitStage` 等具体阶段。
   - [src/workflow_loop/role_doc.py](../src/workflow_loop/role_doc.py)：`ROLE_DOC_MAP`，即阶段角色和中文职责说明。
+  - [src/workflow_loop/artifact_validation.py](../src/workflow_loop/artifact_validation.py)：比较阶段文件基线，检查项目初始化调查证据和缺陷复现文档。
   - [src/workflow_loop/spike_validation.py](../src/workflow_loop/spike_validation.py)：解析穿刺清单和结论文档，执行穿刺门2的结构化校验。
 - **对外约定**：`build_stage_path()` 接收 `from_scratch`、`product_change` 或 `bugfix`，返回有顺序的阶段对象；未知意图直接抛出错误。每个阶段对象提供统一方法供 CLI 调用。
-- **关键逻辑**：`product_change` 和 `bugfix` 只有在 `project_design_initialized=false` 时前置 `ProjectDesignInitStage`；三种意图都包含可选 `SpikeStage`；`bugfix` 的顺序是 `reproduce → spike → fix_plan`。
+- **关键逻辑**：`product_change` 和 `bugfix` 只有在 `project_design_initialized=false` 时前置 `ProjectDesignInitStage`；三种意图都包含可选 `SpikeStage`；`bugfix` 在 `reproduce → spike` 后进入共享后半截的 `acceptance_plan → test_plan → fix_plan`。
 - **验证位置**：[tests/test_path_composer.py](../tests/test_path_composer.py)、[tests/test_stages.py](../tests/test_stages.py)。
 
 ### 4.4 状态与一致性层
 
 - **承接的产品内容**：工作流不能跳过门禁；项目初始化状态跨多次工作流保留；穿刺结论要求修改设计时必须证明文档变化；上游内容改变后旧测试和验收不能继续有效。
-- **代码职责**：把当前状态写入 JSON；把历史动作追加到 JSONL；记录穿刺开始时的设计基线；计算产品、代码和验证产物哈希；发现变化时执行门禁判断或清零下游门禁。
+- **代码职责**：把当前状态写入 JSON；把历史动作追加到 JSONL；记录讨论完成时的阶段文件基线和穿刺开始时的设计基线；计算产品、代码和验证产物哈希；发现变化时执行门禁判断或清零下游门禁。
 - **代码位置**：
-  - [src/workflow_loop/state.py](../src/workflow_loop/state.py)：`WorkflowState` 是单次工作流快照，`GateState` 是三道门禁状态，`SpikeBaselineState` 是穿刺开始时的设计基线，`save_state()` 和 `load_state()` 负责 `.workflow_loop/state.json`。
+  - [src/workflow_loop/state.py](../src/workflow_loop/state.py)：`WorkflowState` 是单次工作流快照，`StageState` 保存阶段文件基线和门禁状态，`SpikeBaselineState` 保存穿刺开始时的设计基线，`save_state()` 和 `load_state()` 负责 `.workflow_loop/state.json`。
   - [src/workflow_loop/project.py](../src/workflow_loop/project.py)：`ProjectState` 是跨工作流项目状态，`project_design_initialized` 表示项目设计是否已经初始化。
   - [src/workflow_loop/verification.py](../src/workflow_loop/verification.py)：`compute_product_design_hash()` 只计算产品总说明实际链接的功能文档，`compute_code_design_hash()` 计算代码设计文档，`check_invalidation()` 检查实施、测试计划和验收计划是否变化。
   - [src/workflow_loop/journal.py](../src/workflow_loop/journal.py)：`append_entry()` 向 `.workflow_loop/journal.jsonl` 追加历史记录。
@@ -167,9 +173,9 @@ flowchart TB
 - **对应产品内容**：四种产品设计文档生成场景、三种意图都可执行或跳过穿刺，以及修 bug 时是否需要先初始化产品设计。
 - **代码位置**：`src/workflow_loop/cli.py` 中的 `cmd_start()`；`src/workflow_loop/path_composer.py` 中的 `build_stage_path()`。
 - **上游**：AI 调用 `workflow start --intent <意图>`。
-- **主要处理**：检查安装和活跃工作流；从零设计时检查是否需要清场；读取项目初始化状态；生成阶段对象；初始化每个阶段的门禁状态。修 bug 路径固定包含 `reproduce → spike → fix_plan`。
+- **主要处理**：检查安装和活跃工作流；从零设计时检查是否需要清场；读取项目初始化状态；生成阶段对象；初始化每个阶段的门禁状态。三种路径在穿刺后统一进入 `acceptance_plan → test_plan → plan/fix_plan → topic_execution → regression_test → overall_acceptance → update_code_design`。
 - **下游**：调用 `save_state()` 写入 `.workflow_loop/state.json`，调用 `append_entry()` 记录启动和路径，最后提示执行 `workflow discuss`。
-- **状态和数据**：写入 `workflow_id`、`intent`、`stage_path`、`current_stage`、每个阶段的 `GateState`；从零设计同时把 `project_design_initialized` 重置为 `false`。
+- **状态和数据**：写入 `workflow_id`、`intent`、`stage_path`、`current_stage`、每个阶段的 `GateState`；验收计划确认后写入 `topics`，并把主题登记到项目级 `topic_history`。
 - **失败结果**：项目未安装、已有活跃工作流或意图非法时停止；发现旧产物但没有清场确认时不删除、不启动。
 - **验证位置**：`test_start_*`、`test_active_run_guard`、`test_from_scratch_path`、`test_product_change_*`、`test_bugfix_*`。
 
@@ -191,7 +197,7 @@ flowchart TB
 - **对应产品内容**：用户确认共同理解或穿刺执行清单后才能写正式产物，用户检查产物后才能作为后续依据。
 - **代码位置**：`src/workflow_loop/cli.py` 中的 `cmd_gate()`；`src/workflow_loop/state.py` 中的 `GateState`。
 - **上游**：AI 分别调用 `workflow gate <stage> --discuss-done`、`workflow gate <stage>`、`workflow gate <stage> --confirmed`。
-- **主要处理**：所有门禁先检查命令中的阶段是否等于 `current_stage`（当前阶段）；不相等时拒绝操作，并根据当前阶段的三道门状态打印正确的下一步。第一道门写 `discussion_complete=true`；第二道门调用当前阶段的 `code_validate()`；第三道门推进前重新执行上游失效检查和 `code_validate()`，当前文件仍有效时才写 `user_confirmed=true`、阶段状态 `done` 并进入下一阶段。真正进入 `spike` 时调用 `ensure_spike_baseline()`；`gate spike --skip` 清理临时目录并直接进入后续计划阶段。
+- **主要处理**：所有门禁先检查命令中的阶段是否等于 `current_stage`（当前阶段）；不相等时拒绝操作，并根据当前阶段的三道门状态打印正确的下一步。第一道门把用户的讨论完成确认写为 `discussion_complete=true`，程序不检查聊天记录；对 `spec`、`project_design_init`、`revise_code_design` 和 `reproduce` 同时调用 `ensure_stage_artifact_baseline()` 保存修改前文件哈希。第二道门调用当前阶段的 `code_validate()`；第三道门推进前重新执行上游失效检查和 `code_validate()`，当前文件仍有效时才写 `user_confirmed=true`、阶段状态 `done` 并进入下一阶段。真正进入 `spike` 时调用 `ensure_spike_baseline()`；`gate spike --skip` 清理临时目录并直接进入后续计划阶段。
 - **下游**：更新状态文件和 journal；架构阶段更新架构标记；项目设计初始化完成时更新项目级初始化状态。
 - **状态和数据**：写 `.workflow_loop/state.json`、`.workflow_loop/project.json` 和 `.workflow_loop/journal.jsonl`。
 - **失败结果**：跨阶段调用时不推进，并显示当前阶段和正确命令；跳过前一道门、产物缺失、门2后产物被改坏或上游验证失效时也不推进。
@@ -199,14 +205,14 @@ flowchart TB
 
 ### 5.4 产品设计产物校验
 
-- **为什么关键**：这是程序判断产品设计文档是否已经出现的唯一位置。
-- **对应产品内容**：产品设计阶段必须产生产品总说明和至少一份功能文档；已有项目初始化必须同时产生代码架构文档。
-- **代码位置**：`src/workflow_loop/stages/stages.py` 中的 `SpecStage.code_validate()` 和 `ProjectDesignInitStage.code_validate()`。
+- **为什么关键**：这里防止旧产品文档和没有调查证据的初始化结果直接通过门禁。
+- **对应产品内容**：产品设计阶段必须产生本阶段修改过的产品总说明和功能文档；已有项目初始化必须同时产生产品设计、代码架构文档和调查证据。
+- **代码位置**：`src/workflow_loop/stages/stages.py` 中的 `SpecStage.code_validate()` 和 `ProjectDesignInitStage.code_validate()`；`src/workflow_loop/artifact_validation.py` 中的 `changed_stage_paths()` 和 `validate_project_design_init_evidence()`。
 - **上游**：`cmd_gate()` 执行第二道门。
-- **主要处理**：检查 `spec/product.md`；使用 `glob` 查找英文前缀 `feature_*.md`；初始化阶段额外检查 `spec/architecture_code_design.md`。
+- **主要处理**：检查 `spec/product.md` 和英文前缀 `feature_*.md`；比较讨论完成时与当前的文件哈希。从零创建要求产品总说明和至少一份功能文档都新建；修改产品要求产品总说明更新，并且至少一份功能文档新增、修改或删除。初始化阶段还要求 `spec/architecture_code_design.md` 与 `spec/project_design_init_evidence.md` 发生变化，证据必须绑定当前工作流编号、列出真实存在的代码文件，并按运行条件填写实际命令和结果或无法运行原因。
 - **下游**：返回 `(是否通过, 具体说明)` 给 `cmd_gate()`。
 - **状态和数据**：校验通过后，`cmd_gate()` 写 `code_validated=true` 和 `artifact_produced_at`。
-- **失败结果**：缺少任一必需文件时列出缺失项并停留在当前阶段。
+- **失败结果**：缺少文件、文件没有相对基线变化、初始化证据没有真实代码路径或运行字段不完整时，列出原因并停留在当前阶段。
 - **验证位置**：`tests/test_stages.py`。
 
 ### 5.5 项目级设计初始化状态
@@ -226,9 +232,9 @@ flowchart TB
 - **对应产品内容**：当前产品文档没有单独定义该行为；它是整个 Workflow Loop 的一致性约束。
 - **代码位置**：`src/workflow_loop/verification.py` 中的 `compute_impl_hash()`、`check_invalidation()` 和 `clear_stage_gates()`。
 - **上游**：实施、测试计划或验收计划确认时记录哈希；后续执行第二道门时重新计算。
-- **主要处理**：发现实施变化时清零测试和验收；测试计划变化时清零测试和验收；验收计划变化时清零验收并退回测试计划检查。
-- **状态和数据**：读写 `WorkflowState.verification` 和下游阶段门禁。
-- **失败结果**：发现变化时不继续当前校验，要求重新生成下游产物。
+- **主要处理**：验收计划变化退回 `acceptance_plan`；测试计划变化退回 `test_plan`；实施代码、实施记录或主题测试结果变化退回 `topic_execution`；最终全量回归结果变化退回 `regression_test`。同时清零该阶段及其后续门禁和旧哈希。
+- **状态和数据**：读写 `WorkflowState.verification`、`current_stage` 和受影响阶段门禁。
+- **失败结果**：发现变化时不继续当前校验，直接打印退回阶段的下一条命令。
 - **验证位置**：`tests/test_verification.py`。
 
 ### 5.7 穿刺清单、证据和设计回写校验
@@ -243,15 +249,26 @@ flowchart TB
 - **失败结果**：旧工作流文档、缺少结论、非法状态、仍然阻塞、未写剩余风险、设计哈希未变化、旧工作流没有基线却要求证明设计变化，或者 `bugfix` 要求修改产品设计时，返回具体错误并停留在穿刺阶段。
 - **验证位置**：`tests/test_spike_validation.py`、`tests/test_commands.py`、`tests/test_stages.py`、`tests/test_verification.py`。
 
+### 5.8 缺陷复现和根因校验
+
+- **为什么关键**：修复计划必须建立在真实复现和已确认根因上，任意 Markdown 文件不能冒充缺陷记录。
+- **对应流程**：`bugfix` 中的 `reproduce`（缺陷复现）阶段。
+- **代码位置**：`src/workflow_loop/stages/stages.py` 中的 `ReproduceStage.code_validate()`；`src/workflow_loop/artifact_validation.py` 中的 `validate_reproduce_documents()`。
+- **上游**：用户确认复现讨论完成时，`cmd_gate()` 保存 `bug/index.md` 和已有缺陷记录的文件哈希；AI 使用真实环境和真实输入复现缺陷。
+- **主要处理**：要求 `bug/index.md` 和至少一份缺陷记录相对基线发生变化；检查文件名、当前工作流编号、索引链接、七个章节、真实运行环境、真实输入、复现状态“已复现”、根因状态“已确认”、根因说明、根因位置和根因证据。
+- **下游**：门2通过后等待用户核对证据；门3确认后进入 `spike`，只讨论修复仍依赖的技术不确定性。
+- **失败结果**：索引未更新、只有旧文件、文件名错误、复现或根因没有确认、缺少真实条件或根因证据时停留在 `reproduce`。
+- **验证位置**：`test_reproduce_stage_requires_current_structured_bug_record_and_index`、`test_reproduce_stage_rejects_arbitrary_markdown`。
+
 ## 6. 各产品功能的代码设计
 
 ### 6.1 【功能】生成产品设计文档
 
 #### 6.1.1 产品要求
 
-AI 和用户先形成共同理解。用户确认后，AI 根据统一模板生成或修改 `spec/product.md` 和 `spec/feature_<english-name>.md`。已有代码项目首次初始化时，还要同时生成 `spec/architecture_code_design.md`。对应产品说明见[功能文档](./feature_product_design_document_generation.md)。
+AI 和用户先形成共同理解。用户确认后，AI 根据统一模板生成或修改 `spec/product.md` 和 `spec/feature_<english-name>.md`。已有代码项目首次初始化时，还要同时生成 `spec/architecture_code_design.md` 和 `spec/project_design_init_evidence.md`。对应产品说明见[功能文档](./feature_product_design_document_generation.md)。
 
-Python 程序负责选择阶段、打印提示词、保存门禁状态和检查文件是否存在。产品内容本身由 AI 根据提示词写入文件，不是由 Python 函数自动拼接生成。
+Python 程序负责选择阶段、打印提示词、保存门禁状态、比较文件基线并检查明确字段。产品内容本身由 AI 根据提示词写入文件，不是由 Python 函数自动拼接生成。
 
 #### 6.1.2 场景：从零生成产品设计文档
 
@@ -263,9 +280,9 @@ flowchart TD
     B --> C["保存当前阶段为 spec<br/>state.py / save_state()<br/>写 state.json 和 journal.jsonl"]
     C --> D["加载产品模板和规范<br/>cli.py / cmd_discuss()<br/>SpecStage 文档路径"]
     D --> E["AI 与用户讨论并取得共同理解<br/>使用 spec 模板与规范；Python 不参与聊天"]
-    E --> F["记录讨论完成<br/>cli.py / cmd_gate()<br/>discussion_complete=true"]
+    E --> F["记录讨论完成和文件基线<br/>cli.py / cmd_gate()<br/>discussion_complete=true"]
     F --> G["AI 写产品文档<br/>spec/product.md + spec/feature_*.md<br/>没有对应 Python 生成函数"]
-    G --> H["检查文件存在<br/>stages.py / SpecStage.code_validate()"]
+    G --> H["检查文件存在和本阶段变化<br/>stages.py / SpecStage.code_validate()"]
     H --> I["用户确认后推进<br/>cli.py / cmd_gate()<br/>current_stage=code_design"]
 ```
 
@@ -273,9 +290,9 @@ flowchart TD
 |---|---|---|---|---|---|---|
 | 生成从零阶段路径 | AI 传入 `from_scratch` | `cli.py` 的 `cmd_start()`；`path_composer.py` 的 `build_stage_path()` | 检查安装和活跃工作流；发现清场范围内存在旧产物时进入清场确认；返回以 `spec` 开始的固定阶段列表 | `state.json` 中 `current_stage=spec` | 有活跃工作流时拒绝；有旧产物但未确认清场时不启动 | `test_start_with_intent_from_scratch_no_artifacts`、清场测试、路径测试 |
 | 加载产品模板和规范 | 当前阶段为 `spec` | `cli.py` 的 `cmd_discuss()`；`SpecStage.prompt_doc_path()` 和 `standard_doc_path()` | 完整读取全局写作规范、产品模板、产品流程规范和角色说明 | stdout 给 AI 完整工作材料；journal 追加加载记录 | 文档缺失时打印具体缺失路径 | `test_discuss_loads_global_writing_standard_before_stage_docs` |
-| 记录讨论完成 | 用户已经明确同意共同理解 | `cli.py` 的 `cmd_gate()` | 处理 `--discuss-done`，把第一道门写为通过 | `GateState.discussion_complete=true` | 没有当前工作流或阶段不存在时停止 | `test_gate_order_enforced` 反向证明不能跳过 |
-| 写产品文档 | 已经通过讨论完成门禁 | 无 Python 生成函数；依据 `Template_Repository/spec/spec.md` | AI 按九章产品总说明和六章功能文档模板写文件 | `spec/product.md`、至少一个 `spec/feature_*.md` | 内容错误由用户审查；程序当前只检查文件存在 | 产品文档本身、安装提示词测试 |
-| 校验并推进 | 文件已写完，随后用户确认 | `SpecStage.code_validate()`；`cmd_gate()` | 第二道门检查文件；第三道门标记用户确认并进入 `code_design` | 阶段状态 `done`，下一阶段 `in_progress` | 文件缺失时停留在 `spec`；未过第二道门不能确认 | `tests/test_stages.py`、命令门禁测试 |
+| 记录讨论完成 | 用户已经明确同意共同理解 | `cli.py` 的 `cmd_gate()`、`ensure_stage_artifact_baseline()` | 处理 `--discuss-done`，把第一道门写为通过，并保存 `product.md` 和已有功能文档的哈希；程序不检查聊天内容 | `discussion_complete=true`、`artifact_baseline_hashes` 写入 | 没有当前工作流或阶段不存在时停止 | `test_gate_order_enforced`、`test_discuss_done_records_spec_baseline_once` |
+| 写产品文档 | 已经通过讨论完成门禁 | 无 Python 生成函数；依据 `Template_Repository/spec/spec.md` | AI 按产品总说明和功能文档模板写文件 | `spec/product.md`、至少一个 `spec/feature_*.md` | 章节和产品语义仍由 AI 自查和用户确认 | 产品文档本身、安装提示词测试 |
+| 校验并推进 | 文件已写完，随后用户确认 | `SpecStage.code_validate()`；`changed_stage_paths()`；`cmd_gate()` | 第二道门检查文件存在和相对基线的变化；从零创建要求产品总说明和功能文档都新建；第三道门重新校验后进入 `code_design` | 阶段状态 `done`，下一阶段 `in_progress` | 文件缺失或旧文件未变化时停留在 `spec` | `tests/test_stages.py`、命令门禁测试 |
 
 #### 6.1.3 场景：更新已有产品设计文档
 
@@ -288,7 +305,7 @@ flowchart TD
     B -->|false| D["先进入 project_design_init<br/>复用 6.1.4 的初始化流程"]
     C --> E["加载现有产品修改规则<br/>cli.py / cmd_discuss()<br/>SpecStage 文档路径"]
     E --> F["AI 读取现有 product.md、feature_*.md 和相关代码<br/>按确认结果修改受影响文件"]
-    F --> G["检查产品文件存在<br/>stages.py / SpecStage.code_validate()"]
+    F --> G["比较修改前后的产品文件<br/>stages.py / SpecStage.code_validate()"]
     G --> H["用户确认后进入 revise_code_design<br/>cli.py / cmd_gate()"]
 ```
 
@@ -296,7 +313,7 @@ flowchart TD
 |---|---|---|---|---|---|---|
 | 判断是否需要初始化 | AI 传入 `product_change` | `project.py` 的 `is_project_design_initialized()`；`path_composer.py` 的 `build_stage_path()` | 读取 `.workflow_loop/project.json`，决定是否在 `spec` 前加入 `ProjectDesignInitStage` | 不同的 `stage_path` | 项目状态文件缺失时按未初始化处理 | `test_product_change_with_uninitialized`、`test_product_change_with_initialized` |
 | 修改受影响文档 | 用户已经确认本次变化 | 无 Python 修改函数；依据产品设计流程规范 | AI 自行读取现有文档和代码，只修改确认受影响的内容 | 更新 `product.md` 和一个或多个 `feature_*.md` | 程序不能判断是否误改无关内容 | 产品流程规范；当前无自动内容测试 |
-| 文件校验 | AI 写完文档 | `SpecStage.code_validate()` | 检查产品总说明和至少一份英文功能文件存在 | 第二道门可通过 | 当前不会校验文件是否真的发生变化 | `tests/test_stages.py`；差异见第 8 章 |
+| 文件校验 | AI 写完文档 | `SpecStage.code_validate()`、`changed_stage_paths()` | 检查产品总说明存在；要求 `product.md` 更新，并且至少一份英文功能文档新增、修改或删除 | 第二道门可通过 | 只有旧文件或只修改其中一类时失败 | `test_product_change_spec_requires_product_and_feature_changes` |
 
 #### 6.1.4 场景：根据已有代码建立产品设计文档
 
@@ -306,19 +323,19 @@ flowchart TD
 flowchart TD
     A["路径要求初始化<br/>path_composer.py / build_stage_path()<br/>project_design_initialized=false"] --> B["加载专用调查规则和两套文档模板<br/>cli.py / cmd_discuss()<br/>ProjectDesignInitStage.additional_doc_paths()"]
     B --> C["AI 查看说明、配置、入口、调用链和测试<br/>具备安全条件时运行项目<br/>由提示词约束，无 Python 自动调查函数"]
-    C --> D["用户确认当前产品和代码理解<br/>cli.py / cmd_gate()<br/>discussion_complete=true"]
-    D --> E["AI 一次写三类文档<br/>product.md + feature_*.md + architecture_code_design.md"]
-    E --> F["同时检查三类文件<br/>stages.py / ProjectDesignInitStage.code_validate()"]
+    C --> D["用户确认当前产品和代码理解<br/>cli.py / cmd_gate()<br/>记录初始化文件基线"]
+    D --> E["AI 写设计文档和调查证据<br/>product.md + feature_*.md + architecture_code_design.md + project_design_init_evidence.md"]
+    E --> F["检查三类内容发生变化并校验证据<br/>stages.py + artifact_validation.py"]
     F --> G["用户确认初始化结果<br/>cli.py / cmd_gate()<br/>project.py / set_project_design_initialized()"]
     G --> H["写初始化状态和初步架构标记<br/>project_design_initialized=true<br/>architecture.preliminary_done=true"]
 ```
 
 | 图中步骤 | 触发和输入 | 代码位置 | 具体处理逻辑 | 产生的状态、数据或输出 | 失败时的结果 | 验证位置 |
 |---|---|---|---|---|---|---|
-| 加载组合规则 | 当前阶段为 `project_design_init` | `ProjectDesignInitStage.prompt_doc_path()`、`standard_doc_path()`、`additional_doc_paths()`；`cmd_discuss()` | 先打印专用调查提示词和规范，再附加打印产品文档模板/规范与代码架构模板/规范 | AI 同时获得调查方法和三类文档结构 | 任一资源缺失时打印缺失路径 | `test_project_design_init_discuss_prints_investigation_and_output_rules`、`test_project_design_init_loads_specialized_and_shared_documents` |
-| 查看和运行代码 | 已有代码项目可安全调查 | 无 Python 自动调查函数；由 `project_design_init` 规范约束 AI | AI 阅读项目并执行测试、构建或主要入口，把结论分成运行确认、测试确认、代码确认、未确认和冲突 | 形成用户确认的当前产品与代码理解 | 是否真的执行只能由运行记录、聊天和用户审查确认 | 当前提示词测试；本项目本次实际运行提供示例证据 |
-| 一次写三类文档 | 用户确认当前理解 | 无 Python 生成函数；依据三套模板 | AI 写产品总说明、全部必要功能文档和代码架构文档 | 三类 `spec/` 文件 | 文档之间是否一致目前没有程序语义校验 | 用户审查；差异见第 8 章 |
-| 校验和标记初始化 | 三类文件已经存在并经用户确认 | `ProjectDesignInitStage.code_validate()`；`cmd_gate()`；`set_project_design_initialized()` | 第二道门检查文件；第三道门更新阶段、架构标记和项目级初始化状态 | 后续工作流可跳过重复初始化 | 任一文件缺失时不推进 | `tests/test_stages.py`、项目状态和路径测试 |
+| 加载组合规则 | 当前阶段为 `project_design_init` | `ProjectDesignInitStage.prompt_doc_path()`、`standard_doc_path()`、`additional_doc_paths()`；`cmd_discuss()` | 先打印专用调查提示词和规范，再附加打印产品文档模板/规范与代码架构模板/规范 | AI 同时获得调查方法、三类设计文档结构和调查证据结构 | 任一资源缺失时打印缺失路径 | `test_project_design_init_discuss_prints_investigation_and_output_rules`、`test_project_design_init_loads_specialized_and_shared_documents` |
+| 查看和运行代码 | 已有代码项目可安全调查 | 无 Python 自动调查函数；由 `project_design_init` 规范约束 AI | AI 阅读项目并执行测试、构建或主要入口，把实际代码路径、运行条件、命令、结果和未验证范围写入调查证据 | `spec/project_design_init_evidence.md` | 程序能核对代码路径和固定字段，但证据是否真实仍由用户确认 | 项目初始化证据测试、提示词测试 |
+| 写设计文档和调查证据 | 用户确认当前理解 | 无 Python 生成函数；依据产品模板、代码设计模板和初始化规范 | AI 写产品总说明、功能文档、代码架构文档和调查证据 | 四类 `spec/` 产物 | 文档语义是否完全一致仍由用户审查 | `tests/test_stages.py` |
+| 校验和标记初始化 | 设计文档和调查证据已经写完并经用户确认 | `ProjectDesignInitStage.code_validate()`；`validate_project_design_init_evidence()`；`cmd_gate()`；`set_project_design_initialized()` | 第二道门要求产品设计、代码设计和调查证据都相对基线变化，并检查当前工作流编号、真实代码路径、运行条件和结果；第三道门更新阶段、架构标记和项目级初始化状态 | 后续工作流可跳过重复初始化 | 文件未变化、代码路径不存在或运行字段不完整时不推进 | `tests/test_stages.py`、项目状态和路径测试 |
 
 #### 6.1.5 场景：修 bug 前初始化产品设计
 
@@ -328,15 +345,15 @@ flowchart TD
 flowchart TD
     A["AI 启动修 bug<br/>workflow start --intent bugfix"] --> B["读取项目初始化状态<br/>project.py / is_project_design_initialized()"]
     B -->|false| C["前置 ProjectDesignInitStage<br/>path_composer.py / build_stage_path()"]
-    C --> D["执行 6.1.4 的代码调查、文档生成和三类文件校验"]
+    C --> D["执行 6.1.4 的代码调查、设计文档与调查证据校验"]
     D --> E["初始化完成后进入 reproduce<br/>cli.py / cmd_gate()<br/>current_stage=reproduce"]
     B -->|true| E
 ```
 
 | 图中步骤 | 触发和输入 | 代码位置 | 具体处理逻辑 | 产生的状态、数据或输出 | 失败时的结果 | 验证位置 |
 |---|---|---|---|---|---|---|
-| 生成 bugfix 路径 | AI 传入 `bugfix` | `path_composer.py` 的 `build_stage_path()` | 未初始化时返回 `project_design_init → reproduce → spike → fix_plan → ...`；已初始化时从 `reproduce` 开始并同样经过可选 `spike` | `state.json` 保存固定阶段路径 | 未知意图时抛出错误 | `test_bugfix_with_uninitialized`、`test_bugfix_with_initialized` |
-| 初始化后推进 | 三类文档通过校验并由用户确认 | `cli.py` 的 `cmd_gate()` | 设置项目初始化状态和初步架构标记，进入下一阶段 `reproduce` | 修复过程获得产品和代码设计基线 | 未通过门禁时不能进入复现阶段 | 项目状态、阶段和命令测试 |
+| 生成 bugfix 路径 | AI 传入 `bugfix` | `path_composer.py` 的 `build_stage_path()` | 未初始化时前置 `project_design_init`；随后固定进入 `reproduce → spike → acceptance_plan → test_plan → fix_plan → topic_execution → regression_test → overall_acceptance → update_code_design` | `state.json` 保存固定阶段路径 | 未知意图时抛出错误 | `test_bugfix_with_uninitialized`、`test_bugfix_with_initialized` |
+| 初始化后推进 | 设计文档和调查证据通过校验并由用户确认 | `cli.py` 的 `cmd_gate()` | 设置项目初始化状态和初步架构标记，进入下一阶段 `reproduce` | 修复过程获得产品和代码设计基线 | 未通过门禁时不能进入复现阶段 | 项目状态、阶段和命令测试 |
 
 #### 6.1.6 产品规则和异常怎样落实
 
@@ -346,7 +363,7 @@ flowchart TD
 | 未确认就尝试校验 | 第一门仍为 `false` | 产品文件校验前 | `cmd_gate()` 第二道门前置检查 | 打印错误并停止，不执行 `code_validate()` |
 | 产品总说明缺失 | 执行产品设计文件校验 | `SpecStage.code_validate()` | `stages.py` | 返回失败并指出 `spec/product.md` 不存在 |
 | 没有英文功能文档 | `spec/` 中没有 `feature_*.md` | `SpecStage.code_validate()` | `glob.glob(..., "feature_*.md")` | 返回失败，旧中文文件名不能冒充功能文档 |
-| 已有项目三类文档不完整 | 执行初始化文件校验 | `ProjectDesignInitStage.code_validate()` | `stages.py` | 列出缺少的产品总说明、功能文档或代码架构文档 |
+| 已有项目初始化产物不完整 | 执行初始化文件校验 | `ProjectDesignInitStage.code_validate()` | `stages.py`、`artifact_validation.py` | 列出缺少的设计文档或调查证据；文件未变化、代码路径不存在或运行字段不完整时也失败 |
 | 从零设计发现旧产物 | `spec/`、`plan/` 等约定目录已有文件 | `cmd_start()` 的清场分支 | `detect_clean_artifacts()`、`clean_artifacts()` | 未确认时只列清单；确认后才删除并启动 |
 | 已有活跃工作流 | 再次执行带意图的 `start` | `cmd_start()` 开始位置 | `state.is_active_run()` | 拒绝启动，要求先完成或作废旧工作流 |
 | 产品历史没有依据 | AI 准备写产品背景或历史原因 | 产品讨论和写文档阶段 | 产品模板、产品流程规范、全局写作规范 | 要求继续询问或标记未确认；程序当前不能自动发现编造 |
@@ -377,17 +394,17 @@ flowchart TD
     J --> K["用户检查结论、剩余风险和设计更新"]
     K --> M["第三道门重新校验当前文件<br/>cmd_gate(--confirmed)<br/>stage.code_validate()"]
     M -->|失败| I
-    M -->|通过| L["写用户确认并清理 spike_tmp<br/>记录 spike 清理 journal<br/>进入 plan 或 fix_plan"]
+    M -->|通过| L["写用户确认并清理 spike_tmp<br/>记录 spike 清理 journal<br/>进入 acceptance_plan"]
 ```
 
 | 图中步骤 | 触发和输入 | 代码位置 | 具体处理逻辑 | 产生的状态、数据或输出 | 失败时的结果 | 验证位置 |
 |---|---|---|---|---|---|---|
 | 记录设计基线 | 前一阶段确认后真正进入 `spike` | `cli.py` 的 `ensure_spike_baseline()`；`verification.py` 的 `compute_product_design_hash()`、`compute_code_design_hash()` | 从 `product.md` 解析实际链接的 `feature_*.md`，计算产品设计整体哈希；单独计算代码设计哈希 | `WorkflowState.spike_baseline` 保存时间、产品路径和两个哈希；journal 写“穿刺设计基线” | 旧状态没有基线时标记 `legacy_unavailable=true`，不使用当前文件补造；要求修改设计时门2失败 | `test_entering_spike_records_product_and_code_design_baseline`、`test_old_spike_state_marks_missing_baseline_without_using_current_files`、哈希测试 |
 | 加载穿刺规则 | 当前阶段为 `spike` | `SpikeStage.prompt_doc_path()`、`standard_doc_path()`；`cmd_discuss()`；`role_doc.py` | 完整打印全局写作规则、穿刺结论文档模板、调查执行规范和“技术不确定性验证工程师”角色 | AI 获得候选说明、真实场景、固定字段和三道门规则 | 资源缺失时打印具体路径 | `test_spike_discuss_prints_real_uncertainty_rules` |
-| 用户决定全部跳过 | AI 调查后没有需要实际验证的不确定性，用户明确同意 | `cli.py` 的 `cmd_gate()` `--skip` 分支 | 只允许当前阶段是 `spike`；写三道门通过、`spike_skipped=true`，清理临时目录并推进 | 不生成 `spike_index.md` 和结论文档；进入 `plan` 或 `fix_plan` | 从其它阶段调用时拒绝，防止跨阶段跳转 | `test_gate_skip_only_for_spike`、`test_gate_cannot_skip_spike_before_current_stage` |
+| 用户决定全部跳过 | AI 调查后没有需要实际验证的不确定性，用户明确同意 | `cli.py` 的 `cmd_gate()` `--skip` 分支 | 只允许当前阶段是 `spike`；写三道门通过、`spike_skipped=true`，清理临时目录并推进 | 不生成 `spike_index.md` 和结论文档；进入 `acceptance_plan` | 从其它阶段调用时拒绝，防止跨阶段跳转 | `test_gate_skip_only_for_spike`、`test_gate_cannot_skip_spike_before_current_stage` |
 | 写穿刺文档 | 用户确认执行清单且第一道门已通过 | AI 按两份 spike Markdown 资源写文件；Python 没有生成函数 | 清单记录当前工作流和每个穿刺项；详情记录八章、实际命令、输入、观察、结论和影响 | `spec/spike_index.md`、`spec/spike_<english-name>.md`；临时内容可进入 `.workflow_loop/spike_tmp/` | 内容不完整时门2返回具体字段或章节错误 | 模板本身、`tests/test_spike_validation.py` |
 | 解析并校验文档 | AI 调用 `workflow gate spike` | `SpikeStage.code_validate()`；`spike_validation.py` 的 `parse_spike_index()`、`parse_spike_detail()`、`validate_spike_stage()` | 检查当前工作流编号、唯一编号、链接、八章、固定字段、状态一致性、阻塞、剩余风险、意图边界和设计哈希 | 全部通过后 `code_validated=true` | 任一项目待验证、仍阻塞、旧文档、非法字段、设计未变化或 bugfix 要改产品时失败 | `tests/test_spike_validation.py`、`tests/test_stages.py` |
-| 用户确认并清理 | 门2已经通过，用户检查全部结果和更新后的设计 | `cmd_gate()`；`SpikeStage.on_advance()`；`clean_spike_tmp()` | 门3先重新校验当前文件；通过后写用户确认和阶段完成，删除临时代码、样本和原始输出并记录清理 journal | 从零开发和改产品进入 `plan`；修 bug 进入 `fix_plan` | 文件在门2后发生无效变化时清除旧通过标记并停留在 spike | `test_spike_confirmation_revalidates_documents_after_gate_two`、`test_spike_confirmation_cleans_tmp_and_records_journal` |
+| 用户确认并清理 | 门2已经通过，用户检查全部结果和更新后的设计 | `cmd_gate()`；`SpikeStage.on_advance()`；`clean_spike_tmp()` | 门3先重新校验当前文件；通过后写用户确认和阶段完成，删除临时代码、样本和原始输出并记录清理 journal | 三种意图都进入 `acceptance_plan` | 文件在门2后发生无效变化时清除旧通过标记并停留在 spike | `test_spike_confirmation_revalidates_documents_after_gate_two`、`test_spike_confirmation_cleans_tmp_and_records_journal` |
 
 #### 6.2.3 清单和详情怎样对应
 
@@ -422,7 +439,7 @@ flowchart TD
 
 ### 7.2 单次工作流状态
 
-`WorkflowState` 保存一轮工作流的意图、当前阶段、阶段路径、三道门禁、架构完成度、穿刺设计基线和验证哈希。`SpikeBaselineState` 保存进入穿刺时的产品设计整体哈希、参与计算的产品文档路径、代码设计哈希，以及旧工作流基线是否无法还原。所有改变阶段的命令都必须通过 `load_state()` 读取，再通过 `save_state()` 写回。
+`WorkflowState` 保存一轮工作流的意图、当前阶段、阶段路径、三道门禁、架构完成度、穿刺设计基线和验证哈希。每个 `StageState` 还可以保存 `artifact_baseline_captured_at`（阶段产物基线记录时间）和 `artifact_baseline_hashes`（阶段产物修改前哈希）。`SpikeBaselineState` 保存进入穿刺时的产品设计整体哈希、参与计算的产品文档路径、代码设计哈希，以及旧工作流基线是否无法还原。所有改变阶段的命令都必须通过 `load_state()` 读取，再通过 `save_state()` 写回。
 
 `.workflow_loop/state.json` 是“现在在哪里”；它会在下一轮工作流启动时被覆盖。状态序列化和字段完整性由 `tests/test_state.py` 验证。
 
@@ -434,7 +451,7 @@ flowchart TD
 
 ### 7.4 历史审计记录
 
-`journal.append_entry()` 把启动、提示词加载、门禁结果、门3前复核、穿刺基线缺失、临时内容清理、阶段推进、架构标记和工作流结束追加到 `.workflow_loop/journal.jsonl`。它不会改写旧记录；`workflow status` 读取最近十条供用户查看。
+`journal.append_entry()` 把启动、提示词加载、门禁结果、阶段产物基线、门3前复核、穿刺基线缺失、临时内容清理、阶段推进、架构标记和工作流结束追加到 `.workflow_loop/journal.jsonl`。它不会改写旧记录；`workflow status` 读取最近十条供用户查看。
 
 当前 journal 证明命令被调用过，但不能单独证明 AI 的讨论内容正确或用户理解了文档。
 
@@ -446,7 +463,7 @@ flowchart TD
 
 ### 7.6 验证失效机制
 
-`verification.py` 为实施记录和代码快照、测试计划、验收计划、测试结果保存哈希。后续门禁发现上游变化时清零相关下游门禁，防止旧测试或旧验收继续有效。
+`verification.py` 为实施记录和代码快照、测试计划、验收计划、测试结果保存哈希。后续门禁发现上游变化时，退回最早受影响的顶层阶段，清零该阶段及其后续门禁和旧哈希，防止旧结果继续有效。主题内部选择性失效留到 `topic_execution` 详细设计中实现。
 
 该机制服务整个工作流。穿刺设计基线同样使用 SHA256，但用途不同：它不清零下游门禁，而是在穿刺门2检查结论要求的设计修改是否真实发生。
 
@@ -456,8 +473,8 @@ flowchart TD
 |---|---|---|---|---|---|
 | 计划、验收计划、测试计划、实施、测试、验收和代码设计更新尚未分别建立产品功能文档 | 代码设计应当能追溯到产品功能或产品通用规则 | 产品设计文档已经覆盖产品设计生成和技术不确定性验证，其余后续阶段仍只有代码和 DESIGN.md 说明 | 穿刺代码现在已有产品依据，但其余后续阶段仍不能完整从产品设计确认行为 | 后续按功能逐个补齐产品文档和产品到代码映射，不在本次穿刺改造中编造 | 代码确认、文档确认，仍有部分覆盖范围差异 |
 | 产品模板要求产品总说明九章、功能文档六章 | 程序应防止空文件或错误结构冒充完成 | `SpecStage.code_validate()` 只检查文件存在和 `feature_*.md` 文件名，不检查章节、链接或内容 | 不完整文档也能通过第二道门 | 当前依靠 AI 对抗性审查和用户确认；若要程序硬性保证，需要新增 Markdown 结构校验 | 代码确认、测试确认 |
-| 修改已有产品时应只修改受影响内容 | 本轮必须证明 `product.md` 有变化，并且至少一个功能文档新增、修改或删除 | `SpecStage` 没有记录进入阶段时的文件哈希，也没有比较前后变化；`DESIGN.md` 对此有设计说明但代码未实现 | 旧文件不变也可能通过校验，无法证明产物属于本轮修改 | 保留为明确实现缺口，后续实施基线快照和变更校验 | 代码确认、设计文档确认，存在冲突 |
-| 已有代码初始化时必须查看代码并在安全条件下运行 | 调查结论应有代码、测试和运行证据 | Python 只打印规范，不自动执行代码调查，也不保存“已运行哪些命令”的结构化证据 | AI 跳过运行时，程序无法自动拦截 | 当前由提示词、聊天记录、用户审查和测试结果约束；后续可增加调查证据清单或门禁校验 | 代码确认 |
+| 修改已有产品时只应修改受影响内容 | 本轮必须证明 `product.md` 有变化，并且至少一个功能文档新增、修改或删除 | `SpecStage` 已保存讨论完成时的文件基线并检查两类文件变化，但程序不能判断修改内容是否真的只覆盖受影响范围 | AI 仍可能顺手改动无关产品文字 | 由产品设计规范要求限制修改范围，用户在门3核对实际差异 | 代码确认、测试确认 |
+| 已有代码初始化的调查证据必须真实 | 调查结论应有代码、测试和运行证据 | 程序已检查调查证据绑定当前工作流、代码路径真实存在，并根据运行条件要求命令和结果或无法运行原因 | AI 仍可能填写没有实际执行的命令或错误结果 | 门2负责结构与路径，门3由用户核对证据真实性；程序不声称能判断记录是否说谎 | 代码确认、测试确认，仍有人工确认边界 |
 | 产品功能清单中的链接必须真实可用 | `product.md` 中每个功能应链接到存在的文件 | 当前只检查至少一个 `feature_*.md`，不解析 `product.md` 链接 | 链接错误仍可能通过第二道门 | 后续可使用 Markdown 解析器校验功能链接和文件对应关系 | 代码确认 |
-| 产品规则、边界、使用过程和异常必须与代码一致 | 初始化时三类文档应描述同一个实际产品 | `ProjectDesignInitStage.code_validate()` 只检查三类文件存在，不比较名称、规则、流程和异常 | 三类互相矛盾的文档也可能通过程序校验 | 当前靠组合提示词和用户确认；后续需要明确可机器检查的结构后再增加一致性校验 | 代码确认 |
+| 产品规则、边界、使用过程和异常必须与代码一致 | 初始化时三类设计文档应描述同一个实际产品 | `ProjectDesignInitStage.code_validate()` 已要求产品设计、代码设计和调查证据都发生变化，但不比较三个设计文档中的名称、规则、流程和异常语义 | 三类设计文档仍可能出现语义冲突 | 当前靠组合提示词、调查证据和用户确认；只有形成稳定字段后才增加机器语义校验 | 代码确认 |
 | 同版本已安装项目应怎样获得规范更新尚未定义 | 本次更新希望当前项目和未来安装使用新提示词 | 安装器检测版本相同后直接退出，其他已安装项目不会自动同步；当前项目已手动同步运行副本 | 不同项目可能继续使用旧提示词 | 保持当前零修改策略；升级机制另行设计，不在本次范围内 | 代码确认、用户先前决定 |

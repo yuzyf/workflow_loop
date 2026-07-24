@@ -59,6 +59,9 @@ def test_install_project_copies_templates(tmp_path):
     assert os.path.exists(os.path.join(template_dir, "qa", "test_plan.md"))
     # 验证 qa/test.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "qa", "test.md"))
+    assert os.path.exists(os.path.join(template_dir, "qa", "final_regression.md"))
+    assert os.path.exists(os.path.join(template_dir, "qa", "overall_acceptance.md"))
+    assert os.path.exists(os.path.join(template_dir, "execution", "topic_execution.md"))
     # 验证 impl/impl.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "impl", "impl.md"))
     # 验证 reproduce/reproduce.md 模板存在
@@ -140,11 +143,35 @@ def test_install_project_copies_product_driven_code_design_rules(tmp_path):
     assert "由产品职责推导代码架构" in code_standard
     assert "只列函数名不算完成" in code_standard
     assert "不能脱离流程单独列一个看不懂的字段" in code_standard
-    assert "一次建立相互一致的三类文档" in init_template
+    assert "一次建立相互一致的三类设计文档和一份调查证据" in init_template
     assert "具备安全的本地运行条件时，必须实际运行" in init_standard
     assert "运行确认" in init_standard
+    assert "spec/project_design_init_evidence.md" in init_template
+    assert "已检查代码" in init_standard
+    assert "运行条件：具备 | 不具备" in init_standard
     assert "场景B" not in code_template
     assert "场景B" not in code_standard
+
+
+def test_install_project_copies_structured_reproduce_rules(tmp_path):
+    install_project(str(tmp_path))
+    workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
+    prompt_path = os.path.join(
+        workflow_dir, "Template_Repository", "reproduce", "reproduce.md",
+    )
+    standard_path = os.path.join(
+        workflow_dir, "Standardized_Repository", "reproduce", "reproduce.md",
+    )
+
+    with open(prompt_path) as f:
+        prompt = f.read()
+    with open(standard_path) as f:
+        standard = f.read()
+
+    assert "真实环境、真实输入" in prompt
+    assert "根因状态：已确认" in standard
+    assert "bug/index.md" in standard
+    assert "程序不能判断证据是否伪造" in standard
 
 
 # 测试 install_project 覆盖 AGENTS.md（首次安装写入 workflow_loop 契约）

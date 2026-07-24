@@ -31,18 +31,18 @@ def _setup_project(tmp_path):
 def _advance_to_spike(tmp_path):
     _setup_project(tmp_path)
     _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     spec_dir = os.path.join(str(tmp_path), "spec")
     os.makedirs(spec_dir)
     with open(os.path.join(spec_dir, "product.md"), "w") as f:
         f.write("# Product\n\n[功能](./feature_example.md)\n")
     with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
         f.write("# 【功能】Example\n")
-    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     _run(["gate", "spec"], str(tmp_path))
     _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
         f.write("# Architecture\n")
-    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     _run(["gate", "code_design"], str(tmp_path))
     _run(["gate", "code_design", "--confirmed"], str(tmp_path))
     state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
@@ -178,6 +178,8 @@ def test_discuss_loads_global_writing_standard_before_stage_docs(tmp_path):
 def test_code_design_discuss_prints_product_driven_architecture_rules(tmp_path):
     _setup_project(tmp_path)
     _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    code, out, _ = _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    assert code == 0, out
 
     spec_dir = os.path.join(str(tmp_path), "spec")
     os.makedirs(spec_dir)
@@ -186,8 +188,6 @@ def test_code_design_discuss_prints_product_driven_architecture_rules(tmp_path):
     with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
         f.write("# 【功能】Example\n")
 
-    code, out, _ = _run(["gate", "spec", "--discuss-done"], str(tmp_path))
-    assert code == 0, out
     code, out, _ = _run(["gate", "spec"], str(tmp_path))
     assert code == 0, out
     code, out, _ = _run(["gate", "spec", "--confirmed"], str(tmp_path))
@@ -203,6 +203,33 @@ def test_code_design_discuss_prints_product_driven_architecture_rules(tmp_path):
     assert "由产品职责推导代码架构" in out
     assert "只列函数名不算完成" in out
     assert "场景B" not in out
+
+
+def test_discuss_done_records_spec_baseline_once(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    code, out, _ = _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    assert code == 0, out
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        first = __import__("json").load(f)["stages"]["spec"]
+
+    assert first["artifact_baseline_captured_at"] is not None
+    assert first["artifact_baseline_hashes"] == {"spec/product.md": None}
+
+    spec_dir = os.path.join(str(tmp_path), "spec")
+    os.makedirs(spec_dir)
+    with open(os.path.join(spec_dir, "product.md"), "w") as f:
+        f.write("# Product\n")
+
+    code, out, _ = _run(["gate", "spec", "--discuss-done"], str(tmp_path))
+    assert code == 0, out
+    with open(state_path) as f:
+        second = __import__("json").load(f)["stages"]["spec"]
+
+    assert second["artifact_baseline_captured_at"] == first["artifact_baseline_captured_at"]
+    assert second["artifact_baseline_hashes"] == first["artifact_baseline_hashes"]
 
 
 def test_project_design_init_discuss_prints_investigation_and_output_rules(tmp_path):
@@ -221,7 +248,8 @@ def test_project_design_init_discuss_prints_investigation_and_output_rules(tmp_p
     assert "【附加流程模版: Template_Repository/code_design/code_design.md】" in out
     assert "产品设计文档模板" in out
     assert "代码架构设计文档模板" in out
-    assert "一次建立相互一致的三类文档" in out
+    assert "一次建立相互一致的三类设计文档和一份调查证据" in out
+    assert "spec/project_design_init_evidence.md" in out
 
 
 # 测试 workflow start 在已有 active Run 时拒绝再次启动（防止并发 Run 互相覆盖 state）
@@ -248,6 +276,9 @@ def test_start_from_scratch_with_artifacts_no_confirm(tmp_path):
     # 写入旧的 product.md
     with open(os.path.join(spec_dir, "product.md"), "w") as f:
         f.write("old product")
+    # 清场规则是删除整个命中目录，目录内的其他文件也不会保留
+    with open(os.path.join(spec_dir, "user_file.txt"), "w") as f:
+        f.write("also removed")
     # 执行 start（不带 --confirm-clean）
     code, out, _ = _run(["start", "--intent", "from_scratch"], str(tmp_path))
     # 验证返回码 0
@@ -256,6 +287,8 @@ def test_start_from_scratch_with_artifacts_no_confirm(tmp_path):
     assert "过程产物" in out
     # 验证输出包含 spec
     assert "spec" in out
+    assert "删除整个目录及其中全部内容" in out
+    assert "不会保留这些目录中的其他文件" in out
     # 验证旧产物未被清理
     assert os.path.exists(os.path.join(spec_dir, "product.md"))
     # 拼出 state.json 路径
@@ -367,7 +400,7 @@ def test_gate_rejects_all_normal_operations_for_non_current_stage(tmp_path):
         assert "workflow gate spec --discuss-done" in out
 
 
-def test_wrong_stage_gate_prints_plan_stage_next_step(tmp_path):
+def test_wrong_stage_gate_prints_acceptance_plan_stage_next_step(tmp_path):
     _setup_project(tmp_path)
     _advance_to_spike(tmp_path)
     _run(["gate", "spike", "--skip"], str(tmp_path))
@@ -375,16 +408,94 @@ def test_wrong_stage_gate_prints_plan_stage_next_step(tmp_path):
     code, out, _ = _run(["gate", "spike", "--discuss-done"], str(tmp_path))
 
     assert code == 1
-    assert "当前 stage 是 plan" in out
+    assert "当前 stage 是 acceptance_plan" in out
     assert "不能操作 spike" in out
     assert "下一步：" in out
     assert "workflow discuss" in out
-    assert "workflow gate plan --discuss-done" in out
+    assert "workflow gate acceptance_plan --discuss-done" in out
+
+
+def test_old_plan_first_state_migrates_to_acceptance_plan_first(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        data = __import__("json").load(f)
+
+    old_path = [
+        "spec", "code_design", "spike", "plan", "acceptance_plan",
+        "test_plan", "impl", "test", "acceptance", "update_code_design",
+    ]
+    old_stages = {}
+    for stage_name in old_path:
+        old_stages[stage_name] = data["stages"].get(stage_name, {
+            "status": "pending",
+            "artifact_paths": [],
+            "artifact_produced_at": None,
+            "gate": {
+                "discussion_complete": False,
+                "code_validated": False,
+                "user_confirmed": False,
+            },
+        })
+    for stage_name in ["spec", "code_design", "spike"]:
+        old_stages[stage_name]["status"] = "done"
+        old_stages[stage_name]["gate"] = {
+            "discussion_complete": True,
+            "code_validated": True,
+            "user_confirmed": True,
+        }
+    old_stages["plan"]["status"] = "in_progress"
+    old_stages["plan"]["gate"]["discussion_complete"] = True
+    data["stage_path"] = old_path
+    data["stages"] = old_stages
+    data["current_stage"] = "plan"
+    with open(state_path, "w") as f:
+        __import__("json").dump(data, f)
+
+    code, out, _ = _run(["status"], str(tmp_path))
+
+    assert code == 0
+    assert "当前 stage: acceptance_plan" in out
+    with open(state_path) as f:
+        migrated = __import__("json").load(f)
+    assert migrated["stage_path"] == [
+        "spec", "code_design", "spike", "acceptance_plan", "test_plan",
+        "plan", "topic_execution", "regression_test", "overall_acceptance",
+        "update_code_design",
+    ]
+    assert migrated["stages"]["plan"]["gate"]["discussion_complete"] is False
+
+
+def test_acceptance_plan_confirmation_records_topics_and_project_history(tmp_path):
+    _advance_to_spike(tmp_path)
+    _run(["gate", "spike", "--skip"], str(tmp_path))
+    acceptance_dir = os.path.join(str(tmp_path), "acceptance")
+    os.makedirs(acceptance_dir)
+    for topic in ["上传文件", "查看状态"]:
+        with open(os.path.join(acceptance_dir, f"{topic}_plan.md"), "w") as f:
+            f.write(f"# {topic}\n")
+
+    _run(["gate", "acceptance_plan", "--discuss-done"], str(tmp_path))
+    code, out, _ = _run(["gate", "acceptance_plan"], str(tmp_path))
+    assert code == 0, out
+    code, out, _ = _run(["gate", "acceptance_plan", "--confirmed"], str(tmp_path))
+    assert code == 0, out
+
+    with open(os.path.join(str(tmp_path), ".workflow_loop", "state.json")) as f:
+        state = __import__("json").load(f)
+    with open(os.path.join(str(tmp_path), ".workflow_loop", "project.json")) as f:
+        project = __import__("json").load(f)
+
+    assert state["topics"] == ["上传文件", "查看状态"]
+    assert state["current_stage"] == "test_plan"
+    assert project["topic_history"] == ["上传文件", "查看状态"]
 
 
 def test_entering_spike_records_product_and_code_design_baseline(tmp_path):
     _setup_project(tmp_path)
     _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     spec_dir = os.path.join(str(tmp_path), "spec")
     os.makedirs(spec_dir)
     with open(os.path.join(spec_dir, "product.md"), "w") as f:
@@ -392,12 +503,11 @@ def test_entering_spike_records_product_and_code_design_baseline(tmp_path):
     with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
         f.write("# 【功能】Example\n")
 
-    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     _run(["gate", "spec"], str(tmp_path))
     _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
         f.write("# Architecture\n")
-    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     _run(["gate", "code_design"], str(tmp_path))
     code, out, _ = _run(["gate", "code_design", "--confirmed"], str(tmp_path))
     assert code == 0, out
@@ -418,18 +528,18 @@ def test_entering_spike_records_product_and_code_design_baseline(tmp_path):
 def test_spike_discuss_prints_real_uncertainty_rules(tmp_path):
     _setup_project(tmp_path)
     _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     spec_dir = os.path.join(str(tmp_path), "spec")
     os.makedirs(spec_dir)
     with open(os.path.join(spec_dir, "product.md"), "w") as f:
         f.write("# Product\n\n[功能](./feature_example.md)\n")
     with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
         f.write("# 【功能】Example\n")
-    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     _run(["gate", "spec"], str(tmp_path))
     _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
         f.write("# Architecture\n")
-    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     _run(["gate", "code_design"], str(tmp_path))
     _run(["gate", "code_design", "--confirmed"], str(tmp_path))
 
@@ -445,18 +555,18 @@ def test_spike_discuss_prints_real_uncertainty_rules(tmp_path):
 def test_old_spike_state_migrates_artifact_path_even_with_baseline(tmp_path):
     _setup_project(tmp_path)
     _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     spec_dir = os.path.join(str(tmp_path), "spec")
     os.makedirs(spec_dir)
     with open(os.path.join(spec_dir, "product.md"), "w") as f:
         f.write("# Product\n\n[功能](./feature_example.md)\n")
     with open(os.path.join(spec_dir, "feature_example.md"), "w") as f:
         f.write("# 【功能】Example\n")
-    _run(["gate", "spec", "--discuss-done"], str(tmp_path))
     _run(["gate", "spec"], str(tmp_path))
     _run(["gate", "spec", "--confirmed"], str(tmp_path))
+    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     with open(os.path.join(spec_dir, "architecture_code_design.md"), "w") as f:
         f.write("# Architecture\n")
-    _run(["gate", "code_design", "--discuss-done"], str(tmp_path))
     _run(["gate", "code_design"], str(tmp_path))
     _run(["gate", "code_design", "--confirmed"], str(tmp_path))
 
@@ -587,6 +697,9 @@ def test_status_shows_all_stages(tmp_path):
     assert "preliminary_done" in out
     # 验证输出包含 detailed_done（架构详细完成标记）
     assert "detailed_done" in out
+    # status 必须根据当前门禁状态直接告诉用户下一条命令
+    assert "下一步：" in out
+    assert "workflow discuss" in out
 
 
 # 测试重复执行 install-project 不修改已存在的 AGENTS.md（CLI 层的保护逻辑）

@@ -6,9 +6,9 @@ from .stages import (
     PlanStage,
     AcceptancePlanStage,
     TestPlanStage,
-    ImplStage,
-    TestStage,
-    AcceptanceStage,
+    TopicExecutionStage,
+    RegressionTestStage,
+    OverallAcceptanceStage,
     UpdateCodeDesignStage,
     ProjectDesignInitStage,
     ReviseCodeDesignStage,
@@ -19,8 +19,10 @@ from .stages.base import StageStrategy
 
 # from_scratch（从零做）的完整 stage 路径
 # 顺序固定：先产品设计与功能拆分、后初步架构（先定做什么，再定怎么搭）
-# 然后验证技术不确定性 → 制定计划 → 验收计划 → 测试计划 → 实施 → 测试 → 验收 → 详细架构收尾
-# 共享后半截：plan → acceptance_plan → test_plan → impl → test → acceptance → update_code_design
+# 然后验证技术不确定性 → 验收计划 → 测试计划 → 实施计划 → 主题实施/测试/验收
+# → 最终全量回归 → 整体验收 → 详细架构收尾
+# 共享后半截：acceptance_plan → test_plan → plan/fix_plan → topic_execution
+# → regression_test → overall_acceptance → update_code_design
 FROM_SCRATCH_PATH = [
     # 产品设计阶段：产出 spec/product.md + spec/feature_*.md
     SpecStage,
@@ -29,20 +31,18 @@ FROM_SCRATCH_PATH = [
     # 穿刺阶段：验证真实场景中的技术不确定性，写清单和每项结论；临时代码按需进入 spike_tmp/
     # 可选 stage，可通过 gate spike --skip 跳过
     SpikeStage,
-    # 计划阶段：产出 plan/<主题>.md + plan/index.md（主题在这里定下）
-    PlanStage,
     # 验收计划阶段：制定什么算完成，产出 acceptance/<topic>_plan.md
     AcceptancePlanStage,
     # 测试计划阶段：把验收条件转为可执行测试范围，产出 qa/<topic>_plan.md
     TestPlanStage,
-    # 实施阶段：执行已确认的计划并改代码，产出 impl/<topic>.md
-    ImplStage,
-    # 测试执行阶段：按测试计划执行测试并记录证据，产出 qa/<topic>_result.md
-    # 强制 Stage，不提供 --skip
-    TestStage,
-    # 最终验收阶段：按验收计划执行验收，产出 acceptance/<topic>_result.md
-    # 强制 Stage，门3必须由用户确认，AI 不得代验收
-    AcceptanceStage,
+    # 实施计划阶段：根据验收主题和测试计划制定实施步骤
+    PlanStage,
+    # 按主题分别实施、测试和验收；独立主题不互相等待
+    TopicExecutionStage,
+    # 全部主题完成后，对合并代码执行最终全量回归
+    RegressionTestStage,
+    # 最终全量回归通过后，确认整个需求是否完成
+    OverallAcceptanceStage,
     # 详细架构收尾：更新 spec/architecture_code_design.md 反映最终真实结构
     # 所有意图末环同名，强制不可跳过
     UpdateCodeDesignStage,
@@ -59,43 +59,43 @@ PRODUCT_CHANGE_BASE = [
     ReviseCodeDesignStage,
     # 穿刺阶段（可选）
     SpikeStage,
-    # 计划阶段（定主题）
-    PlanStage,
     # 验收计划阶段
     AcceptancePlanStage,
     # 测试计划阶段
     TestPlanStage,
-    # 实施阶段
-    ImplStage,
-    # 测试执行阶段（强制）
-    TestStage,
-    # 最终验收阶段（强制）
-    AcceptanceStage,
+    # 实施计划阶段
+    PlanStage,
+    # 按主题分别实施、测试和验收
+    TopicExecutionStage,
+    # 最终全量回归
+    RegressionTestStage,
+    # 整体验收
+    OverallAcceptanceStage,
     # 详细架构收尾（强制）
     UpdateCodeDesignStage,
 ]
 
 # bugfix（修 bug）的基础 stage 路径（不含 project_design_init 前置）
-# 和 from_scratch 的差异：没有 spec/plan，先 reproduce，再经过可选 spike，最后进入 fix_plan
-# 主题在 fix_plan 定（从 bug 反推），不复用 plan
+# 和 from_scratch 的差异：没有 spec/plan，先 reproduce，再经过可选 spike；
+# 在共享后半截中使用 fix_plan 制定修复实施计划
 # 末段 update_code_design 即使无结构变化也必须走，在门禁中显式确认"无结构变化"
 BUGFIX_BASE = [
     # 复现阶段：复现 bug + 根因分析，产出 bug/<...>.md + 更新 bug/index.md
     ReproduceStage,
     # 穿刺阶段：验证修复仍依赖的真实技术不确定性；没有时由用户确认跳过
     SpikeStage,
-    # 修复计划阶段：定主题（从 bug 反推），产出 plan/<主题>.md
-    FixPlanStage,
     # 验收计划阶段
     AcceptancePlanStage,
     # 测试计划阶段
     TestPlanStage,
-    # 实施阶段（修代码）
-    ImplStage,
-    # 测试执行阶段（强制）
-    TestStage,
-    # 最终验收阶段（强制）
-    AcceptanceStage,
+    # 修复实施计划阶段
+    FixPlanStage,
+    # 按主题分别实施、测试和验收
+    TopicExecutionStage,
+    # 最终全量回归
+    RegressionTestStage,
+    # 整体验收
+    OverallAcceptanceStage,
     # 详细架构收尾（强制，无结构变化也要显式确认）
     UpdateCodeDesignStage,
 ]

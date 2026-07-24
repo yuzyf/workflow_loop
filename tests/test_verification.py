@@ -1,6 +1,7 @@
 import os
 
-from workflow_loop.state import WorkflowState, StageState, GateState
+from workflow_loop.project import create_project, register_topics
+from workflow_loop.state import WorkflowState, StageState, GateState, save_state
 from workflow_loop.verification import (
     compute_file_hash, compute_impl_hash, compute_test_plan_hash,
     compute_acceptance_plan_hash, compute_test_result_hash,
@@ -9,23 +10,28 @@ from workflow_loop.verification import (
 )
 
 
-# 测试辅助函数：构造一个带 verification 哈希和 test/acceptance/test_plan stage 的 WorkflowState
+# 测试辅助函数：构造一个已经进入后半段、带验证哈希的 WorkflowState
 def _make_state(project_root, impl_hash=None, test_plan_hash=None, acceptance_plan_hash=None, test_result_hash=None):
-    # 构造基础 WorkflowState（intent=from_scratch，current_stage=test）
+    stage_path = [
+        "acceptance_plan", "test_plan", "plan", "topic_execution",
+        "regression_test", "overall_acceptance", "update_code_design",
+    ]
     state = WorkflowState(
         workflow_id="test",
         intent="from_scratch",
-        current_stage="test",
+        current_stage="regression_test",
         started_at="2026-07-20T00:00:00+00:00",
-        stage_path=["spec", "code_design", "spike", "plan", "acceptance_plan", "test_plan", "impl", "test", "acceptance", "update_code_design"],
-        topic="test_topic",
+        stage_path=stage_path,
+        topics=["test_topic"],
     )
-    # 填充 test / acceptance / test_plan 三个 stage 的空 StageState
     state.stages = {
-        "test": StageState(),
-        "acceptance": StageState(),
-        "test_plan": StageState(),
+        stage_name: StageState(
+            status="done",
+            gate=GateState(True, True, True),
+        )
+        for stage_name in stage_path
     }
+    state.stages["regression_test"].status = "in_progress"
     # 写入 impl_hash（impl --confirmed 时记录）
     state.verification.impl_hash = impl_hash
     # 写入 test_plan_hash（test_plan --confirmed 时记录）
@@ -133,7 +139,7 @@ def test_check_invalidation_no_change(tmp_path):
     assert invalidations == []
 
 
-# 测试 check_invalidation 在 impl 变化时清零 test/acceptance 的 gate（Verification Invalidation 核心机制）
+# 测试实施内容变化时退回 topic_execution（主题执行）
 def test_check_invalidation_impl_changed(tmp_path):
     # 创建 impl 目录
     impl_dir = os.path.join(str(tmp_path), "impl")
@@ -145,11 +151,6 @@ def test_check_invalidation_impl_changed(tmp_path):
     impl_hash = compute_impl_hash(str(tmp_path), "test_topic")
     # 构造 state，绑定 impl_hash
     state = _make_state(str(tmp_path), impl_hash=impl_hash)
-    # 模拟 test stage 已通过讨论和代码校验
-    state.stages["test"].gate.discussion_complete = True
-    state.stages["test"].gate.code_validated = True
-    # 模拟 acceptance stage 已用户确认
-    state.stages["acceptance"].gate.user_confirmed = True
     # 修改 impl 记录内容（触发 invalidation）
     with open(os.path.join(impl_dir, "test_topic.md"), "w") as f:
         f.write("changed")
@@ -157,17 +158,18 @@ def test_check_invalidation_impl_changed(tmp_path):
     invalidations = check_invalidation(state, str(tmp_path))
     # 验证有 1 条 invalidation
     assert len(invalidations) == 1
-    # 验证 invalidation 来源是 impl，影响范围是 test/acceptance
-    assert invalidations[0] == ("impl", "test/acceptance")
-    # 验证 test stage 的 discussion_complete 被清零
-    assert state.stages["test"].gate.discussion_complete is False
-    # 验证 test stage 的 code_validated 被清零
-    assert state.stages["test"].gate.code_validated is False
-    # 验证 acceptance stage 的 user_confirmed 被清零
-    assert state.stages["acceptance"].gate.user_confirmed is False
+    # 验证实施变化会让主题测试、主题验收、最终回归和整体验收失效
+    assert invalidations[0] == (
+        "impl",
+        "topic_execution 及全部后续阶段",
+    )
+    assert state.current_stage == "topic_execution"
+    assert state.stages["topic_execution"].status == "in_progress"
+    assert state.stages["regression_test"].gate.code_validated is False
+    assert state.verification.impl_hash is None
 
 
-# 测试 check_invalidation 在 acceptance_plan 变化时清零 acceptance 和 test_plan 的 gate
+# 测试验收计划变化时退回 acceptance_plan（验收计划）
 def test_check_invalidation_acceptance_plan_changed(tmp_path):
     # 创建 acceptance 目录
     acc_dir = os.path.join(str(tmp_path), "acceptance")
@@ -179,11 +181,6 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     ap_hash = compute_acceptance_plan_hash(str(tmp_path), "test_topic")
     # 构造 state，绑定 acceptance_plan_hash
     state = _make_state(str(tmp_path), acceptance_plan_hash=ap_hash)
-    # 模拟 test_plan stage 已通过代码校验和用户确认
-    state.stages["test_plan"].gate.code_validated = True
-    state.stages["test_plan"].gate.user_confirmed = True
-    # 模拟 acceptance stage 已通过讨论
-    state.stages["acceptance"].gate.discussion_complete = True
     # 修改 acceptance plan 内容（触发 invalidation）
     with open(os.path.join(acc_dir, "test_topic_plan.md"), "w") as f:
         f.write("changed")
@@ -191,11 +188,33 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     invalidations = check_invalidation(state, str(tmp_path))
     # 验证有 1 条 invalidation
     assert len(invalidations) == 1
-    # 验证 invalidation 影响范围包含 acceptance
-    assert "acceptance" in invalidations[0][1]
-    # 验证 acceptance stage 的 discussion_complete 被清零
-    assert state.stages["acceptance"].gate.discussion_complete is False
-    # 验证 test_plan stage 的 code_validated 被清零
+    # 验证验收计划变化会让测试计划、实施计划和执行结果失效
+    assert invalidations[0] == (
+        "acceptance_plan",
+        "acceptance_plan 及全部后续阶段",
+    )
+    assert state.current_stage == "acceptance_plan"
+    assert state.stages["acceptance_plan"].status == "in_progress"
     assert state.stages["test_plan"].gate.code_validated is False
-    # 验证 test_plan stage 的 user_confirmed 被清零
-    assert state.stages["test_plan"].gate.user_confirmed is False
+    assert state.verification.acceptance_plan_hash is None
+
+
+def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
+    create_project(str(tmp_path))
+    acc_dir = tmp_path / "acceptance"
+    acc_dir.mkdir()
+    (acc_dir / "test_topic_plan.md").write_text("original", encoding="utf-8")
+    register_topics(str(tmp_path), ["test_topic"])
+
+    state = _make_state(str(tmp_path))
+    state.verification.acceptance_plan_hash = compute_acceptance_plan_hash(
+        str(tmp_path),
+        ["test_topic"],
+    )
+    save_state(str(tmp_path), state)
+
+    (acc_dir / "new_topic_plan.md").write_text("new", encoding="utf-8")
+    invalidations = check_invalidation(state, str(tmp_path))
+
+    assert invalidations == [("acceptance_plan", "acceptance_plan 及全部后续阶段")]
+    assert state.current_stage == "acceptance_plan"

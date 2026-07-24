@@ -3,7 +3,7 @@ import os
 
 from workflow_loop.project import (
     ProjectState, load_project, save_project, is_project_design_initialized,
-    set_project_design_initialized, is_installed, create_project,
+    set_project_design_initialized, is_installed, create_project, register_topics,
 )
 
 
@@ -15,6 +15,7 @@ def test_create_project(tmp_path):
     assert project.installer_version == "0.1.0"
     # 验证 project_design_initialized 默认 False（未做过 project_design_init）
     assert project.project_design_initialized is False
+    assert project.topic_history == []
     # 验证 installed_at 非空（写入时间戳）
     assert project.installed_at != ""
     # 拼出 project.json 的预期路径
@@ -76,3 +77,18 @@ def test_project_json_cross_run_persistence(tmp_path):
         json.dump({"workflow_id": "old", "run_status": "aborted"}, f)
     # 验证 project 标记不受 state.json 影响（project.json 独立持久化）
     assert is_project_design_initialized(str(tmp_path)) is True
+
+
+def test_register_topics_persists_and_rejects_reuse(tmp_path):
+    create_project(str(tmp_path))
+
+    register_topics(str(tmp_path), ["上传文件", "查看状态"])
+
+    project = load_project(str(tmp_path))
+    assert project.topic_history == ["上传文件", "查看状态"]
+
+    try:
+        register_topics(str(tmp_path), ["上传文件"])
+        assert False, "重复主题应被拒绝"
+    except ValueError as exc:
+        assert "已经使用过" in str(exc)

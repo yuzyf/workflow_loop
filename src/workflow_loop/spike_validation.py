@@ -52,7 +52,17 @@ INDEX_STATUSES = {"待验证", "已确认", "限制已确认", "仍未确认"}
 RESULT_STATUSES = {"已确认", "限制已确认", "仍未确认"}
 YES_NO = {"是", "否"}
 DESIGN_IMPACTS = {"需要修改", "无需修改"}
-FOLLOW_UP_STAGES = {"无", "plan", "fix_plan", "test_plan", "impl", "test", "acceptance"}
+FOLLOW_UP_STAGES = {
+    "无",
+    "acceptance_plan",
+    "test_plan",
+    "plan",
+    "fix_plan",
+    "topic_execution",
+    "regression_test",
+    "overall_acceptance",
+    "update_code_design",
+}
 
 
 @dataclass

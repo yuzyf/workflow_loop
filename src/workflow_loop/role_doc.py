@@ -11,7 +11,7 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
   - architecture_code_design.md：代码架构设计文档
 
 【plan/】计划册
-  - <topic>.md：单个计划
+  - 一个实施任务一份 .md：文件名由实施计划确定，不要求与验收主题同名
   - index.md：计划索引表
 
 【bug/】bug 册（沉淀已解决问题）
@@ -21,17 +21,19 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
 【qa/】测试与验收
   - <topic>_plan.md：测试计划
   - <topic>_result.md：测试执行结果
+  - final_regression_result.md：全部主题完成后的最终全量回归结果
   - index.md：测试索引表
 
 【acceptance/】验收
   - <topic>_plan.md：验收计划
   - <topic>_result.md：验收执行结果
+  - overall_result.md：最终全量回归通过后的整体验收结果
 
 【impl/】实施记录
-  - <topic>.md：单个实施记录
+  - 一个实施任务一份 .md：文件名由实施计划确定，不要求与验收主题同名
 
-文件命名规则：<folder>/<topic>.md 或 <folder>/<topic>_<plan|result>.md
-主题在 plan/fix_plan stage 定下，后续 stage 复用。"""
+验收计划、测试计划和主题测试/验收结果使用同一个主题名。
+主题在 acceptance_plan stage 确定；实施计划和实施记录围绕这些验收主题组织，但不要求一一对应。"""
 
 # stage 名 → 角色定义的映射表
 # discuss 命令用 get_role_doc(stage_name) 拿角色定义，打印给 AI 看
@@ -56,7 +58,7 @@ ROLE_DOC_MAP = {
     # 存量项目首次初始化：一次建立产品+功能+架构三类产物
     "project_design_init": {
         "role": "存量产品与架构分析师",
-        "description": "首次处理已有代码项目时，必须查看代码和测试，具备安全条件时实际运行，一次建立相互一致的 spec/product.md、spec/feature_*.md 和 spec/architecture_code_design.md。",
+        "description": "首次处理已有代码项目时，必须查看代码和测试，具备安全条件时实际运行，一次建立相互一致的产品文档、代码架构文档和调查证据。",
     },
     # 改产品设计期架构修订：按新设计改架构图
     "revise_code_design": {
@@ -66,22 +68,22 @@ ROLE_DOC_MAP = {
     # 末段详细架构收尾：反映最终被验证和接受的真实结构
     "update_code_design": {
         "role": "架构文档更新者（详细）",
-        "description": "测试与最终验收通过后，更新/写全 spec/architecture_code_design.md，反映最终真实结构。",
+        "description": "最终全量回归和整体验收通过后，更新/写全 spec/architecture_code_design.md，反映最终真实结构。",
     },
-    # 计划制定阶段：定主题
+    # 实施计划制定阶段：使用验收计划已经确认的主题
     "plan": {
-        "role": "计划制定者",
-        "description": "和用户讨论怎么拆分计划。产出 plan/<主题>.md + plan/index.md。主题在这里定下。",
+        "role": "实施计划制定者",
+        "description": "根据已确认的验收主题和测试计划制定实施步骤，产出计划文档和 plan/index.md，不在这里重新确定主题。",
     },
-    # 修复计划阶段：定主题（从 bug 反推）
+    # 修复实施计划阶段：使用验收计划已经确认的主题
     "fix_plan": {
-        "role": "修复计划制定者",
-        "description": "和用户讨论修复方案。产出 plan/<主题>.md + 更新 plan/index.md。主题从 bug 反推。",
+        "role": "修复实施计划制定者",
+        "description": "根据已确认的验收主题和测试计划制定修复步骤，产出计划文档和 plan/index.md，不在这里重新确定主题。",
     },
     # 验收计划制定阶段
     "acceptance_plan": {
         "role": "验收计划制定者",
-        "description": "制定什么算完成的验收计划。产出 acceptance/<topic>_plan.md。",
+        "description": "根据已确认需求确定全部验收主题，并为每个主题制定什么算完成。产出 acceptance/<topic>_plan.md。",
     },
     # 测试计划制定阶段
     "test_plan": {
@@ -91,7 +93,7 @@ ROLE_DOC_MAP = {
     # 实施执行阶段：改真实代码
     "impl": {
         "role": "实施执行者",
-        "description": "执行已确认的实施/修复计划并修改真实代码。产出 impl/<topic>.md 实施记录。",
+        "description": "执行已确认的实施/修复计划并修改真实代码。按实施任务产出 impl/ 下的实施记录，不要求与验收主题同名。",
     },
     # 测试执行阶段：按计划执行测试并记录证据
     "test": {
@@ -100,13 +102,25 @@ ROLE_DOC_MAP = {
     },
     # 最终验收执行阶段：必须由用户确认，AI 不得代验收
     "acceptance": {
-        "role": "验收执行者",
-        "description": "在测试通过后，按照 acceptance/<topic>_plan.md 执行最终验收。产出 acceptance/<topic>_result.md。",
+        "role": "主题验收执行者",
+        "description": "某个主题测试通过后，按照 acceptance/<topic>_plan.md 执行该主题验收。产出 acceptance/<topic>_result.md。",
+    },
+    "topic_execution": {
+        "role": "按主题执行协调者",
+        "description": "按照实施计划分别推进各主题的实施、测试和验收。独立主题可以分别推进；全部主题完成后进入最终全量回归。",
+    },
+    "regression_test": {
+        "role": "最终回归测试执行者",
+        "description": "全部主题完成后，对全部已合并代码执行最终全量回归。产出 qa/final_regression_result.md。",
+    },
+    "overall_acceptance": {
+        "role": "整体验收执行者",
+        "description": "最终全量回归通过后，由用户确认整个需求是否完成。产出 acceptance/overall_result.md。",
     },
     # bug 复现阶段：复现+根因分析
     "reproduce": {
         "role": "bug 复现者",
-        "description": "和用户讨论 bug 现象、复现步骤。产出 bug/<YYYY-MM-DD_HHmm-<bug描述>>.md + 更新 bug/index.md。",
+        "description": "使用真实场景复现缺陷并确认根因，记录环境、输入、步骤、结果和根因证据，产出缺陷记录并更新 bug/index.md。",
     },
 }
 

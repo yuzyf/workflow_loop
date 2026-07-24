@@ -4,6 +4,7 @@ import re
 import subprocess
 
 from .state import WorkflowState, StageState, GateState
+from .topic import candidate_topics
 
 
 # product.md 功能清单中的本地 Markdown 链接
@@ -25,6 +26,17 @@ def compute_file_hash(project_root: str, rel_path: str) -> str | None:
     # 读文件二进制内容，算 SHA256
     with open(full_path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
+
+
+def compute_file_hashes(
+    project_root: str,
+    rel_paths: list[str],
+) -> dict[str, str | None]:
+    """计算一组相对路径的文件哈希，保留当时不存在的文件。"""
+    return {
+        rel_path: compute_file_hash(project_root, rel_path)
+        for rel_path in sorted(set(rel_paths))
+    }
 
 
 # 读取 product.md 中真实链接的功能文档路径
@@ -51,6 +63,15 @@ def compute_document_set_hash(project_root: str, rel_paths: list[str]) -> str:
         file_hash = compute_file_hash(project_root, rel_path)
         parts.append(f"{rel_path}:{file_hash or '<missing>'}")
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def normalize_topics(topics: str | list[str] | None) -> list[str]:
+    """兼容旧版单主题参数，并统一返回主题列表。"""
+    if topics is None:
+        return []
+    if isinstance(topics, str):
+        return [topics] if topics else []
+    return [topic for topic in topics if topic]
 
 
 # 计算产品总说明及其功能清单链接文档的整体哈希
@@ -112,21 +133,22 @@ def compute_code_snapshot_hash(project_root: str) -> str:
         return hashlib.sha256("\n".join(sorted(code_files)).encode("utf-8")).hexdigest()
 
 
-# 计算 impl 阶段的综合哈希（impl_hash）
-# 包含两部分：impl/<topic>.md 内容哈希 + 代码快照哈希
-# 在 gate impl --confirmed 时记录；进入 test/acceptance 的第 2 道闸时检查
-def compute_impl_hash(project_root: str, topic: str | None) -> str:
+# 计算主题执行阶段的实施综合哈希（impl_hash）
+# 包含两部分：impl/ 下全部实施记录内容哈希 + 代码快照哈希
+# 在 gate topic_execution --confirmed 时记录；进入最终全量回归和整体验收前检查
+def compute_impl_hash(project_root: str, topics: str | list[str] | None = None) -> str:
     # 收集哈希的各部分
     parts = []
-    # 如果有主题（plan/fix_plan 定下后），算 impl/<topic>.md 的文件哈希
-    if topic:
-        # impl 实施记录文件的路径
-        impl_md = os.path.join(project_root, "impl", f"{topic}.md")
-        # 算文件内容哈希
-        file_hash = compute_file_hash(project_root, os.path.join("impl", f"{topic}.md"))
-        # 文件存在 → 加入哈希部分
-        if file_hash:
-            parts.append(f"impl_md:{file_hash}")
+    # 实施任务与验收主题不一定一一对应，因此绑定 impl/ 下全部实施记录。
+    impl_dir = os.path.join(project_root, "impl")
+    if os.path.isdir(impl_dir):
+        impl_paths = [
+            os.path.join("impl", filename)
+            for filename in os.listdir(impl_dir)
+            if filename.endswith(".md")
+        ]
+        if impl_paths:
+            parts.append(f"impl_docs:{compute_document_set_hash(project_root, impl_paths)}")
     # 加入代码快照哈希（git status / 文件 mtime+size）
     parts.append(f"code_snapshot:{compute_code_snapshot_hash(project_root)}")
     # 合并所有部分算最终 SHA256
@@ -134,34 +156,38 @@ def compute_impl_hash(project_root: str, topic: str | None) -> str:
 
 
 # 计算测试计划文件 qa/<topic>_plan.md 的 SHA256
-# 在 gate test_plan --confirmed 时记录；test_plan 变化时清零 test 和 acceptance
-def compute_test_plan_hash(project_root: str, topic: str | None) -> str | None:
-    # 没有主题 → 返回 None（还没到 plan/fix_plan stage）
-    if not topic:
+# 在 gate test_plan --confirmed 时记录；变化时使主题执行及其后续结果失效
+def compute_test_plan_hash(project_root: str, topics: str | list[str] | None) -> str | None:
+    topic_list = normalize_topics(topics)
+    if not topic_list:
         return None
-    # 算 qa/<topic>_plan.md 的文件哈希
-    return compute_file_hash(project_root, os.path.join("qa", f"{topic}_plan.md"))
+    paths = [os.path.join("qa", f"{topic}_plan.md") for topic in topic_list]
+    return compute_document_set_hash(project_root, paths)
 
 
 # 计算验收计划文件 acceptance/<topic>_plan.md 的 SHA256
 # 在 gate acceptance_plan --confirmed 时记录
-# acceptance_plan 变化时清零 acceptance 并把 test_plan 退回待检查
-def compute_acceptance_plan_hash(project_root: str, topic: str | None) -> str | None:
-    # 没有主题 → 返回 None
-    if not topic:
+# acceptance_plan 变化时把 test_plan 和后续阶段退回待检查
+def compute_acceptance_plan_hash(project_root: str, topics: str | list[str] | None) -> str | None:
+    topic_list = normalize_topics(topics)
+    if not topic_list:
         return None
-    # 算 acceptance/<topic>_plan.md 的文件哈希
-    return compute_file_hash(project_root, os.path.join("acceptance", f"{topic}_plan.md"))
+    paths = [os.path.join("acceptance", f"{topic}_plan.md") for topic in topic_list]
+    return compute_document_set_hash(project_root, paths)
 
 
 # 计算测试结果文件 qa/<topic>_result.md 的 SHA256
-# 在 gate test --confirmed 时记录；test 结果变化时清零 acceptance
-def compute_test_result_hash(project_root: str, topic: str | None) -> str | None:
-    # 没有主题 → 返回 None
-    if not topic:
+# 在 gate topic_execution --confirmed 时记录；变化时使最终全量回归和整体验收失效
+def compute_test_result_hash(project_root: str, topics: str | list[str] | None) -> str | None:
+    topic_list = normalize_topics(topics)
+    if not topic_list:
         return None
-    # 算 qa/<topic>_result.md 的文件哈希
-    return compute_file_hash(project_root, os.path.join("qa", f"{topic}_result.md"))
+    paths = [os.path.join("qa", f"{topic}_result.md") for topic in topic_list]
+    return compute_document_set_hash(project_root, paths)
+
+
+def compute_regression_test_result_hash(project_root: str) -> str | None:
+    return compute_file_hash(project_root, os.path.join("qa", "final_regression_result.md"))
 
 
 # 清零单个 stage 的所有门禁状态（3 道闸全清，状态回 pending）
@@ -173,55 +199,133 @@ def clear_stage_gates(stage: StageState) -> None:
     stage.status = "pending"
 
 
+def reset_stages_and_move_current(state: WorkflowState, stage_names: list[str]) -> None:
+    """清零指定阶段，并把当前阶段退回到路径中最早的受影响阶段。"""
+    affected = []
+    for stage_name in stage_names:
+        if stage_name in state.stages:
+            clear_stage_gates(state.stages[stage_name])
+            affected.append(stage_name)
+
+    if not affected:
+        return
+
+    order = {stage_name: index for index, stage_name in enumerate(state.stage_path)}
+    earliest = min(affected, key=lambda stage_name: order.get(stage_name, len(order)))
+    state.current_stage = earliest
+    state.stages[earliest].status = "in_progress"
+
+
 # 检查 Verification Invalidation：上游内容是否变化，变化则清零下游
 # 在进入下游 stage 的第 2 道闸（gate 无 flag）时调用
 # 返回失效列表：[(变化的源头, 被清零的下游), ...]
 def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[str, str]]:
-    # 收集所有失效事件
-    invalidations = []
-    # 当前 Run 的主题（plan/fix_plan 定下后才有）
-    topic = state.topic
+    invalidations: list[tuple[str, str]] = []
+    topics = state.topics or ([state.topic] if state.topic else [])
 
-    # 检查 1：impl 是否变化（impl_hash）
-    if state.verification.impl_hash is not None:
-        # 重算当前 impl 哈希
-        current_impl = compute_impl_hash(project_root, topic)
-        # 哈希不一致 → impl 变了，清零 test 和 acceptance
-        if current_impl != state.verification.impl_hash:
-            # 清零 test 和 acceptance 的所有门禁
-            for stage_name in ["test", "acceptance"]:
-                if stage_name in state.stages:
-                    clear_stage_gates(state.stages[stage_name])
-            # 记录失效事件
-            invalidations.append(("impl", "test/acceptance"))
-
-    # 检查 2：test_plan 是否变化（test_plan_hash）
-    if state.verification.test_plan_hash is not None:
-        # 重算当前 test_plan 哈希
-        current_tp = compute_test_plan_hash(project_root, topic)
-        # 哈希不一致 → test_plan 变了，清零 test 和 acceptance
-        if current_tp != state.verification.test_plan_hash:
-            for stage_name in ["test", "acceptance"]:
-                if stage_name in state.stages:
-                    clear_stage_gates(state.stages[stage_name])
-            invalidations.append(("test_plan", "test/acceptance"))
-
-    # 检查 3：acceptance_plan 是否变化（acceptance_plan_hash）
+    # 验收计划决定后续全部工作。内容、主题新增或主题删除后，从验收计划重新开始。
     if state.verification.acceptance_plan_hash is not None:
-        # 重算当前 acceptance_plan 哈希
-        current_ap = compute_acceptance_plan_hash(project_root, topic)
-        # 哈希不一致 → acceptance_plan 变了
+        current_topics = candidate_topics(project_root)
+        current_ap = compute_acceptance_plan_hash(project_root, current_topics)
         if current_ap != state.verification.acceptance_plan_hash:
-            # 清零 acceptance 的所有门禁
-            if "acceptance" in state.stages:
-                clear_stage_gates(state.stages["acceptance"])
-            # 把 test_plan 退回待检查（code_validated 和 user_confirmed 清零，discussion_complete 保留）
-            if "test_plan" in state.stages:
-                state.stages["test_plan"].gate.code_validated = False
-                state.stages["test_plan"].gate.user_confirmed = False
-                state.stages["test_plan"].status = "pending"
-            # 记录失效事件
-            invalidations.append(("acceptance_plan", "acceptance + test_plan"))
+            reset_stages_and_move_current(
+                state,
+                [
+                    "acceptance_plan",
+                    "test_plan",
+                    "plan",
+                    "fix_plan",
+                    "topic_execution",
+                    "test",
+                    "acceptance",
+                    "regression_test",
+                    "overall_acceptance",
+                    "update_code_design",
+                ],
+            )
+            state.verification.acceptance_plan_hash = None
+            state.verification.test_plan_hash = None
+            state.verification.impl_hash = None
+            state.verification.test_result_hash = None
+            state.verification.regression_test_result_hash = None
+            invalidations.append(("acceptance_plan", "acceptance_plan 及全部后续阶段"))
+            return invalidations
 
-    # 返回所有失效事件
+    # 测试计划变化后，测试计划本身、实施计划和执行结果都必须重新确认。
+    if state.verification.test_plan_hash is not None:
+        current_tp = compute_test_plan_hash(project_root, topics)
+        if current_tp != state.verification.test_plan_hash:
+            reset_stages_and_move_current(
+                state,
+                [
+                    "test_plan",
+                    "plan",
+                    "fix_plan",
+                    "topic_execution",
+                    "test",
+                    "acceptance",
+                    "regression_test",
+                    "overall_acceptance",
+                    "update_code_design",
+                ],
+            )
+            state.verification.test_plan_hash = None
+            state.verification.impl_hash = None
+            state.verification.test_result_hash = None
+            state.verification.regression_test_result_hash = None
+            invalidations.append(("test_plan", "test_plan 及全部后续阶段"))
+            return invalidations
+
+    # 实施代码或实施记录变化后，从主题执行重新开始。
+    if state.verification.impl_hash is not None:
+        current_impl = compute_impl_hash(project_root, topics)
+        if current_impl != state.verification.impl_hash:
+            reset_stages_and_move_current(
+                state,
+                [
+                    "topic_execution",
+                    "test",
+                    "acceptance",
+                    "regression_test",
+                    "overall_acceptance",
+                    "update_code_design",
+                ],
+            )
+            state.verification.impl_hash = None
+            state.verification.test_result_hash = None
+            state.verification.regression_test_result_hash = None
+            invalidations.append(("impl", "topic_execution 及全部后续阶段"))
+            return invalidations
+
+    # 某个主题的测试结果变化后，从主题执行重新确认。
+    if state.verification.test_result_hash is not None:
+        current_test_result = compute_test_result_hash(project_root, topics)
+        if current_test_result != state.verification.test_result_hash:
+            reset_stages_and_move_current(
+                state,
+                [
+                    "topic_execution",
+                    "acceptance",
+                    "regression_test",
+                    "overall_acceptance",
+                    "update_code_design",
+                ],
+            )
+            state.verification.test_result_hash = None
+            state.verification.regression_test_result_hash = None
+            invalidations.append(("test", "topic_execution 及全部后续阶段"))
+            return invalidations
+
+    # 最终全量回归结果变化后，从最终全量回归重新开始。
+    if state.verification.regression_test_result_hash is not None:
+        current_regression = compute_regression_test_result_hash(project_root)
+        if current_regression != state.verification.regression_test_result_hash:
+            reset_stages_and_move_current(
+                state,
+                ["regression_test", "overall_acceptance", "update_code_design"],
+            )
+            state.verification.regression_test_result_hash = None
+            invalidations.append(("regression_test", "regression_test、overall_acceptance 和 update_code_design"))
+            return invalidations
+
     return invalidations

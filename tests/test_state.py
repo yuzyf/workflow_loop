@@ -17,16 +17,25 @@ def test_state_round_trip(tmp_path):
         current_stage="spec",
         started_at="2026-07-20T03:47:00+00:00",
         stage_path=["spec", "code_design", "spike"],
+        topics=["上传文件", "查看状态"],
         stages={
             "spec": StageState(
                 status="in_progress",
                 artifact_paths=["spec/product.md"],
+                artifact_baseline_captured_at="2026-07-20T03:47:30+00:00",
+                artifact_baseline_hashes={"spec/product.md": None},
                 gate=GateState(discussion_complete=True, code_validated=False, user_confirmed=False),
             ),
             "code_design": StageState(status="pending", artifact_paths=["spec/architecture_code_design.md"]),
         },
         architecture=ArchitectureState(preliminary_done=False, detailed_done=False),
-        verification=VerificationState(impl_hash=None, test_plan_hash=None, acceptance_plan_hash=None, test_result_hash=None),
+        verification=VerificationState(
+            impl_hash=None,
+            test_plan_hash=None,
+            acceptance_plan_hash=None,
+            test_result_hash=None,
+            regression_test_result_hash="regression123",
+        ),
         spike_baseline=SpikeBaselineState(
             captured_at="2026-07-20T03:48:00+00:00",
             product_design_hash="product123",
@@ -51,16 +60,20 @@ def test_state_round_trip(tmp_path):
     assert loaded.current_stage == state.current_stage
     # 验证 stage_path 列表往返一致
     assert loaded.stage_path == state.stage_path
+    assert loaded.topics == ["上传文件", "查看状态"]
     # 验证嵌套 stages["spec"].status 往返一致
     assert loaded.stages["spec"].status == "in_progress"
     # 验证嵌套 gate.discussion_complete 往返一致
     assert loaded.stages["spec"].gate.discussion_complete is True
+    assert loaded.stages["spec"].artifact_baseline_captured_at == "2026-07-20T03:47:30+00:00"
+    assert loaded.stages["spec"].artifact_baseline_hashes == {"spec/product.md": None}
     # 验证嵌套 gate.code_validated 往返一致
     assert loaded.stages["spec"].gate.code_validated is False
     # 验证 architecture.preliminary_done 往返一致
     assert loaded.architecture.preliminary_done is False
     # 验证 verification.impl_hash 往返一致（None 不会被改成空字符串）
     assert loaded.verification.impl_hash is None
+    assert loaded.verification.regression_test_result_hash == "regression123"
     # 验证穿刺设计基线往返一致
     assert loaded.spike_baseline.product_design_hash == "product123"
     assert loaded.spike_baseline.product_design_paths == ["spec/product.md", "spec/feature_example.md"]
@@ -128,6 +141,7 @@ def test_full_schema_fields(tmp_path):
         ended_at=None,
         aborted_at=None,
         topic=None,
+        topics=["修复上传失败"],
         clean_confirmed=False,
         spike_skipped=False,
         stage_path=["reproduce", "fix_plan"],
@@ -138,6 +152,7 @@ def test_full_schema_fields(tmp_path):
             test_plan_hash="def456",
             acceptance_plan_hash=None,
             test_result_hash=None,
+            regression_test_result_hash="regression789",
         ),
         spike_baseline=SpikeBaselineState(
             captured_at="2026-07-20T03:48:00+00:00",
@@ -164,6 +179,7 @@ def test_full_schema_fields(tmp_path):
     assert "clean_confirmed" in data
     # 验证顶层 spike_skipped 字段存在
     assert "spike_skipped" in data
+    assert data["topics"] == ["修复上传失败"]
     # 验证顶层 stage_path 字段存在
     assert "stage_path" in data
     # 验证顶层 architecture 子对象存在
@@ -172,6 +188,9 @@ def test_full_schema_fields(tmp_path):
     assert "verification" in data
     # 验证顶层 spike_baseline 子对象存在
     assert "spike_baseline" in data
+    # 验证阶段产物基线字段存在，旧阶段未记录时使用空值
+    assert data["stages"]["reproduce"]["artifact_baseline_captured_at"] is None
+    assert data["stages"]["reproduce"]["artifact_baseline_hashes"] == {}
     # 验证 architecture.preliminary_done 子字段存在
     assert "preliminary_done" in data["architecture"]
     # 验证 architecture.detailed_done 子字段存在
@@ -180,6 +199,7 @@ def test_full_schema_fields(tmp_path):
     assert "impl_hash" in data["verification"]
     # 验证 verification.impl_hash 的值正确落盘
     assert data["verification"]["impl_hash"] == "abc123"
+    assert data["verification"]["regression_test_result_hash"] == "regression789"
     # 验证穿刺基线字段正确落盘
     assert data["spike_baseline"]["product_design_hash"] == "product123"
     assert data["spike_baseline"]["code_design_hash"] == "code123"
@@ -202,3 +222,33 @@ def test_old_state_without_spike_baseline_is_compatible():
     assert loaded.spike_baseline.captured_at is None
     assert loaded.spike_baseline.product_design_paths == []
     assert loaded.spike_baseline.legacy_unavailable is False
+
+
+def test_old_stage_without_artifact_baseline_is_compatible():
+    loaded = state_from_dict({
+        "workflow_id": "legacy",
+        "intent": "product_change",
+        "current_stage": "spec",
+        "stages": {
+            "spec": {
+                "status": "in_progress",
+                "artifact_paths": ["spec/product.md"],
+                "gate": {},
+            },
+        },
+    })
+
+    assert loaded.stages["spec"].artifact_baseline_captured_at is None
+    assert loaded.stages["spec"].artifact_baseline_hashes == {}
+
+
+def test_old_single_topic_state_migrates_to_topics_list():
+    loaded = state_from_dict({
+        "workflow_id": "legacy",
+        "intent": "from_scratch",
+        "topic": "旧主题",
+        "stages": {},
+    })
+
+    assert loaded.topic == "旧主题"
+    assert loaded.topics == ["旧主题"]

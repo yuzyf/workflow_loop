@@ -32,6 +32,10 @@ class StageState:
     artifact_paths: list[str] = field(default_factory=list)
     # 产出文件首次出现的时间戳（ISO 8601 UTC），用于 journal 追溯
     artifact_produced_at: str | None = None
+    # 用户确认讨论完成时保存的文件基线时间；用于判断本阶段是否真的修改了产物
+    artifact_baseline_captured_at: str | None = None
+    # 基线文件哈希，key 是项目根下的相对路径，value 是 SHA256；文件当时不存在时为 None
+    artifact_baseline_hashes: dict[str, str | None] = field(default_factory=dict)
     # 该 stage 的 3 道闸状态，嵌套 dataclass
     gate: GateState = field(default_factory=GateState)
 
@@ -51,18 +55,21 @@ class ArchitectureState:
 # 通过状态只对绑定的上游内容有效；上游变化时下游门禁清零
 @dataclass
 class VerificationState:
-    # impl 代码 + 实施记录的 SHA256 哈希
-    # 在 gate impl --confirmed 时记录；进入 test/acceptance 的第 2 道闸时检查
+    # 实施代码 + impl/ 下全部实施记录的 SHA256 哈希
+    # 在 gate topic_execution --confirmed 时记录；进入最终全量回归和整体验收前检查
     impl_hash: str | None = None
     # qa/<topic>_plan.md 内容的 SHA256 哈希
-    # 在 gate test_plan --confirmed 时记录；test_plan 变化时清零 test 和 acceptance
+    # 在 gate test_plan --confirmed 时记录；变化时使主题执行、最终全量回归和整体验收失效
     test_plan_hash: str | None = None
     # acceptance/<topic>_plan.md 内容的 SHA256 哈希
-    # 在 gate acceptance_plan --confirmed 时记录；acceptance_plan 变化时清零 acceptance 并退 test_plan
+    # 在 gate acceptance_plan --confirmed 时记录；变化时退回测试计划和后续阶段
     acceptance_plan_hash: str | None = None
     # qa/<topic>_result.md 内容的 SHA256 哈希
-    # 在 gate test --confirmed 时记录；test 结果变化时清零 acceptance
+    # 在 gate topic_execution --confirmed 时记录；变化时使最终全量回归和整体验收失效
     test_result_hash: str | None = None
+    # qa/final_regression_result.md 内容的 SHA256 哈希
+    # 在 gate regression_test --confirmed 时记录；变化时清零 overall_acceptance
+    regression_test_result_hash: str | None = None
 
 
 # 穿刺阶段开始时的设计文档基线
@@ -101,8 +108,10 @@ class WorkflowState:
     ended_at: str | None = None
     # abort 时写作废时间（run_status=aborted）；done 时为 None
     aborted_at: str | None = None
-    # 主题字符串，plan/fix_plan stage 的 --confirmed 时写入；之前的 stage 为 None
+    # 旧版单主题字段。只用于读取旧 state.json；新流程使用 topics。
     topic: str | None = None
+    # 本次需求的全部验收主题。主题在 acceptance_plan 确认时确定。
+    topics: list[str] = field(default_factory=list)
     # 从零做清场确认标记：workflow start --intent from_scratch --confirm-clean 时置 true
     clean_confirmed: bool = False
     # spike 跳过标记：gate spike --skip 时置 true
@@ -156,6 +165,8 @@ def state_from_dict(data: dict) -> WorkflowState:
             status=stage_data.get("status", "pending"),
             artifact_paths=stage_data.get("artifact_paths", []),
             artifact_produced_at=stage_data.get("artifact_produced_at"),
+            artifact_baseline_captured_at=stage_data.get("artifact_baseline_captured_at"),
+            artifact_baseline_hashes=stage_data.get("artifact_baseline_hashes", {}),
             gate=gate,
         )
     # 读 architecture 字段（架构门禁标记）
@@ -164,6 +175,12 @@ def state_from_dict(data: dict) -> WorkflowState:
     verification_data = data.get("verification", {})
     # 读 spike_baseline 字段；旧 state.json 没有时按未记录处理
     spike_baseline_data = data.get("spike_baseline", {})
+    # 兼容旧版单主题 state.json：没有 topics 时把 topic 转成单元素列表。
+    legacy_topic = data.get("topic")
+    topics = data.get("topics", [])
+    if not topics and legacy_topic:
+        topics = [legacy_topic]
+
     # 重建最外层的 WorkflowState
     return WorkflowState(
         workflow_id=data["workflow_id"],
@@ -173,7 +190,8 @@ def state_from_dict(data: dict) -> WorkflowState:
         started_at=data.get("started_at", ""),
         ended_at=data.get("ended_at"),
         aborted_at=data.get("aborted_at"),
-        topic=data.get("topic"),
+        topic=legacy_topic,
+        topics=topics,
         clean_confirmed=data.get("clean_confirmed", False),
         spike_skipped=data.get("spike_skipped", False),
         stage_path=data.get("stage_path", []),
@@ -187,6 +205,7 @@ def state_from_dict(data: dict) -> WorkflowState:
             test_plan_hash=verification_data.get("test_plan_hash"),
             acceptance_plan_hash=verification_data.get("acceptance_plan_hash"),
             test_result_hash=verification_data.get("test_result_hash"),
+            regression_test_result_hash=verification_data.get("regression_test_result_hash"),
         ),
         spike_baseline=SpikeBaselineState(
             captured_at=spike_baseline_data.get("captured_at"),
