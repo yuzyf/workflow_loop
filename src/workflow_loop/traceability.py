@@ -24,6 +24,9 @@ TRACEABILITY_HEADERS = [
 ]
 
 _INITIAL_VALUES = {"待制定", "待执行", "待更新"}
+_TEST_ITEM_LINK_RE = re.compile(
+    r"\[(TC-\d{2,})\s+([^\]]+)\]\(#(tc-\d{2,})\)"
+)
 
 
 def _workflow_heading_pattern(workflow_id: str) -> re.Pattern[str]:
@@ -117,6 +120,30 @@ def _link_files(
         raise ValueError(f"{directory}/ 下没有可写入追踪表的 .md 文件")
     links = [f"[{name}](./{directory}/{name})" for name in files]
     return f"{label}：" + "<br>".join(links)
+
+
+def _test_plan_links(project_root: str, topic: str) -> str:
+    """读取主题测试计划中的 TC，生成追踪表中的直接链接。"""
+    path = Path(project_root) / "qa" / f"{topic}_plan.md"
+    if not path.is_file():
+        raise ValueError(f"{path.relative_to(project_root)} 不存在")
+    content = path.read_text(encoding="utf-8")
+    section_match = re.search(
+        r"^##\s+1\.\s+验收条件覆盖\s*$\n(.*?)(?=^##\s+2\.|\Z)",
+        content,
+        re.MULTILINE | re.DOTALL,
+    )
+    if section_match is None:
+        raise ValueError(f"qa/{topic}_plan.md 缺少验收条件覆盖章节")
+    items = _TEST_ITEM_LINK_RE.findall(section_match.group(1))
+    if not items:
+        raise ValueError(f"qa/{topic}_plan.md 没有可写入追踪表的测试项")
+    links = [f"[测试计划](./qa/{topic}_plan.md)"]
+    links.extend(
+        f"[{test_id} {name}](./qa/{topic}_plan.md#{anchor_id.lower()})"
+        for test_id, name, anchor_id in items
+    )
+    return "<br>".join(links)
 
 
 def validate_structure(
@@ -216,10 +243,9 @@ def update_for_stage(
             workflow_id,
             topics,
             3,
-            lambda topic, current: _set_or_append_link(
+            lambda topic, current: _set_or_append_text(
                 current,
-                "测试计划",
-                f"./qa/{topic}_plan.md",
+                _test_plan_links(project_root, topic),
             ),
         )
 

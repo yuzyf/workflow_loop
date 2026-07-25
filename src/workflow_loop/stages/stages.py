@@ -10,6 +10,7 @@ from ..artifact_validation import (
     validate_overall_acceptance_prerequisites,
     validate_project_design_init_evidence,
     validate_reproduce_documents,
+    validate_test_plan_documents,
     validate_topic_execution_results,
 )
 from ..spike_validation import validate_spike_stage
@@ -337,6 +338,9 @@ class TestPlanStage(StageStrategy):
         # qa/ 目录不存在 → 直接判失败
         if not os.path.exists(qa_dir):
             return (False, "qa/ 目录不存在")
+        index_md = os.path.join(qa_dir, "index.md")
+        if not os.path.isfile(index_md):
+            return (False, "qa/index.md 不存在")
         # 列出 qa/ 下所有 *_plan.md 文件
         plan_files = [f for f in os.listdir(qa_dir) if f.endswith("_plan.md")]
         # 没有任何 *_plan.md → 判失败
@@ -348,6 +352,15 @@ class TestPlanStage(StageStrategy):
         missing = missing_topic_files(project_root, "qa", "_plan.md", topics)
         if missing:
             return (False, f"缺少测试计划文档: {missing}")
+        with open(index_md, "r", encoding="utf-8") as f:
+            index_content = f.read()
+        missing_index_links = [
+            f"{topic}_plan.md"
+            for topic in topics
+            if f"{topic}_plan.md" not in index_content
+        ]
+        if missing_index_links:
+            return (False, f"qa/index.md 缺少主题测试计划链接: {missing_index_links}")
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
@@ -358,7 +371,11 @@ class TestPlanStage(StageStrategy):
         )
         if not trace_ok:
             return (False, trace_detail)
-        return (True, f"测试计划覆盖全部主题: {topics}")
+        return validate_test_plan_documents(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:

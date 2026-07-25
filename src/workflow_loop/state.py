@@ -72,6 +72,27 @@ class VerificationState:
     regression_test_result_hash: str | None = None
 
 
+# test_plan 阶段的修改前全量测试基线
+# 记录项目在开始实施代码前的测试状态；不代表本次需求已经测试通过
+@dataclass
+class TestBaselineState:
+    # 项目配置中的统一测试入口文本，可以是脚本路径或命令
+    entry: str | None = None
+    # 实际执行的命令文本
+    command: str | None = None
+    # 开始和结束时间（ISO 8601 UTC）
+    started_at: str | None = None
+    finished_at: str | None = None
+    # not_run / passed / failed / unavailable / not_applicable
+    status: str = "not_run"
+    # 测试进程退出码；无法启动或超时时为空
+    exit_code: int | None = None
+    # 执行时对应的代码快照哈希，用于判断是否可以复用结果
+    code_snapshot_hash: str | None = None
+    # 只保存输出末尾，避免 state.json 无限增大
+    output_tail: str = ""
+
+
 # 穿刺阶段开始时的设计文档基线
 # 门2用它判断穿刺结论要求修改设计时，相关文档是否真的发生了变化
 @dataclass
@@ -125,6 +146,8 @@ class WorkflowState:
     architecture: ArchitectureState = field(default_factory=ArchitectureState)
     # 验证绑定哈希，见 VerificationState
     verification: VerificationState = field(default_factory=VerificationState)
+    # 修改前全量测试基线，见 TestBaselineState
+    test_baseline: TestBaselineState = field(default_factory=TestBaselineState)
     # 穿刺进入时的产品设计和代码设计基线
     spike_baseline: SpikeBaselineState = field(default_factory=SpikeBaselineState)
     # 自由扩展口子（hooks 等后面用，第一版为空）
@@ -173,6 +196,8 @@ def state_from_dict(data: dict) -> WorkflowState:
     arch_data = data.get("architecture", {})
     # 读 verification 字段（验证绑定哈希）
     verification_data = data.get("verification", {})
+    # 读 test_baseline 字段；旧 state.json 没有时按未执行处理
+    test_baseline_data = data.get("test_baseline", {})
     # 读 spike_baseline 字段；旧 state.json 没有时按未记录处理
     spike_baseline_data = data.get("spike_baseline", {})
     # 兼容旧版单主题 state.json：没有 topics 时把 topic 转成单元素列表。
@@ -206,6 +231,16 @@ def state_from_dict(data: dict) -> WorkflowState:
             acceptance_plan_hash=verification_data.get("acceptance_plan_hash"),
             test_result_hash=verification_data.get("test_result_hash"),
             regression_test_result_hash=verification_data.get("regression_test_result_hash"),
+        ),
+        test_baseline=TestBaselineState(
+            entry=test_baseline_data.get("entry", test_baseline_data.get("entry_path")),
+            command=test_baseline_data.get("command"),
+            started_at=test_baseline_data.get("started_at"),
+            finished_at=test_baseline_data.get("finished_at"),
+            status=test_baseline_data.get("status", "not_run"),
+            exit_code=test_baseline_data.get("exit_code"),
+            code_snapshot_hash=test_baseline_data.get("code_snapshot_hash"),
+            output_tail=test_baseline_data.get("output_tail", ""),
         ),
         spike_baseline=SpikeBaselineState(
             captured_at=spike_baseline_data.get("captured_at"),

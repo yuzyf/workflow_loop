@@ -230,13 +230,11 @@ def test_install_project_marks_undiscussed_stage_materials_as_pending(tmp_path):
         ("Template_Repository", "plan", "plan.md"),
         ("Template_Repository", "plan", "fix_plan.md"),
         ("Template_Repository", "impl", "impl.md"),
-        ("Template_Repository", "qa", "test_plan.md"),
         ("Template_Repository", "qa", "test.md"),
         ("Template_Repository", "qa", "final_regression.md"),
         ("Standardized_Repository", "plan", "plan.md"),
         ("Standardized_Repository", "plan", "fix_plan.md"),
         ("Standardized_Repository", "impl", "impl.md"),
-        ("Standardized_Repository", "qa", "test_plan.md"),
         ("Standardized_Repository", "qa", "test.md"),
     ]
 
@@ -246,6 +244,31 @@ def test_install_project_marks_undiscussed_stage_materials_as_pending(tmp_path):
             content = f.read()
         assert "待讨论" in content
         assert "尚未与用户讨论" in content
+
+    template_path = os.path.join(
+        workflow_dir, "Template_Repository", "qa", "test_plan.md",
+    )
+    standard_path = os.path.join(
+        workflow_dir, "Standardized_Repository", "qa", "test_plan.md",
+    )
+    with open(template_path) as f:
+        template = f.read()
+    with open(standard_path) as f:
+        standard = f.read()
+
+    # Template_Repository 是最终测试计划文档模板，不是测试计划阶段工作规范。
+    assert "测试计划文档模板" in template
+    assert "qa/<topic>_plan.md" in template
+    assert "# <主题>测试计划" in template
+    assert "全局覆盖审查" not in template
+    assert "待讨论" not in template
+
+    # Standardized_Repository 才负责测试计划阶段怎样调查和讨论。
+    assert "测试计划阶段规范提示词" in standard
+    assert "全局检查顺序" in standard
+    assert "阶段职责" in standard
+    assert "测试计划文档结构" in standard
+    assert "待讨论" not in standard
 
 
 # 测试 install_project 覆盖 AGENTS.md（首次安装写入 workflow_loop 契约）

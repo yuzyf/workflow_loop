@@ -12,6 +12,7 @@ from . import installer as installer_mod
 from . import bug_record as bug_record_mod
 from . import traceability as traceability_mod
 from . import topic as topic_mod
+from . import test_runner as test_runner_mod
 from .path_composer import build_stage_path, INTENT_CHOICES
 from .stages import ProjectDesignInitStage
 from .stages.base import StageStrategy, clean_spike_tmp
@@ -648,6 +649,35 @@ def apply_stage_completion_updates(
     return updates
 
 
+def validate_stage_output(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    stage_name: str,
+    stage: StageStrategy,
+) -> tuple[bool, str]:
+    """执行阶段产物校验；test_plan 额外执行修改前全量测试基线。"""
+
+    passed, details = stage.code_validate(project_root)
+    if stage_name != "test_plan" or not passed:
+        return passed, details
+
+    baseline_result = test_runner_mod.ensure_test_baseline(project_root, wf_state)
+    action = "修改前全量测试复用" if baseline_result.reused else "修改前全量测试"
+    journal_mod.append_entry(
+        project_root,
+        action,
+        "workflow.py",
+        stage=stage_name,
+        passed=baseline_result.passed,
+        ran=baseline_result.ran,
+        reused=baseline_result.reused,
+        **test_runner_mod.baseline_journal_fields(wf_state),
+    )
+    if not baseline_result.passed:
+        return False, f"{details}；{baseline_result.detail}"
+    return True, f"{details}；{baseline_result.detail}"
+
+
 # gate 命令：3 道闸的总入口 + spike --skip
 # --discuss-done：第 1 道闸（讨论完毕）
 # 无 flag：第 2 道闸（代码校验 + Verification Invalidation 检查）
@@ -797,8 +827,13 @@ def cmd_gate(args) -> None:
             print_next_step(current_stage_next_instruction(wf_state))
             return
 
-        # 跑 code_validate（第 2 道闸的核心）
-        passed, details = stage.code_validate(project_root)
+        # 跑 code_validate（第 2 道闸的核心）；test_plan 还会执行修改前全量测试
+        passed, details = validate_stage_output(
+            project_root,
+            wf_state,
+            stage_name,
+            stage,
+        )
         # 写 journal：门禁代码校验
         journal_mod.append_entry(project_root, "门禁代码校验", "workflow.py",
                                 stage=stage_name, passed=passed, details=details)
@@ -897,7 +932,12 @@ def cmd_gate(args) -> None:
         print_next_step(current_stage_next_instruction(wf_state))
         return
 
-    passed, details = stage.code_validate(project_root)
+    passed, details = validate_stage_output(
+        project_root,
+        wf_state,
+        stage_name,
+        stage,
+    )
     journal_mod.append_entry(
         project_root,
         "门禁确认前复核",

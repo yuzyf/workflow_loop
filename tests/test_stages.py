@@ -21,6 +21,41 @@ def _write(path, content="ready"):
     path.write_text(content, encoding="utf-8")
 
 
+def _write_test_plan(tmp_path, topic):
+    _write(
+        tmp_path / "qa" / f"{topic}_plan.md",
+        f"""# {topic}测试计划
+
+- 工作流编号：test
+- 上游验收计划：[验收计划](../acceptance/{topic}_plan.md)
+
+## 1. 验收条件覆盖
+
+| 验收条件链接 | 测试项 | 验证方向 | 预期观察结果 | 证据要求 |
+|---|---|---|---|---|
+| [AC-01：完成条件](../acceptance/{topic}_plan.md#ac-01) | <a id="tc-01"></a>[TC-01 验证{topic}完成](#tc-01) | 检查{topic} | 观察到{topic}完成 | 保留执行证据 |
+
+## 2. 针对性回归范围
+
+暂无
+
+## 3. 测试条件要求
+
+暂无
+
+## 4. 未决测试条件
+
+暂无
+
+## 5. 上下游文档
+
+- 上游验收计划：[验收计划](../acceptance/{topic}_plan.md)
+- 下游实施计划：[实施计划](../plan/index.md)
+- 下游测试结果：[测试结果](./{topic}_result.md)
+""",
+    )
+
+
 def _save_stage_baseline(tmp_path, stage, paths):
     save_state(str(tmp_path), WorkflowState(
         workflow_id="2026-07-24-1200-test",
@@ -417,17 +452,48 @@ def test_acceptance_plan_finds_new_topics_and_test_plan_requires_same_topics(tmp
         intent="from_scratch",
         topics=["上传文件", "查看状态"],
     ))
-    _write(tmp_path / "qa" / "上传文件_plan.md")
+    _write_test_plan(tmp_path, "上传文件")
+    _write(tmp_path / "qa" / "index.md", "- [上传文件](./上传文件_plan.md)\n")
 
     ok, detail = TestPlanStage().code_validate(str(tmp_path))
     assert ok is False
     assert "查看状态_plan.md" in detail
 
     _write_acceptance_documents(tmp_path, "test", ["上传文件", "查看状态"])
-    _write(tmp_path / "qa" / "查看状态_plan.md")
+    _write_test_plan(tmp_path, "查看状态")
+    _write(
+        tmp_path / "qa" / "index.md",
+        "- [上传文件](./上传文件_plan.md)\n- [查看状态](./查看状态_plan.md)\n",
+    )
     ok, detail = TestPlanStage().code_validate(str(tmp_path))
-    assert ok is True
-    assert "覆盖全部主题" in detail
+    assert ok is True, detail
+    assert "覆盖 2 条验收条件" in detail
+
+
+def test_test_plan_rejects_missing_acceptance_to_test_item_mapping(tmp_path):
+    create_project(str(tmp_path))
+    save_state(str(tmp_path), WorkflowState(
+        workflow_id="test",
+        intent="from_scratch",
+        current_stage="test_plan",
+        topics=["上传文件"],
+    ))
+    _write_acceptance_documents(tmp_path, "test", ["上传文件"])
+    _write_test_plan(tmp_path, "上传文件")
+    plan_path = tmp_path / "qa" / "上传文件_plan.md"
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8").replace(
+            "[TC-01 验证上传文件完成](#tc-01)",
+            "TC-01",
+        ),
+        encoding="utf-8",
+    )
+    _write(tmp_path / "qa" / "index.md", "- [上传文件](./上传文件_plan.md)\n")
+
+    ok, detail = TestPlanStage().code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "没有带编号、名称和锚点的测试项" in detail
 
 
 def test_update_code_design_rejects_unchanged_architecture_document(tmp_path):

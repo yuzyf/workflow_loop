@@ -19,6 +19,16 @@ ACCEPTANCE_PLAN_SECTIONS = [
     "5. 完成判定",
     "6. 上下游文档",
 ]
+TEST_PLAN_SECTIONS = [
+    "1. 验收条件覆盖",
+    "2. 针对性回归范围",
+    "3. 测试条件要求",
+    "4. 未决测试条件",
+    "5. 上下游文档",
+]
+TEST_ITEM_LINK_RE = re.compile(
+    r"\[(TC-\d{2,})\s+([^\]]+)\]\(#(tc-\d{2,})\)"
+)
 CODE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".java", ".kt", ".kts",
     ".py", ".pyi", ".go", ".rs", ".swift", ".m", ".mm", ".js", ".jsx",
@@ -352,6 +362,86 @@ def validate_downstream_traceability(
 ) -> tuple[bool, str]:
     """后续阶段共用的追踪表门禁，不要求测试计划正文结构。"""
     return validate_traceability_structure(project_root, workflow_id, topics)
+
+
+def validate_test_plan_documents(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """校验测试计划结构，以及每条 AC 到 TC 的覆盖关系。"""
+    index_path = os.path.join(project_root, "qa", "index.md")
+    if not os.path.isfile(index_path):
+        return False, "qa/index.md 不存在"
+    index_content = _read_text(project_root, os.path.join("qa", "index.md"))
+    index_links = set(re.findall(r"\[[^\]]+\]\((?:\./)?([^)]*_plan\.md)\)", index_content))
+
+    total_criteria = 0
+    total_test_items = 0
+    for topic in topics:
+        acceptance_rel_path = os.path.join("acceptance", f"{topic}_plan.md")
+        test_rel_path = os.path.join("qa", f"{topic}_plan.md")
+        if f"{topic}_plan.md" not in index_links:
+            return False, f"qa/index.md 缺少主题测试计划链接: {topic}_plan.md"
+        if not os.path.isfile(os.path.join(project_root, acceptance_rel_path)):
+            return False, f"缺少上游验收计划: {acceptance_rel_path}"
+        if not os.path.isfile(os.path.join(project_root, test_rel_path)):
+            return False, f"缺少测试计划文档: {test_rel_path}"
+
+        acceptance_content = _read_text(project_root, acceptance_rel_path)
+        test_content = _read_text(project_root, test_rel_path)
+        if _field(test_content, "工作流编号") != workflow_id:
+            return False, f"{test_rel_path} 的工作流编号与当前工作流不一致"
+        for heading in TEST_PLAN_SECTIONS:
+            if _section(test_content, heading) is None:
+                return False, f"{test_rel_path} 缺少“{heading}”"
+        if f"../acceptance/{topic}_plan.md" not in test_content:
+            return False, f"{test_rel_path} 缺少上游验收计划链接"
+        if "../plan/index.md" not in test_content:
+            return False, f"{test_rel_path} 缺少下游实施计划链接"
+        if f"./{topic}_result.md" not in test_content:
+            return False, f"{test_rel_path} 缺少下游测试结果链接"
+        if re.search(r"测试(?:结果|状态)\s*[：:]\s*(?:通过|失败)", test_content):
+            return False, f"{test_rel_path} 不能提前填写测试通过或失败"
+
+        criterion_ids = ACCEPTANCE_CRITERION_RE.findall(acceptance_content)
+        if not criterion_ids:
+            return False, f"{acceptance_rel_path} 没有可覆盖的验收条件"
+        coverage = _section(test_content, "1. 验收条件覆盖") or ""
+        for column in ("验收条件链接", "测试项", "验证方向", "预期观察结果", "证据要求"):
+            if column not in coverage:
+                return False, f"{test_rel_path} 的验收条件覆盖缺少“{column}”列"
+        test_items = TEST_ITEM_LINK_RE.findall(coverage)
+        if not test_items:
+            return False, f"{test_rel_path} 没有带编号、名称和锚点的测试项"
+        for test_id, test_name, anchor_id in test_items:
+            if test_id.lower() != anchor_id.lower():
+                return False, f"{test_rel_path} 的测试项 {test_id} 锚点必须是 #{test_id.lower()}"
+            if not _has_real_text(test_name):
+                return False, f"{test_rel_path} 的测试项 {test_id} 缺少直白名称"
+            if f'id="{anchor_id.lower()}"' not in coverage:
+                return False, f"{test_rel_path} 的测试项 {test_id} 缺少可跳转锚点"
+        for criterion_id in criterion_ids:
+            criterion_lines = [
+                line for line in coverage.splitlines()
+                if criterion_id in line
+            ]
+            if not criterion_lines:
+                return False, f"{test_rel_path} 没有覆盖 {criterion_id}"
+            if not any(
+                f"../acceptance/{topic}_plan.md#" in line
+                for line in criterion_lines
+            ):
+                return False, f"{test_rel_path} 的 {criterion_id} 没有链接到验收计划具体位置"
+            if not any(TEST_ITEM_LINK_RE.search(line) for line in criterion_lines):
+                return False, f"{test_rel_path} 的 {criterion_id} 没有关联测试项"
+        total_criteria += len(criterion_ids)
+        total_test_items += len(test_items)
+
+    return (
+        True,
+        f"测试计划结构完整，{len(topics)} 个主题覆盖 {total_criteria} 条验收条件，包含 {total_test_items} 个测试项",
+    )
 
 
 def _validate_topic_result_file(

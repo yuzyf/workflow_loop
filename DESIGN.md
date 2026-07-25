@@ -202,6 +202,16 @@ AI 回复用户和编写正式文档时：
     "test_result_hash": null,
     "regression_test_result_hash": null
   },
+  "test_baseline": {
+    "entry": null,
+    "command": null,
+    "started_at": null,
+    "finished_at": null,
+    "status": "not_run",
+    "exit_code": null,
+    "code_snapshot_hash": null,
+    "output_tail": ""
+  },
   "spike_baseline": {
     "captured_at": null,
     "product_design_hash": null,
@@ -268,7 +278,8 @@ AI 回复用户和编写正式文档时：
   "installer_version": "0.1.0",
   "installed_at": "2026-07-20T10:00:00Z",
   "project_design_initialized": false,
-  "topic_history": []
+  "topic_history": [],
+  "test_entry": "scripts/test_all.sh"
 }
 ```
 
@@ -278,6 +289,7 @@ AI 回复用户和编写正式文档时：
 | `installed_at` | str | 安装时间 ISO 8601 UTC |
 | `project_design_initialized` | bool | 项目设计架构初始化标记；安装时 `false`；`project_design_init` stage `--confirmed` 后置 `true`；`from_scratch` 在 `spec` + `code_design` 都 `--confirmed` 后置 `true` |
 | `topic_history` | list[str] | 项目历史中已经确认过的主题；`bugfix` 在 `reproduce` 确认，其他意图在 `acceptance_plan` 确认；跨 Run 保留，防止主题重名 |
+| `test_entry` | str | 项目统一全量测试入口；已有命令或脚本时填写已有入口，没有时填写项目提供的统一脚本；默认值为 `scripts/test_all.sh` |
 
 ### 3.3 journal.jsonl（历史记录）
 
@@ -301,6 +313,8 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 | 阶段产物基线 | 需要变化校验的 stage 第一次 `gate --discuss-done` 时 | `stage`, `artifact_hashes` |
 | 产出文件检查 | `gate`（无 flag）检查时 | `stage`, `artifact`, `exists` |
 | 门禁代码校验 | `gate`（无 flag）时 | `stage`, `passed`, `details` |
+| 修改前全量测试 | `test_plan` 门禁结构校验通过后 | `stage`, `entry`, `command`, `started_at`, `finished_at`, `status`, `exit_code`, `code_snapshot_hash`, `output_tail` |
+| 修改前全量测试复用 | `test_plan` 第三道门发现代码快照未变化时 | 同上，并增加 `reused=true` |
 | 门禁确认前复核 | `gate --confirmed` 推进前重新校验当前产物时 | `stage`, `passed`, `details` |
 | 验证失效 | 上游 hash 变化清零下游时 | `from_stage`, `to_stage`, `reason` |
 | 门禁用户确认 | `gate --confirmed` 时 | `stage`, `passed` |
@@ -609,6 +623,10 @@ class StageStrategy(ABC):
 
 **实现位置**：`src/workflow_loop/verification.py`。
 
+**修改前全量测试基线**：`test_plan` 第二道门执行项目统一测试入口，结果保存到 `state.json` 的 `test_baseline`。其中 `status=passed` 且 `code_snapshot_hash` 与当前代码快照一致时，第三道门可以复用结果；代码、测试或统一测试脚本变化后，必须重新执行。测试输出只保留末尾摘要，完整过程由测试入口自己输出，门禁把状态和摘要写入 `journal.jsonl`。
+
+**代码快照范围**：只计算代码文件、测试文件、脚本和项目构建配置，不计算 `.workflow_loop/state.json`、`.workflow_loop/journal.jsonl` 或 Markdown 文档，避免门禁记录自身结果时误使基线失效。
+
 ### 6.5 on_advance() 钩子
 - 默认 no-op
 - `spike` stage 重写：删除 `.workflow_loop/spike_tmp/` 下所有内容（保留 `spec/spike_index.md`、`spec/spike_*.md` 和更新后的设计文档）
@@ -654,7 +672,7 @@ class StageStrategy(ABC):
 - `Standardized_Repository` 保存阶段工作规范：规定 AI 怎样调查、讨论、执行、取得用户确认，并说明怎样使用产物文档模板。
 - Python 代码执行确定的阶段顺序、三道门、主题登记、允许状态、文件和字段校验、哈希、追踪表更新和阶段推进。
 - 同一个最终文档被多个阶段新建、修订或更新时，共用一份产物文档模板；各阶段的不同工作方法分别写入对应阶段工作规范。
-- `prompt_doc_path()`（提示词文档路径）和命令行“流程模版”是尚未完成全仓迁移的旧代码名称，不能用它们判断文件职责。产品设计、代码设计、穿刺和验收资源已经按本节职责校准；测试计划及后续未讨论资源将在对应阶段讨论时迁移。
+- `prompt_doc_path()`（提示词文档路径）是兼容旧代码的字段名，实际指向 `Template_Repository` 中的产物文档模板；命令行显示的“流程模版”也指这个模板。不能因为字段名叫 prompt 就把模板文件改成阶段规范。所有已经讨论的阶段都必须遵守本节职责；尚未讨论的阶段材料继续保持占位，不自行扩写。
 
 ---
 
@@ -814,14 +832,15 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 测试计划制定者 |
-| 产物文档模板 | `Template_Repository/qa/test_plan.md`；当前为待讨论占位文件 |
-| 阶段工作规范 | `Standardized_Repository/qa/test_plan.md`；当前为待讨论占位文件 |
+| 产物文档模板 | `Template_Repository/qa/test_plan.md`；提供 `qa/<topic>_plan.md` 和 `qa/index.md` 的文档骨架、字段、链接和内容边界 |
+| 阶段工作规范 | `Standardized_Repository/qa/test_plan.md`；规定 AI 怎样调查、讨论和检查测试覆盖，以及什么时候退回上游阶段 |
 | 产物 | `qa/<topic>_plan.md` + 更新 `qa/index.md` |
-| `code_validate` | `state.topics` 中每个主题都有同名 `qa/<topic>_plan.md`，并且当前工作流追踪表存在 |
-| 门3确认处理 | 记录 `verification.test_plan_hash`，更新追踪表的测试计划列 |
-| instruction | "根据已确认的验收主题制定测试计划，不执行测试，也不改变主题" |
+| `code_validate` | `state.topics` 中每个主题都有同名 `qa/<topic>_plan.md`，`qa/index.md` 和当前工作流追踪表存在，并且每条 AC 都关联了带名称和锚点的 TC |
+| 修改前基线门禁 | 通过项目统一测试入口运行修改前全量测试；命令、退出状态、执行时间和结果写入 State Snapshot 与 Journal |
+| 门3确认处理 | 记录 `verification.test_plan_hash`，更新追踪表的测试项列 |
+| instruction | "根据已确认的验收条件审查测试覆盖，生成各主题测试计划；不执行本次需求正式测试，不改变主题" |
 
-具体测试项字段和文档正文结构后续单独完善。
+测试计划不生成测试结果文档；实施代码完成后由主题执行阶段执行测试，所有主题完成后由 `regression_test` 执行最终全量回归。
 
 ### 7.9 plan（实施计划制定）
 
@@ -1211,4 +1230,4 @@ bug/
 - 机制：无 Verification Invalidation + 无 Architecture Gate Marks + 无 Clean Confirm + 无 Optional Spike --skip → 全部新增
 - 穿刺：只检查任意 `spike_*.md` → 当前工作流清单 + 每项结论 + 固定状态 + 阻塞检查 + 产品/代码设计修改哈希校验
 
-**当前状态**：产品设计、代码设计、穿刺、缺陷复现和验收阶段已经按“产物文档模板 + 阶段工作规范 + Python 门禁”重新校准；代码设计的初步设计、产品变更修订和最终更新共用同一份架构文档模板；没有独立产物的主题执行和整体验收不再虚构模板。计划、实施和测试材料尚未讨论的内容已改成明确占位文件，不能当成正式规则。完整测试已通过 108 项。当前工作流停在 `test_plan`，下一步是单独讨论并迁移测试计划阶段材料。
+**当前状态**：产品设计、代码设计、穿刺、缺陷复现、验收计划和测试计划阶段材料已经按“流程模板提示词 + 流程规范提示词 + Python 门禁”重新校准；代码设计的初步设计、产品变更修订和最终更新共用同一份架构文档模板；没有独立产物的主题执行和整体验收不再虚构模板。计划和实施材料尚未讨论的内容仍保持明确占位，不能当成正式规则。项目统一测试入口已通过 `.workflow_loop/project.json` 的 `test_entry` 配置并接入 `test_plan` 门禁，当前全量测试通过 117 项。当前工作流停在 `test_plan`，下一步是继续细化测试执行和最终回归阶段。

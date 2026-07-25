@@ -1,7 +1,6 @@
 import hashlib
 import os
 import re
-import subprocess
 
 from .state import WorkflowState, StageState, GateState
 from .topic import candidate_topics
@@ -87,50 +86,38 @@ def compute_code_design_hash(project_root: str) -> str | None:
     return compute_file_hash(project_root, os.path.join("spec", "architecture_code_design.md"))
 
 
-# 计算项目代码快照的哈希（impl_hash 的一部分）
-# 优先用 git status --porcelain + git diff --stat 的输出做哈希
-# 非 git 仓库时退化为遍历代码文件的 mtime+size 快照
+# 计算项目代码快照的哈希（impl_hash 和修改前测试基线的一部分）
+# 只读取代码、测试、脚本和项目构建配置，不把 state/journal/Markdown 文档算进去
+# 这样记录测试结果和追加日志不会误使测试基线失效
 def compute_code_snapshot_hash(project_root: str) -> str:
-    # 尝试用 git 命令获取代码变更快照
-    try:
-        # 跑 git status --porcelain 拿到仓库脏度（哪些文件改了）
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=project_root, capture_output=True, text=True, timeout=10,
-        )
-        # git 命令失败（非 git 仓库或 git 未安装）→ 抛异常走 fallback
-        if result.returncode != 0:
-            raise subprocess.SubprocessError("git status failed")
-        # 拿到 porcelain 输出
-        porcelain = result.stdout
-        # 跑 git diff --stat 拿到变更统计
-        diff_stat = subprocess.run(
-            ["git", "diff", "--stat"],
-            cwd=project_root, capture_output=True, text=True, timeout=10,
-        ).stdout
-        # 合并两个输出，算 SHA256
-        combined = porcelain + "\n" + diff_stat
-        return hashlib.sha256(combined.encode("utf-8")).hexdigest()
-    # git 命令超时 / git 未安装 / 非 git 仓库 → 走 fallback
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        # 收集所有代码文件的信息（路径+大小+mtime）
-        code_files = []
-        # 遍历项目目录
-        for root, dirs, files in os.walk(project_root):
-            # 跳过这些目录（不参与代码快照）
-            dirs[:] = [d for d in dirs if d not in (".git", ".workflow_loop", "__pycache__", ".venv", "node_modules")]
-            # 遍历文件
-            for f in files:
-                # 只算代码文件
-                if f.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".swift", ".ets")):
-                    # 拼出完整路径
-                    full_path = os.path.join(root, f)
-                    # 拿到文件 stat 信息
-                    st = os.stat(full_path)
-                    # 收集 路径:大小:mtime
-                    code_files.append(f"{full_path}:{st.st_size}:{int(st.st_mtime)}")
-        # 排序后算 SHA256（排序保证同一组文件不同顺序产生相同哈希）
-        return hashlib.sha256("\n".join(sorted(code_files)).encode("utf-8")).hexdigest()
+    code_suffixes = (
+        ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
+        ".kt", ".swift", ".ets", ".sh", ".bash", ".zsh",
+    )
+    config_names = {
+        "pyproject.toml", "package.json", "package-lock.json", "yarn.lock",
+        "pnpm-lock.yaml", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
+        "CMakeLists.txt", "Makefile", "justfile",
+    }
+    excluded_dirs = {
+        ".git", ".workflow_loop", "__pycache__", ".venv", "node_modules",
+        ".pytest_cache", "dist", "build",
+    }
+    file_digests = []
+    for root, dirs, files in os.walk(project_root):
+        dirs[:] = [directory for directory in dirs if directory not in excluded_dirs]
+        for filename in files:
+            relative_path = os.path.relpath(os.path.join(root, filename), project_root)
+            if not filename.endswith(code_suffixes) and filename not in config_names:
+                continue
+            full_path = os.path.join(project_root, relative_path)
+            try:
+                with open(full_path, "rb") as stream:
+                    content_hash = hashlib.sha256(stream.read()).hexdigest()
+            except OSError:
+                continue
+            file_digests.append(f"{relative_path}:{content_hash}")
+    return hashlib.sha256("\n".join(sorted(file_digests)).encode("utf-8")).hexdigest()
 
 
 # 计算主题执行阶段的实施综合哈希（impl_hash）

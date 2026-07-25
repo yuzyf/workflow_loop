@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import shutil
@@ -564,6 +565,110 @@ def test_acceptance_plan_confirmation_records_topics_and_project_history(tmp_pat
     assert state["topics"] == ["上传文件", "查看状态"]
     assert state["current_stage"] == "test_plan"
     assert project["topic_history"] == ["上传文件", "查看状态"]
+
+
+def test_test_plan_gate_runs_and_records_unified_test_entry(tmp_path):
+    _setup_project(tmp_path)
+    code, out, err = _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    assert code == 0, f"start failed: {out} {err}"
+
+    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
+    with open(state_path) as f:
+        state = json.load(f)
+    workflow_id = state["workflow_id"]
+    state["current_stage"] = "test_plan"
+    state["topics"] = ["上传文件"]
+    state["topic"] = "上传文件"
+    state["stages"]["test_plan"]["status"] = "in_progress"
+    state["stages"]["test_plan"]["artifact_paths"] = ["qa/index.md"]
+    state["stages"]["test_plan"]["gate"]["discussion_complete"] = True
+    with open(state_path, "w") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+    qa_dir = tmp_path / "qa"
+    qa_dir.mkdir()
+    acceptance_dir = tmp_path / "acceptance"
+    acceptance_dir.mkdir()
+    (acceptance_dir / "上传文件_plan.md").write_text(
+        "# 上传文件验收计划\n\n### AC-01：上传完成\n",
+        encoding="utf-8",
+    )
+    (qa_dir / "index.md").write_text("- [上传文件](./上传文件_plan.md)\n", encoding="utf-8")
+    (qa_dir / "上传文件_plan.md").write_text(
+        f"""# 上传文件测试计划
+
+- 工作流编号：{workflow_id}
+- 上游验收计划：[验收计划](../acceptance/上传文件_plan.md)
+
+## 1. 验收条件覆盖
+
+| 验收条件链接 | 测试项 | 验证方向 | 预期观察结果 | 证据要求 |
+|---|---|---|---|---|
+| [AC-01：上传完成](../acceptance/上传文件_plan.md#ac-01) | <a id="tc-01"></a>[TC-01 验证上传完成](#tc-01) | 检查上传流程 | 观察到上传完成 | 保留执行证据 |
+
+## 2. 针对性回归范围
+
+暂无
+
+## 3. 测试条件要求
+
+暂无
+
+## 4. 未决测试条件
+
+暂无
+
+## 5. 上下游文档
+
+- 上游验收计划：[验收计划](../acceptance/上传文件_plan.md)
+- 下游实施计划：[实施计划](../plan/index.md)
+- 下游测试结果：[测试结果](./上传文件_result.md)
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "traceability.md").write_text(
+        f"""# 需求交付追踪表
+
+## {workflow_id}
+
+### 交付链路
+
+| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
+|---|---|---|---|---|---|---|---|---|
+| [产品设计](./spec/product.md) | [上传文件](./acceptance/上传文件_plan.md) | AC-01：上传完成 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |
+""",
+        encoding="utf-8",
+    )
+    entry = tmp_path / "scripts" / "test_all.sh"
+    entry.parent.mkdir()
+    entry.write_text("#!/usr/bin/env bash\nset -eu\necho all-pass\n", encoding="utf-8")
+    entry.chmod(0o755)
+
+    code, out, err = _run(["gate", "test_plan"], str(tmp_path))
+    assert code == 0, f"test_plan gate failed: {out} {err}"
+    assert "修改前全量测试" in out
+
+    with open(state_path) as f:
+        gated_state = json.load(f)
+    assert gated_state["test_baseline"]["status"] == "passed"
+    assert gated_state["test_baseline"]["exit_code"] == 0
+    assert gated_state["stages"]["test_plan"]["gate"]["code_validated"] is True
+
+    code, out, err = _run(["gate", "test_plan", "--confirmed"], str(tmp_path))
+    assert code == 0, f"test_plan confirmation failed: {out} {err}"
+    with open(state_path) as f:
+        confirmed_state = json.load(f)
+    assert confirmed_state["current_stage"] == "plan"
+
+    with open(tmp_path / ".workflow_loop" / "journal.jsonl") as f:
+        journal = [json.loads(line) for line in f if line.strip()]
+    assert any(
+        entry["action"] in {"修改前全量测试", "修改前全量测试复用"}
+        and entry.get("status") == "passed"
+        for entry in journal
+    )
+    traceability = (tmp_path / "traceability.md").read_text(encoding="utf-8")
+    assert "./qa/上传文件_plan.md" in traceability
 
 
 def test_entering_spike_records_product_and_code_design_baseline(tmp_path):

@@ -11,6 +11,8 @@ PROJECT_FILE = os.path.join(".workflow_loop", "project.json")
 # 安装器版本号，用于重复安装保护判断
 # installer.py 在安装时写入这个版本；is_installed 检查版本是否匹配
 INSTALLER_VERSION = "0.1.0"
+# 项目没有单独配置测试入口时使用的默认脚本
+DEFAULT_TEST_ENTRY = "scripts/test_all.sh"
 
 
 # 项目级持久状态（跨 Run 不被覆盖）
@@ -30,6 +32,8 @@ class ProjectState:
     project_design_initialized: bool = False
     # 已经确认过的验收主题名称。修 bug 在 reproduce 确认，其他意图在 acceptance_plan 确认。
     topic_history: list[str] = field(default_factory=list)
+    # 项目统一全量测试入口；可以是脚本路径或不带 shell 运算符的命令文本
+    test_entry: str = DEFAULT_TEST_ENTRY
 
 
 # 生成 ISO 8601 UTC 时间戳（内部用，不对外暴露）
@@ -58,6 +62,7 @@ def load_project(project_root: str) -> ProjectState | None:
         installed_at=data.get("installed_at", ""),
         project_design_initialized=data.get("project_design_initialized", False),
         topic_history=data.get("topic_history", []),
+        test_entry=data.get("test_entry", DEFAULT_TEST_ENTRY),
     )
 
 

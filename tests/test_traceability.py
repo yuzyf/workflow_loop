@@ -47,11 +47,43 @@ def _write_acceptance_plans(tmp_path: Path) -> None:
         )
 
 
+def _write_test_plans(tmp_path: Path) -> None:
+    for topic in TOPICS:
+        _write(
+            tmp_path / "qa" / f"{topic}_plan.md",
+            f"""# {topic}测试计划
+
+## 1. 验收条件覆盖
+
+| 验收条件链接 | 测试项 | 验证方向 | 预期观察结果 | 证据要求 |
+|---|---|---|---|---|
+| [AC-01：完成条件](../acceptance/{topic}_plan.md#ac-01) | <a id="tc-01"></a>[TC-01 验证{topic}完成](#tc-01) | 检查{topic} | 观察到{topic}完成 | 保留执行证据 |
+
+## 2. 针对性回归范围
+
+暂无
+
+## 3. 测试条件要求
+
+暂无
+
+## 4. 未决测试条件
+
+暂无
+
+## 5. 上下游文档
+
+- 上游验收计划：[验收计划](../acceptance/{topic}_plan.md)
+- 下游实施计划：[实施计划](../plan/index.md)
+- 下游测试结果：[测试结果](./{topic}_result.md)
+""",
+        )
+
+
 def test_traceability_updates_only_current_workflow_and_is_idempotent(tmp_path):
     _write_traceability(tmp_path)
     _write_acceptance_plans(tmp_path)
-    _write(tmp_path / "qa" / "上传文件_plan.md", "# 测试计划\n")
-    _write(tmp_path / "qa" / "查看状态_plan.md", "# 测试计划\n")
+    _write_test_plans(tmp_path)
 
     ok, detail = validate_structure(str(tmp_path), WORKFLOW_ID, TOPICS, require_initial_statuses=True)
     assert ok is True, detail
@@ -64,14 +96,14 @@ def test_traceability_updates_only_current_workflow_and_is_idempotent(tmp_path):
     assert first == second
     assert "[测试计划](./qa/上传文件_plan.md)" in second
     assert "[测试计划](./qa/查看状态_plan.md)" in second
+    assert "[TC-01 验证上传文件完成](./qa/上传文件_plan.md#tc-01)" in second
     assert "| 旧来源 | [旧主题]" in second
 
 
 def test_traceability_updates_each_downstream_column(tmp_path):
     _write_traceability(tmp_path)
     _write_acceptance_plans(tmp_path)
-    _write(tmp_path / "qa" / "上传文件_plan.md", "# 测试计划\n")
-    _write(tmp_path / "qa" / "查看状态_plan.md", "# 测试计划\n")
+    _write_test_plans(tmp_path)
     _write(tmp_path / "impl" / "upload.md", "# 实施记录\n")
     _write(tmp_path / "plan" / "index.md", "# 实施计划索引\n")
     _write(tmp_path / "qa" / "上传文件_result.md", "# 测试结果\n")
@@ -99,8 +131,7 @@ def test_traceability_updates_do_not_change_acceptance_plan_hash(tmp_path):
     _write_acceptance_plans(tmp_path)
     before = compute_acceptance_plan_hash(str(tmp_path), TOPICS)
 
-    _write(tmp_path / "qa" / "上传文件_plan.md", "# 测试计划\n")
-    _write(tmp_path / "qa" / "查看状态_plan.md", "# 测试计划\n")
+    _write_test_plans(tmp_path)
     update_for_stage(str(tmp_path), WORKFLOW_ID, TOPICS, "test_plan")
 
     assert compute_acceptance_plan_hash(str(tmp_path), TOPICS) == before
