@@ -296,14 +296,14 @@ def test_project_design_init_discuss_prints_investigation_and_output_rules(tmp_p
 
     assert code == 0
     assert "project_design_init stage" in out
-    assert "已有项目设计初始化提示词" in out
+    assert "项目设计初始化调查证据文档模板" in out
     assert "具备安全的本地运行条件时，必须实际运行" in out
     assert "运行确认" in out
     assert "【附加流程模版: Template_Repository/spec/spec.md】" in out
     assert "【附加流程模版: Template_Repository/code_design/code_design.md】" in out
     assert "产品设计文档模板" in out
     assert "代码架构设计文档模板" in out
-    assert "一次建立相互一致的三类设计文档和一份调查证据" in out
+    assert "一次建立相互一致的产品文档、代码架构文档" in out
     assert "spec/project_design_init_evidence.md" in out
 
 

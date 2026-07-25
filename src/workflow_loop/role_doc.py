@@ -27,7 +27,6 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
 【acceptance/】验收
   - <topic>_plan.md：验收计划
   - <topic>_result.md：验收执行结果
-  - overall_result.md：最终全量回归通过后的整体验收结果
 
 【traceability.md】需求交付追踪表
   - 按工作流编号记录需求、验收主题、验收条件和后续阶段的对应位置
@@ -118,7 +117,7 @@ ROLE_DOC_MAP = {
     },
     "overall_acceptance": {
         "role": "整体验收执行者",
-        "description": "代码先复核最终全量回归已经通过，再由用户确认整个需求是否完成。产出 acceptance/overall_result.md；代码门禁和第三道用户确认都通过后才能继续。",
+        "description": "代码先复核全部主题验收和最终全量回归已经通过，再由用户确认整个需求是否完成。本阶段不生成新的结果文档。",
     },
     # bug 复现阶段：复现+根因分析
     "reproduce": {

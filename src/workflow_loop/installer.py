@@ -31,9 +31,9 @@ AI 回复用户和编写正式文档时：
 
 # .workflow_loop 目录名
 WORKFLOW_LOOP_DIRNAME = ".workflow_loop"
-# Template_Repository 目录名（提示词模板仓库）
+# Template_Repository 目录名（产物文档模板仓库）
 TEMPLATE_DIRNAME = "Template_Repository"
-# Standardized_Repository 目录名（规范词仓库）
+# Standardized_Repository 目录名（阶段工作规范仓库）
 STANDARDIZED_DIRNAME = "Standardized_Repository"
 
 

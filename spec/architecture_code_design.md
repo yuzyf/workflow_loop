@@ -6,7 +6,7 @@
 
 本文说明 Workflow Loop 的代码怎样落实当前已经确认的产品设计，主要给维护项目的人阅读。
 
-维护者可以从本文看清：产品设计文档生成和技术不确定性验证分别经过哪些代码环节；命令、阶段规则、状态文件、提示词和门禁怎样协作；关键判断和文件写入发生在哪里；哪些行为已经有测试或运行证据；哪些内容仍只能由 AI 和用户判断。
+维护者可以从本文看清：产品设计文档生成和技术不确定性验证分别经过哪些代码环节；命令、阶段规则、状态文件、产物文档模板、阶段工作规范和门禁怎样协作；关键判断和文件写入发生在哪里；哪些行为已经有测试或运行证据；哪些内容仍只能由 AI 和用户判断。
 
 本文最初由 `code_design`（初步代码架构）阶段生成，当前工作流处于 `test_plan`（测试计划）阶段。产品设计、初步代码设计、穿刺决定和验收计划已经完成；本文继续记录当前真实代码和已经通过的测试，不能代替后续实施记录、测试结果和用户验收。
 
@@ -27,10 +27,10 @@
 
 | 结论 | 证据状态 | 依据 |
 |---|---|---|
-| 命令入口、阶段路径、三道门禁、阶段产物基线、项目初始化证据、缺陷复现校验、穿刺结构化校验、验收计划结构校验、最终回归与整体验收固定门禁和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-24 运行完整测试，102 项通过；测试覆盖验收计划追踪、缺陷主题登记、主题路径安全校验、最终回归必须通过、整体验收必须通过和门3重新校验 |
+| 命令入口、阶段路径、三道门禁、阶段产物基线、项目初始化证据、缺陷复现校验、穿刺结构化校验、验收计划结构校验、最终回归与整体验收固定门禁和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-25 运行完整测试，108 项通过；测试覆盖阶段材料安装、代码设计模板复用、缺陷复现材料拆分、验收材料拆分、验收计划追踪、缺陷主题登记、最终回归和无独立文档的整体验收门禁 |
 | 当前项目处于 `test_plan`（测试计划）阶段，产品设计、初步代码设计、穿刺和验收计划阶段已经完成，其中穿刺由用户确认跳过 | 运行确认 | 2026-07-24 使用当前仓库代码执行 `.venv/bin/workflow status` |
 | 包内穿刺模板、穿刺规范与当前项目运行副本内容一致 | 文件确认 | 2026-07-23 对两组文件执行逐字节比较，结果一致 |
-| 新项目安装后会得到包内保存的阶段提示词和规范 | 运行确认、测试确认 | 安装器从 `src/workflow_loop/data/` 复制资源；安装和提示词内容测试通过 |
+| 新项目安装后会得到包内保存的产物文档模板和阶段工作规范 | 运行确认、测试确认 | 安装器从 `src/workflow_loop/data/` 复制资源；安装和资源内容测试通过 |
 | AI 是否真的完成事实调查、证据是否来自真实场景、两个候选是否语义重复 | 未由程序确认 | 当前由穿刺规范要求 AI 展示证据，再由用户审查；程序只检查工作流编号、结构、状态、阻塞和设计哈希等可明确判断的内容 |
 
 ## 2. 产品概览
@@ -75,7 +75,7 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 |---|---|---|---|
 | AI 必须根据项目现状选择从零设计、修改产品或修 bug | 命令必须接收工作意图，并按意图和项目初始化状态生成不同阶段路径 | 命令编排层的 `cmd_start()`；工作流规则层的 `build_stage_path()` | 生成产品设计文档的四个场景 |
 | 用户确认共同理解后才能写正式文档 | 每个阶段必须先记录讨论完成，再允许产物校验和用户确认 | `cmd_gate()` 和 `GateState` 三道门禁 | 所有场景 |
-| AI 需要得到产品模板、讨论规范和全局写作规则 | 当前阶段必须加载完整提示词、规范、角色和产出要求 | `cmd_discuss()`、`load_doc_content()`、`StageStrategy` 文档路径方法 | 所有场景 |
+| AI 需要得到产物文档模板、阶段工作规范和全局写作规则 | 当前阶段必须加载完整模板、规范、角色和产出要求 | `cmd_discuss()`、`load_doc_content()`、`StageStrategy` 文档路径方法 | 所有场景 |
 | 从零设计和修改已有产品都要生成产品总说明与功能文档 | 产品设计阶段必须声明产物，并检查 `product.md` 和至少一个 `feature_*.md` 存在 | `SpecStage.artifact_paths()`、`SpecStage.code_validate()` | 从零生成、更新已有产品 |
 | 已有代码初始化要同时建立设计文档和调查证据 | 初始化阶段必须同时加载产品与代码设计规则；门2检查产品设计、代码设计和调查证据都在本阶段变化，并核对证据中的真实代码路径与运行字段 | `ProjectDesignInitStage.additional_doc_paths()`、`ProjectDesignInitStage.code_validate()`、`artifact_validation.py` | 根据已有代码建立文档、修 bug 前初始化 |
 | 缺陷必须真实复现并确认根因后才能进入穿刺 | 缺陷记录和索引必须在本阶段变化，并包含真实环境、输入、实际与期望结果、根因位置和证据 | `ReproduceStage.code_validate()`、`validate_reproduce_documents()` | 修 bug |
@@ -88,7 +88,7 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 | 验收计划先于测试计划和实施计划 | 三种意图的阶段路径必须固定为 `acceptance_plan → test_plan → plan/fix_plan` | `path_composer.py` 的三条路径常量 | 后续计划阶段 |
 | 验收计划不属于测试资料 | 验收计划模板和规范必须放在 `Template_Repository/acceptance/` 与 `Standardized_Repository/acceptance/`，`qa/` 只保留测试相关资源 | `AcceptancePlanStage.prompt_doc_path()`、`standard_doc_path()` | 验收计划阶段 |
 | 各主题可以分别推进，完成后再做全量回归 | 顶层路径使用 `topic_execution` 统筹主题内部执行，再进入 `regression_test` 和 `overall_acceptance` | `TopicExecutionStage`、`RegressionTestStage`、`OverallAcceptanceStage` | 后续执行阶段 |
-| 最终全量回归和整体验收没有通过时不能继续 | 固定结果字段必须由 Python 门禁读取，不能只依赖 Markdown 规范提醒 | `validate_final_regression_result()`、`validate_overall_acceptance_result()` | 最终回归和整体验收 |
+| 最终全量回归和整体验收没有通过时不能继续 | 固定结果字段必须由 Python 门禁读取，整体验收不再依赖独立汇总文档 | `validate_final_regression_result()`、`validate_overall_acceptance_prerequisites()` | 最终回归和整体验收 |
 | 每条验收条件都能查到后续文档和结果 | 各阶段确认时只更新追踪表中自己负责的列，不能覆盖旧工作流 | `traceability.py` 的 `validate_structure()`、`update_for_stage()`；`cli.py` 的 `apply_stage_completion_updates()` | 验收计划及后续阶段 |
 | 修 bug 只有最终通过才能关闭 | 主题执行、回归失败和整体验收分别追加缺陷状态，不能改写原复现事实 | `bug_record.py`；`cli.py` 的固定记录更新分支 | 修 bug |
 | 从零重做不能沿用旧设计产物 | 开始时发现旧产物必须先获得清场确认，确认后删除约定目录并重置初始化状态 | `detect_clean_artifacts()`、`clean_artifacts()`、`cmd_start()` | 从零生成 |
@@ -106,7 +106,7 @@ flowchart TB
     L1["命令与 AI 协作层<br/>承接用户提出需求、AI 调命令和 stdout 下一步<br/>src/workflow_loop/cli.py"]
     L2["工作流规则层<br/>决定阶段路径、阶段产物、结构化门禁、追踪表和缺陷状态更新<br/>path_composer.py / stages/ / artifact_validation.py / spike_validation.py / traceability.py / bug_record.py"]
     L3["状态与一致性层<br/>保存当前 Run、阶段产物基线、主题历史、穿刺设计基线、验证哈希和审计记录<br/>state.py / project.py / verification.py / journal.py"]
-    L4["提示词与安装资源层<br/>保存模板、规范和安装到目标项目的运行骨架<br/>data/ / installer.py / install.sh / pyproject.toml"]
+    L4["阶段材料与安装资源层<br/>保存产物文档模板、阶段工作规范和安装骨架<br/>data/ / installer.py / install.sh / pyproject.toml"]
 
     L1 --> L2
     L1 --> L3
@@ -123,19 +123,19 @@ flowchart TB
 - **主要符号**：
   - `main()`：命令行总入口，中文职责是解析 `start`、`discuss`、`gate`、`status`、`done`、`abort` 和 `install-project`。
   - `cmd_start()`：启动或检查工作流。
-  - `cmd_discuss()`：完整打印当前阶段的角色、全局写作规范、模板、流程规范和产出要求。
+  - `cmd_discuss()`：完整打印当前阶段的角色、全局写作规范、产物文档模板、阶段工作规范和产出要求。
   - `cmd_gate()`：执行讨论完成、代码校验、用户确认三道门禁，并推进阶段。
   - `apply_stage_completion_updates()`：中文职责是第三道门确认前，更新当前阶段负责的需求交付追踪列；修 bug 时同时追加缺陷处理状态。
   - `print_next_step()`：在命令输出末尾打印下一条操作。
   - `current_stage_next_instruction()`：中文职责是根据当前阶段和三道门的状态，生成不会跨阶段的下一步命令。
 - **对外约定**：调用方传入命令行参数；成功时得到当前状态和下一步；调用了错误阶段时同时得到当前阶段和正确的下一步命令；其它门禁顺序错误或项目未安装时打印明确错误并退出。
-- **依赖关系**：调用工作流规则层决定当前阶段；调用状态与一致性层读写状态；读取提示词与安装资源层中的 Markdown 文件。
+- **依赖关系**：调用工作流规则层决定当前阶段；调用状态与一致性层读写状态；读取阶段材料与安装资源层中的 Markdown 文件。
 - **验证位置**：[tests/test_commands.py](../tests/test_commands.py)。
 
 ### 4.3 工作流规则层
 
-- **承接的产品内容**：不同场景走不同流程；每个阶段知道自己需要什么提示词、产生什么文件、怎样检查产物。
-- **代码职责**：组合阶段路径；为每个阶段提供名称、提示词路径、规范路径、产物路径、校验规则和推进钩子。
+- **承接的产品内容**：不同场景走不同流程；每个阶段知道自己使用什么产物文档模板和阶段工作规范、产生什么文件、怎样检查产物。
+- **代码职责**：组合阶段路径；为每个阶段提供名称、阶段材料路径、产物路径、校验规则和推进钩子。
 - **代码位置**：
   - [src/workflow_loop/path_composer.py](../src/workflow_loop/path_composer.py)：`build_stage_path()`，即根据工作意图和项目初始化状态拼出阶段路径。
   - [src/workflow_loop/stages/base.py](../src/workflow_loop/stages/base.py)：`StageStrategy`，即所有阶段共同遵守的代码接口。
@@ -144,7 +144,7 @@ flowchart TB
   - [src/workflow_loop/artifact_validation.py](../src/workflow_loop/artifact_validation.py)：比较阶段文件基线，检查项目初始化调查证据和缺陷复现文档。
   - [src/workflow_loop/spike_validation.py](../src/workflow_loop/spike_validation.py)：解析穿刺清单和结论文档，执行穿刺门2的结构化校验。
   - [src/workflow_loop/traceability.py](../src/workflow_loop/traceability.py)：校验当前工作流在 `traceability.md` 中的九列追踪结构，并在各阶段确认时只更新该阶段负责的列。
-  - [src/workflow_loop/bug_record.py](../src/workflow_loop/bug_record.py)：在缺陷记录末尾追加主题验收、回归失败和整体验收结果，并同步 `bug/index.md` 状态，不改写原复现事实。
+  - [src/workflow_loop/bug_record.py](../src/workflow_loop/bug_record.py)：在缺陷记录末尾追加主题验收、回归失败和用户整体验收确认，并同步 `bug/index.md` 状态，不改写原复现事实。
 - **对外约定**：`build_stage_path()` 接收 `from_scratch`、`product_change` 或 `bugfix`，返回有顺序的阶段对象；未知意图直接抛出错误。每个阶段对象提供统一方法供 CLI 调用。
 - **关键逻辑**：`product_change` 和 `bugfix` 只有在 `project_design_initialized=false` 时前置 `ProjectDesignInitStage`；三种意图都包含可选 `SpikeStage`；`bugfix` 在 `reproduce → spike` 后进入共享后半截的 `acceptance_plan → test_plan → fix_plan`。
 - **验证位置**：[tests/test_path_composer.py](../tests/test_path_composer.py)、[tests/test_stages.py](../tests/test_stages.py)。
@@ -161,13 +161,13 @@ flowchart TB
 - **对外约定**：状态模块接收项目根目录和数据对象；成功后文件落盘。读取不到状态时返回 `None`，由命令层决定提示用户启动或安装。
 - **验证位置**：[tests/test_state.py](../tests/test_state.py)、[tests/test_project.py](../tests/test_project.py)、[tests/test_verification.py](../tests/test_verification.py)。
 
-### 4.5 提示词与安装资源层
+### 4.5 阶段材料与安装资源层
 
-- **承接的产品内容**：所有项目获得同一套产品设计模板、代码设计模板、阶段规范和全局写作规则。
+- **承接的产品内容**：所有项目获得同一套产物文档模板、阶段工作规范和全局写作规则。
 - **代码职责**：保存随 Python 包发布的 Markdown 资源；安装时复制到目标项目；写入最小 `AGENTS.md` 契约和项目级状态。
 - **代码位置**：
-  - [src/workflow_loop/data/Template_Repository](../src/workflow_loop/data/Template_Repository)：最终文档模板和阶段任务提示。
-  - [src/workflow_loop/data/Standardized_Repository](../src/workflow_loop/data/Standardized_Repository)：讨论、调查、生成和写作规范。
+  - [src/workflow_loop/data/Template_Repository](../src/workflow_loop/data/Template_Repository)：最终产物文档模板。
+  - [src/workflow_loop/data/Standardized_Repository](../src/workflow_loop/data/Standardized_Repository)：阶段调查、讨论、执行和检查规范；`global/document_writing.md` 是所有阶段共用的写作规范。
   - [src/workflow_loop/installer.py](../src/workflow_loop/installer.py)：`install_project()` 复制资源并创建项目运行骨架。
   - [install.sh](../install.sh)：用户确认项目目录后，检查全局 `workflow` 命令并调用 `workflow install-project`。
   - [pyproject.toml](../pyproject.toml)：声明 `workflow = workflow_loop.cli:main` 命令入口，并把 `data/**/*` 打包。
@@ -188,14 +188,14 @@ flowchart TB
 - **失败结果**：项目未安装、已有活跃工作流或意图非法时停止；发现旧产物但没有清场确认时不删除、不启动。
 - **验证位置**：`test_start_*`、`test_active_run_guard`、`test_from_scratch_path`、`test_product_change_*`、`test_bugfix_*`。
 
-### 5.2 当前阶段提示词装配
+### 5.2 当前阶段材料装配
 
-- **为什么关键**：Python 程序本身不和用户讨论产品，也不生成产品语义；AI 能否正确工作取决于这里是否完整加载正确提示词。
+- **为什么关键**：Python 程序本身不和用户讨论产品，也不生成产品语义；AI 能否正确工作取决于这里是否完整加载正确的产物文档模板和阶段工作规范。
 - **对应产品内容**：需求讨论、共同理解确认、正式产品文档生成、已有代码调查和穿刺候选识别。
 - **代码位置**：`src/workflow_loop/cli.py` 中的 `cmd_discuss()`、`load_doc_content()`；`src/workflow_loop/stages/stages.py` 中各阶段的文档路径方法。
 - **上游**：当前工作流已经启动，AI 调用 `workflow discuss`。
-- **主要处理**：根据当前阶段获得角色；读取全局写作规范；按阶段需要读取模板和规范；固定门禁没有独立规范文件时不打印空的“流程规范”部分；对 `ProjectDesignInitStage` 继续读取产品模板、产品规范、代码架构模板和代码设计规范。当前阶段是 `spike` 且旧状态没有入场基线时，只标记“旧基线无法还原”，不使用当前文件冒充穿刺开始前的设计。
-- **下游**：完整打印给 AI，并记录“提示词加载”和“角色文档加载”。
+- **主要处理**：根据当前阶段获得角色；读取全局写作规范；按阶段读取产物文档模板和阶段工作规范；固定门禁没有独立工作规范时不打印空的“阶段工作规范”部分；对 `ProjectDesignInitStage` 继续读取产品模板、产品工作规范、代码架构模板、代码设计工作规范和调查证据模板。当前阶段是 `spike` 且旧状态没有入场基线时，只标记“旧基线无法还原”，不使用当前文件冒充穿刺开始前的设计。
+- **下游**：完整打印给 AI，并记录“阶段材料加载”和“角色文档加载”。当前 journal 的动作名称仍保留旧的“提示词加载”兼容值，待全仓材料迁移完成后再统一重命名。
 - **状态和数据**：只追加 journal，不改变阶段门禁。
 - **失败结果**：没有工作流、工作流已结束、阶段实现不存在时停止；某个 Markdown 不存在时把缺失路径打印出来。
 - **验证位置**：`test_discuss_loads_global_writing_standard_before_stage_docs`、`test_code_design_discuss_prints_product_driven_architecture_rules`、`test_project_design_init_discuss_prints_investigation_and_output_rules`。
@@ -281,7 +281,7 @@ flowchart TB
 - **主要处理**：
   1. `test_plan` 确认时，只补“测试项”列；`plan` 或 `fix_plan` 确认时，只补“实施计划与任务”列。
   2. `topic_execution` 确认前，必须确认每个主题都有当前工作流的实施记录、`测试结果：通过` 和 `验收结果：通过`；确认后补实施记录、测试结果和验收结果列。
-  3. `regression_test` 确认时补最终全量回归结果；`overall_acceptance` 确认时补整体验收结果；`update_code_design` 确认时补最终代码设计链接。
+  3. `regression_test` 确认时补最终全量回归结果；`overall_acceptance` 确认时记录用户已确认整体验收；`update_code_design` 确认时补最终代码设计链接。
   4. 修 bug 的主题验收通过后，缺陷记录追加实施记录、测试结果和主题验收结果链接，状态只写“主题验收通过，待全量回归”；最终回归失败改写为“回归失败，重新处理中”；只有整体验收通过后才写“已修复并验收”。原复现阶段的前七节不被重写。
 - **下游**：`traceability.md` 保存当前工作流的最新链路，同时保留旧工作流章节；各阶段的详细文档保存具体步骤、证据和结果，追踪表不复制这些正文。
 - **失败结果**：追踪表缺失、列数错误、当前工作流章节缺少主题、后续状态留空、结果文件缺少当前工作流编号或明确通过字段、缺陷记录缺少对应主题时，门禁失败并停在当前阶段。
@@ -316,7 +316,7 @@ flowchart TD
 | 图中步骤 | 触发和输入 | 代码位置 | 具体处理逻辑 | 产生的状态、数据或输出 | 失败时的结果 | 验证位置 |
 |---|---|---|---|---|---|---|
 | 生成从零阶段路径 | AI 传入 `from_scratch` | `cli.py` 的 `cmd_start()`；`path_composer.py` 的 `build_stage_path()` | 检查安装和活跃工作流；发现清场范围内存在旧产物时进入清场确认；返回以 `spec` 开始的固定阶段列表 | `state.json` 中 `current_stage=spec` | 有活跃工作流时拒绝；有旧产物但未确认清场时不启动 | `test_start_with_intent_from_scratch_no_artifacts`、清场测试、路径测试 |
-| 加载产品模板和规范 | 当前阶段为 `spec` | `cli.py` 的 `cmd_discuss()`；`SpecStage.prompt_doc_path()` 和 `standard_doc_path()` | 完整读取全局写作规范、产品模板、产品流程规范和角色说明 | stdout 给 AI 完整工作材料；journal 追加加载记录 | 文档缺失时打印具体缺失路径 | `test_discuss_loads_global_writing_standard_before_stage_docs` |
+| 加载产品模板和规范 | 当前阶段为 `spec` | `cli.py` 的 `cmd_discuss()`；`SpecStage.prompt_doc_path()` 和 `standard_doc_path()` | 完整读取全局写作规范、产品文档模板、产品设计阶段工作规范和角色说明 | stdout 给 AI 完整工作材料；journal 追加加载记录 | 文档缺失时打印具体缺失路径 | `test_discuss_loads_global_writing_standard_before_stage_docs` |
 | 记录讨论完成 | 用户已经明确同意共同理解 | `cli.py` 的 `cmd_gate()`、`ensure_stage_artifact_baseline()` | 处理 `--discuss-done`，把第一道门写为通过，并保存 `product.md` 和已有功能文档的哈希；程序不检查聊天内容 | `discussion_complete=true`、`artifact_baseline_hashes` 写入 | 没有当前工作流或阶段不存在时停止 | `test_gate_order_enforced`、`test_discuss_done_records_spec_baseline_once` |
 | 写产品文档 | 已经通过讨论完成门禁 | 无 Python 生成函数；依据 `Template_Repository/spec/spec.md` | AI 按产品总说明和功能文档模板写文件 | `spec/product.md`、至少一个 `spec/feature_*.md` | 章节和产品语义仍由 AI 自查和用户确认 | 产品文档本身、安装提示词测试 |
 | 校验并推进 | 文件已写完，随后用户确认 | `SpecStage.code_validate()`；`changed_stage_paths()`；`cmd_gate()` | 第二道门检查文件存在和相对基线的变化；从零创建要求产品总说明和功能文档都新建；第三道门重新校验后进入 `code_design` | 阶段状态 `done`，下一阶段 `in_progress` | 文件缺失或旧文件未变化时停留在 `spec` | `tests/test_stages.py`、命令门禁测试 |
@@ -359,7 +359,7 @@ flowchart TD
 
 | 图中步骤 | 触发和输入 | 代码位置 | 具体处理逻辑 | 产生的状态、数据或输出 | 失败时的结果 | 验证位置 |
 |---|---|---|---|---|---|---|
-| 加载组合规则 | 当前阶段为 `project_design_init` | `ProjectDesignInitStage.prompt_doc_path()`、`standard_doc_path()`、`additional_doc_paths()`；`cmd_discuss()` | 先打印专用调查提示词和规范，再附加打印产品文档模板/规范与代码架构模板/规范 | AI 同时获得调查方法、三类设计文档结构和调查证据结构 | 任一资源缺失时打印缺失路径 | `test_project_design_init_discuss_prints_investigation_and_output_rules`、`test_project_design_init_loads_specialized_and_shared_documents` |
+| 加载组合规则 | 当前阶段为 `project_design_init` | `ProjectDesignInitStage.prompt_doc_path()`、`standard_doc_path()`、`additional_doc_paths()`；`cmd_discuss()` | 先打印项目调查工作规范和调查证据模板，再附加打印产品文档模板/工作规范与代码架构模板/工作规范 | AI 同时获得调查方法、三类设计文档结构和调查证据结构 | 任一资源缺失时打印缺失路径 | `test_project_design_init_discuss_prints_investigation_and_output_rules`、`test_project_design_init_loads_specialized_and_shared_documents` |
 | 查看和运行代码 | 已有代码项目可安全调查 | 无 Python 自动调查函数；由 `project_design_init` 规范约束 AI | AI 阅读项目并执行测试、构建或主要入口，把实际代码路径、运行条件、命令、结果和未验证范围写入调查证据 | `spec/project_design_init_evidence.md` | 程序能核对代码路径和固定字段，但证据是否真实仍由用户确认 | 项目初始化证据测试、提示词测试 |
 | 写设计文档和调查证据 | 用户确认当前理解 | 无 Python 生成函数；依据产品模板、代码设计模板和初始化规范 | AI 写产品总说明、功能文档、代码架构文档和调查证据 | 四类 `spec/` 产物 | 文档语义是否完全一致仍由用户审查 | `tests/test_stages.py` |
 | 校验和标记初始化 | 设计文档和调查证据已经写完并经用户确认 | `ProjectDesignInitStage.code_validate()`；`validate_project_design_init_evidence()`；`cmd_gate()`；`set_project_design_initialized()` | 第二道门要求产品设计、代码设计和调查证据都相对基线变化，并检查当前工作流编号、真实代码路径、运行条件和结果；第三道门更新阶段、架构标记和项目级初始化状态 | 后续工作流可跳过重复初始化 | 文件未变化、代码路径不存在或运行字段不完整时不推进 | `tests/test_stages.py`、项目状态和路径测试 |
@@ -482,9 +482,11 @@ flowchart TD
 
 当前 journal 证明命令被调用过，但不能单独证明 AI 的讨论内容正确或用户理解了文档。
 
-### 7.5 全局写作规范和阶段提示词
+### 7.5 全局写作规范和阶段材料
 
-所有阶段共同加载 `Standardized_Repository/global/document_writing.md`。产品设计阶段、项目初始化阶段、穿刺阶段和验收计划阶段再加载各自模板与规范。验收计划资源位于 `acceptance/`，测试资源位于 `qa/`。最终全量回归与整体验收的通过条件属于固定程序规则，不再建立重复的规范文件；AI 执行提示和结果入口仍由模板说明，门禁以 Python 校验为准。这样全局表达规则、可变文档结构和固定程序约束各自只维护一处。
+所有阶段共同加载 `Standardized_Repository/global/document_writing.md`。`Template_Repository` 保存最终产物文档模板，`Standardized_Repository` 保存 AI 的阶段工作规范。产品设计、代码设计、穿刺和验收阶段已经按这个职责校准：同一份代码架构文档在初步设计、产品变更修订和最终更新阶段共用 `code_design.md` 模板；三个阶段只使用不同工作规范。项目设计初始化另外使用独立的调查证据模板。确定的阶段顺序、三道门、主题登记、状态、固定字段和文件校验由 Python 执行，不能依靠 Markdown 自觉遵守。
+
+代码接口 `prompt_doc_path()` 和命令行标题“流程模版”仍是旧命名。测试计划、实施计划和主题执行等尚未完成材料职责迁移，因此本次不提前把全局命令行标题改成“产物文档模板”；对应阶段完成讨论和迁移后再统一重命名，避免命令行对尚未迁移文件作出错误说明。
 
 当前安装器会把包内资源复制到目标项目的 `.workflow_loop/`。同版本重复安装采用零修改策略，因此已经安装的其他项目不会自动获得本次提示词更新。
 
@@ -504,4 +506,4 @@ flowchart TD
 | 已有代码初始化的调查证据必须真实 | 调查结论应有代码、测试和运行证据 | 程序已检查调查证据绑定当前工作流、代码路径真实存在，并根据运行条件要求命令和结果或无法运行原因 | AI 仍可能填写没有实际执行的命令或错误结果 | 门2负责结构与路径，门3由用户核对证据真实性；程序不声称能判断记录是否说谎 | 代码确认、测试确认，仍有人工确认边界 |
 | 产品功能清单中的链接必须真实可用 | `product.md` 中每个功能应链接到存在的文件 | 当前只检查至少一个 `feature_*.md`，不解析 `product.md` 链接 | 链接错误仍可能通过第二道门 | 后续可使用 Markdown 解析器校验功能链接和文件对应关系 | 代码确认 |
 | 产品规则、边界、使用过程和异常必须与代码一致 | 初始化时三类设计文档应描述同一个实际产品 | `ProjectDesignInitStage.code_validate()` 已要求产品设计、代码设计和调查证据都发生变化，但不比较三个设计文档中的名称、规则、流程和异常语义 | 三类设计文档仍可能出现语义冲突 | 当前靠组合提示词、调查证据和用户确认；只有形成稳定字段后才增加机器语义校验 | 代码确认 |
-| 同版本已安装项目应怎样获得规范更新尚未定义 | 本次更新希望当前项目和未来安装使用新提示词 | 安装器检测版本相同后直接退出，其他已安装项目不会自动同步；当前项目已手动同步运行副本 | 不同项目可能继续使用旧提示词 | 保持当前零修改策略；升级机制另行设计，不在本次范围内 | 代码确认、用户先前决定 |
+| 同版本已安装项目应怎样获得阶段材料更新尚未定义 | 本次更新希望当前项目和未来安装使用新的产物文档模板与阶段工作规范 | 安装器检测版本相同后直接退出，其他已安装项目不会自动同步；当前项目已手动同步运行副本 | 不同项目可能继续使用旧阶段材料 | 保持当前零修改策略；升级机制另行设计，不在本次范围内 | 代码确认、用户先前决定 |

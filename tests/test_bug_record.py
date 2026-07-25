@@ -58,6 +58,8 @@ def test_bug_status_updates_append_results_without_rewriting_reproduction(tmp_pa
     record_overall_acceptance_pass(str(tmp_path), WORKFLOW_ID, [TOPIC])
     closed = (tmp_path / "bug" / BUG_FILE).read_text(encoding="utf-8")
     assert "已修复并验收" in closed
+    assert "整体验收：用户已确认" in closed
+    assert "overall_result.md" not in closed
     assert "## 1. 缺陷现象" in closed
     assert "## 6. 根因" in closed
 

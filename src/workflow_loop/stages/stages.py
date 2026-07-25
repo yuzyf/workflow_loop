@@ -7,7 +7,7 @@ from ..artifact_validation import (
     validate_acceptance_plan_documents,
     validate_downstream_traceability,
     validate_final_regression_result,
-    validate_overall_acceptance_result,
+    validate_overall_acceptance_prerequisites,
     validate_project_design_init_evidence,
     validate_reproduce_documents,
     validate_topic_execution_results,
@@ -348,6 +348,9 @@ class TestPlanStage(StageStrategy):
         missing = missing_topic_files(project_root, "qa", "_plan.md", topics)
         if missing:
             return (False, f"缺少测试计划文档: {missing}")
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
         trace_ok, trace_detail = validate_downstream_traceability(
             project_root,
             state.workflow_id,
@@ -475,7 +478,7 @@ class AcceptanceStage(StageStrategy):
 
     # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/acceptance/acceptance.md"
+        return "Template_Repository/acceptance/acceptance_result.md"
 
     # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
@@ -489,10 +492,9 @@ class AcceptanceStage(StageStrategy):
         # acceptance/ 目录不存在 → 直接判失败
         if not os.path.exists(acc_dir):
             return (False, "acceptance/ 目录不存在")
-        # 整体验收有独立文件，不得冒充主题验收结果。
         result_files = [
             f for f in os.listdir(acc_dir)
-            if f.endswith("_result.md") and f != "overall_result.md"
+            if f.endswith("_result.md")
         ]
         # 没有任何 *_result.md → 判失败
         if not result_files:
@@ -522,10 +524,18 @@ class TopicExecutionStage(StageStrategy):
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/execution/topic_execution.md"
+        return None
 
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/execution/topic_execution.md"
+
+    def additional_doc_paths(self) -> list[tuple[str, str]]:
+        return [
+            (
+                "Template_Repository/acceptance/acceptance_result.md",
+                "Standardized_Repository/acceptance/acceptance.md",
+            ),
+        ]
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         topics = current_workflow_topics(project_root)
@@ -623,13 +633,13 @@ class OverallAcceptanceStage(StageStrategy):
         return "overall_acceptance"
 
     def artifact_paths(self) -> list[str]:
-        return ["acceptance/overall_result.md"]
+        return []
 
     def role_doc_path(self) -> str | None:
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/acceptance/overall_acceptance.md"
+        return None
 
     def standard_doc_path(self) -> str | None:
         return None
@@ -646,12 +656,16 @@ class OverallAcceptanceStage(StageStrategy):
         )
         if not trace_ok:
             return (False, trace_detail)
-        return validate_overall_acceptance_result(project_root, state.workflow_id)
+        return validate_overall_acceptance_prerequisites(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
 
     def instruction(self) -> str:
         return (
-            "整体验收阶段：代码先确认最终全量回归已通过，再由用户确认整个需求是否完成；"
-            "产出 acceptance/overall_result.md，并明确写当前工作流编号和“整体验收状态：通过”。"
+            "整体验收阶段：代码复核全部主题验收和最终全量回归已经通过，"
+            "再由用户确认整个需求是否完成；本阶段不生成新的结果文档。"
         )
 
 
@@ -673,7 +687,7 @@ class UpdateCodeDesignStage(StageStrategy):
 
     # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/code_design/update_code_design.md"
+        return "Template_Repository/code_design/code_design.md"
 
     # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
@@ -683,6 +697,13 @@ class UpdateCodeDesignStage(StageStrategy):
         architecture_path = os.path.join(project_root, "spec", "architecture_code_design.md")
         if not os.path.isfile(architecture_path):
             return (False, "spec/architecture_code_design.md 不存在")
+        changed_ok, changed_detail, _ = changed_stage_paths(
+            project_root,
+            self.name(),
+            self.change_tracked_paths(project_root),
+        )
+        if not changed_ok:
+            return (False, changed_detail)
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
@@ -694,7 +715,10 @@ class UpdateCodeDesignStage(StageStrategy):
         )
         if not trace_ok:
             return (False, trace_detail)
-        return (True, "最终代码设计文档存在，追踪表已准备好记录最终代码设计")
+        return (True, "最终代码设计文档已在本阶段更新，追踪表已准备好记录最终代码设计")
+
+    def change_tracked_paths(self, project_root: str) -> list[str]:
+        return [os.path.join("spec", "architecture_code_design.md")]
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
@@ -724,7 +748,7 @@ class ProjectDesignInitStage(StageStrategy):
 
     # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/code_design/project_design_init.md"
+        return "Template_Repository/code_design/project_design_init_evidence.md"
 
     # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
@@ -842,7 +866,7 @@ class ReviseCodeDesignStage(StageStrategy):
 
     # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/code_design/revise_code_design.md"
+        return "Template_Repository/code_design/code_design.md"
 
     # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:

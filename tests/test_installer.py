@@ -14,9 +14,9 @@ def test_install_project_creates_all(tmp_path):
     assert os.path.exists(os.path.join(str(tmp_path), ".workflow_loop"))
     # 验证 project.json 被创建
     assert os.path.exists(os.path.join(str(tmp_path), ".workflow_loop", "project.json"))
-    # 验证 Template_Repository/ 被创建（stage 模板源）
+    # 验证 Template_Repository/ 被创建（产物文档模板源）
     assert os.path.exists(os.path.join(str(tmp_path), ".workflow_loop", "Template_Repository"))
-    # 验证 Standardized_Repository/ 被创建（标准化产出归档）
+    # 验证 Standardized_Repository/ 被创建（阶段工作规范源）
     assert os.path.exists(os.path.join(str(tmp_path), ".workflow_loop", "Standardized_Repository"))
     # 验证所有 stage 共用的全局写作规范被安装
     assert os.path.exists(os.path.join(
@@ -39,12 +39,13 @@ def test_install_project_copies_templates(tmp_path):
     assert os.path.exists(os.path.join(template_dir, "spec", "spec.md"))
     # 验证 code_design/code_design.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "code_design", "code_design.md"))
-    # 验证 code_design/revise_code_design.md 模板存在
-    assert os.path.exists(os.path.join(template_dir, "code_design", "revise_code_design.md"))
-    # 验证 code_design/project_design_init.md 模板存在
-    assert os.path.exists(os.path.join(template_dir, "code_design", "project_design_init.md"))
-    # 验证 code_design/update_code_design.md 模板存在
-    assert os.path.exists(os.path.join(template_dir, "code_design", "update_code_design.md"))
+    # 项目设计初始化只有调查证据专用模板；三个代码设计阶段共用 code_design.md
+    assert os.path.exists(os.path.join(
+        template_dir, "code_design", "project_design_init_evidence.md",
+    ))
+    assert not os.path.exists(os.path.join(template_dir, "code_design", "revise_code_design.md"))
+    assert not os.path.exists(os.path.join(template_dir, "code_design", "project_design_init.md"))
+    assert not os.path.exists(os.path.join(template_dir, "code_design", "update_code_design.md"))
     # 验证 spike/spike.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "spike", "spike.md"))
     # 验证 plan/plan.md 模板存在
@@ -53,14 +54,14 @@ def test_install_project_copies_templates(tmp_path):
     assert os.path.exists(os.path.join(template_dir, "plan", "fix_plan.md"))
     # 验证 acceptance/ 下的验收计划和主题验收模板存在
     assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance_plan.md"))
-    assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance.md"))
+    assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance_result.md"))
     # 验证 qa/test_plan.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "qa", "test_plan.md"))
     # 验证 qa/test.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "qa", "test.md"))
     assert os.path.exists(os.path.join(template_dir, "qa", "final_regression.md"))
-    assert os.path.exists(os.path.join(template_dir, "acceptance", "overall_acceptance.md"))
-    assert os.path.exists(os.path.join(template_dir, "execution", "topic_execution.md"))
+    assert not os.path.exists(os.path.join(template_dir, "acceptance", "overall_acceptance.md"))
+    assert not os.path.exists(os.path.join(template_dir, "execution", "topic_execution.md"))
     # 验证 impl/impl.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "impl", "impl.md"))
     # 验证 reproduce/reproduce.md 模板存在
@@ -73,7 +74,6 @@ def test_install_project_uses_english_feature_document_names(tmp_path):
     prompt_paths = [
         os.path.join(workflow_dir, "Template_Repository", "spec", "spec.md"),
         os.path.join(workflow_dir, "Standardized_Repository", "spec", "spec.md"),
-        os.path.join(workflow_dir, "Template_Repository", "code_design", "project_design_init.md"),
         os.path.join(workflow_dir, "Standardized_Repository", "code_design", "project_design_init.md"),
     ]
 
@@ -120,7 +120,7 @@ def test_install_project_copies_product_driven_code_design_rules(tmp_path):
         workflow_dir, "Standardized_Repository", "code_design", "code_design.md",
     )
     init_template_path = os.path.join(
-        workflow_dir, "Template_Repository", "code_design", "project_design_init.md",
+        workflow_dir, "Template_Repository", "code_design", "project_design_init_evidence.md",
     )
     init_standard_path = os.path.join(
         workflow_dir, "Standardized_Repository", "code_design", "project_design_init.md",
@@ -142,12 +142,12 @@ def test_install_project_copies_product_driven_code_design_rules(tmp_path):
     assert "由产品职责推导代码架构" in code_standard
     assert "只列函数名不算完成" in code_standard
     assert "不能脱离流程单独列一个看不懂的字段" in code_standard
-    assert "一次建立相互一致的三类设计文档和一份调查证据" in init_template
+    assert "项目设计初始化调查证据文档模板" in init_template
     assert "具备安全的本地运行条件时，必须实际运行" in init_standard
     assert "运行确认" in init_standard
     assert "spec/project_design_init_evidence.md" in init_template
-    assert "已检查代码" in init_standard
-    assert "运行条件：具备 | 不具备" in init_standard
+    assert "已检查代码" in init_template
+    assert "运行条件：具备 | 不具备" in init_template
     assert "场景B" not in code_template
     assert "场景B" not in code_standard
 
@@ -167,9 +167,10 @@ def test_install_project_copies_structured_reproduce_rules(tmp_path):
     with open(standard_path) as f:
         standard = f.read()
 
-    assert "真实环境、真实输入" in prompt
-    assert "根因状态：已确认" in standard
-    assert "bug/index.md" in standard
+    assert "缺陷复现文档模板" in prompt
+    assert "根因状态：已确认" in prompt
+    assert "bug/index.md" in prompt
+    assert "真实环境、真实输入" in standard
     assert "程序不能判断证据是否伪造" in standard
 
 
@@ -186,6 +187,65 @@ def test_install_project_separates_acceptance_templates_and_code_gated_final_sta
 
     assert not os.path.exists(os.path.join(standardized_dir, "qa", "final_regression.md"))
     assert not os.path.exists(os.path.join(standardized_dir, "qa", "overall_acceptance.md"))
+    assert not os.path.exists(os.path.join(
+        standardized_dir, "acceptance", "overall_acceptance.md",
+    ))
+
+
+def test_install_project_separates_acceptance_document_template_and_work_standard(tmp_path):
+    install_project(str(tmp_path))
+    workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
+    template_path = os.path.join(
+        workflow_dir, "Template_Repository", "acceptance", "acceptance_plan.md",
+    )
+    standard_path = os.path.join(
+        workflow_dir, "Standardized_Repository", "acceptance", "acceptance_plan.md",
+    )
+    with open(template_path) as f:
+        template = f.read()
+    with open(standard_path) as f:
+        standard = f.read()
+
+    assert "验收计划文档模板" in template
+    assert "# 【验收主题】<主题名称>" in template
+    assert "需求交付追踪表" in template
+    assert "每次只讨论一个需要用户决定的问题" not in template
+
+    assert "验收计划阶段工作规范" in standard
+    assert "每次只讨论一个需要用户决定的问题" in standard
+    assert "# 【验收主题】<主题名称>" not in standard
+
+    assert not os.path.exists(os.path.join(
+        workflow_dir, "Template_Repository", "acceptance", "overall_acceptance.md",
+    ))
+    assert not os.path.exists(os.path.join(
+        workflow_dir, "Standardized_Repository", "acceptance", "overall_acceptance.md",
+    ))
+
+
+def test_install_project_marks_undiscussed_stage_materials_as_pending(tmp_path):
+    install_project(str(tmp_path))
+    workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
+    pending_paths = [
+        ("Template_Repository", "plan", "plan.md"),
+        ("Template_Repository", "plan", "fix_plan.md"),
+        ("Template_Repository", "impl", "impl.md"),
+        ("Template_Repository", "qa", "test_plan.md"),
+        ("Template_Repository", "qa", "test.md"),
+        ("Template_Repository", "qa", "final_regression.md"),
+        ("Standardized_Repository", "plan", "plan.md"),
+        ("Standardized_Repository", "plan", "fix_plan.md"),
+        ("Standardized_Repository", "impl", "impl.md"),
+        ("Standardized_Repository", "qa", "test_plan.md"),
+        ("Standardized_Repository", "qa", "test.md"),
+    ]
+
+    for parts in pending_paths:
+        path = os.path.join(workflow_dir, *parts)
+        with open(path) as f:
+            content = f.read()
+        assert "待讨论" in content
+        assert "尚未与用户讨论" in content
 
 
 # 测试 install_project 覆盖 AGENTS.md（首次安装写入 workflow_loop 契约）

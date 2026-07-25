@@ -11,6 +11,7 @@ from workflow_loop.stages.stages import (
     SpikeStage,
     TestPlanStage,
     TopicExecutionStage,
+    UpdateCodeDesignStage,
 )
 from workflow_loop.verification import compute_file_hashes
 
@@ -343,13 +344,43 @@ def test_project_design_init_rejects_legacy_chinese_feature_filename(tmp_path):
 def test_project_design_init_loads_specialized_and_shared_documents():
     stage = ProjectDesignInitStage()
 
-    assert stage.prompt_doc_path() == "Template_Repository/code_design/project_design_init.md"
+    assert stage.prompt_doc_path() == "Template_Repository/code_design/project_design_init_evidence.md"
     assert stage.standard_doc_path() == "Standardized_Repository/code_design/project_design_init.md"
     assert stage.additional_doc_paths() == [
         ("Template_Repository/spec/spec.md", "Standardized_Repository/spec/spec.md"),
         ("Template_Repository/code_design/code_design.md", "Standardized_Repository/code_design/code_design.md"),
     ]
     assert "必须查看代码和测试" in stage.instruction()
+
+
+def test_code_design_update_stages_share_architecture_document_template():
+    assert ReviseCodeDesignStage().prompt_doc_path() == (
+        "Template_Repository/code_design/code_design.md"
+    )
+    assert UpdateCodeDesignStage().prompt_doc_path() == (
+        "Template_Repository/code_design/code_design.md"
+    )
+
+
+def test_topic_execution_loads_theme_acceptance_materials():
+    stage = TopicExecutionStage()
+    assert stage.prompt_doc_path() is None
+    assert stage.standard_doc_path() == (
+        "Standardized_Repository/execution/topic_execution.md"
+    )
+    assert stage.additional_doc_paths() == [
+        (
+            "Template_Repository/acceptance/acceptance_result.md",
+            "Standardized_Repository/acceptance/acceptance.md",
+        ),
+    ]
+
+
+def test_overall_acceptance_has_no_independent_document_materials():
+    stage = OverallAcceptanceStage()
+    assert stage.artifact_paths() == []
+    assert stage.prompt_doc_path() is None
+    assert stage.standard_doc_path() is None
 
 
 def test_spike_stage_uses_index_as_artifact_entry():
@@ -391,6 +422,24 @@ def test_acceptance_plan_finds_new_topics_and_test_plan_requires_same_topics(tmp
     ok, detail = TestPlanStage().code_validate(str(tmp_path))
     assert ok is False
     assert "查看状态_plan.md" in detail
+
+    _write_acceptance_documents(tmp_path, "test", ["上传文件", "查看状态"])
+    _write(tmp_path / "qa" / "查看状态_plan.md")
+    ok, detail = TestPlanStage().code_validate(str(tmp_path))
+    assert ok is True
+    assert "覆盖全部主题" in detail
+
+
+def test_update_code_design_rejects_unchanged_architecture_document(tmp_path):
+    stage = UpdateCodeDesignStage()
+    architecture_path = "spec/architecture_code_design.md"
+    _write(tmp_path / architecture_path, "# 当前代码架构\n")
+    _save_stage_baseline(tmp_path, stage, [architecture_path])
+
+    ok, detail = stage.code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "与讨论完成时相同" in detail
 
 
 def test_acceptance_plan_keeps_current_topics_and_accepts_new_unique_topic(tmp_path):
@@ -461,7 +510,7 @@ def test_final_regression_requires_current_workflow_and_passed_status(tmp_path):
     assert "明确通过" in detail
 
 
-def test_overall_acceptance_requires_passed_regression_and_acceptance(tmp_path):
+def test_overall_acceptance_requires_all_topic_acceptance_and_passed_regression(tmp_path):
     save_state(str(tmp_path), WorkflowState(
         workflow_id="2026-07-24-1200-test",
         intent="from_scratch",
@@ -474,21 +523,21 @@ def test_overall_acceptance_requires_passed_regression_and_acceptance(tmp_path):
 - 工作流编号：2026-07-24-1200-test
 - 回归状态：通过
 """)
-    _write(tmp_path / "acceptance" / "overall_result.md", """# 整体验收结果
-
-- 工作流编号：2026-07-24-1200-test
-- 整体验收状态：未通过
-""")
 
     ok, detail = stage.code_validate(str(tmp_path))
     assert ok is False
-    assert "不能进入代码设计收尾" in detail
+    assert "上传文件_result.md" in detail
 
-    _write(tmp_path / "acceptance" / "overall_result.md", """# 整体验收结果
+    _write(tmp_path / "qa" / "上传文件_result.md", """# 主题测试结果
 
 - 工作流编号：2026-07-24-1200-test
-- 整体验收状态：通过
+- 测试结果：通过
+""")
+    _write(tmp_path / "acceptance" / "上传文件_result.md", """# 主题验收结果
+
+- 工作流编号：2026-07-24-1200-test
+- 验收结果：通过
 """)
     ok, detail = stage.code_validate(str(tmp_path))
     assert ok is True
-    assert "都已明确通过" in detail
+    assert "可以请用户确认整体验收" in detail

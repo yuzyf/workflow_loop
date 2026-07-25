@@ -79,7 +79,6 @@ def test_traceability_updates_each_downstream_column(tmp_path):
     _write(tmp_path / "acceptance" / "上传文件_result.md", "# 验收结果\n")
     _write(tmp_path / "acceptance" / "查看状态_result.md", "# 验收结果\n")
     _write(tmp_path / "qa" / "final_regression_result.md", "# 回归\n")
-    _write(tmp_path / "acceptance" / "overall_result.md", "# 整体验收\n")
     _write(tmp_path / "spec" / "architecture_code_design.md", "# 架构\n")
 
     for stage in ["test_plan", "plan", "topic_execution", "regression_test", "overall_acceptance", "update_code_design"]:
@@ -91,7 +90,7 @@ def test_traceability_updates_each_downstream_column(tmp_path):
     assert "[测试结果](./qa/上传文件_result.md)" in content
     assert "[主题验收结果](./acceptance/查看状态_result.md)" in content
     assert "[最终全量回归](./qa/final_regression_result.md)" in content
-    assert "[整体验收](./acceptance/overall_result.md)" in content
+    assert "整体验收：用户已确认" in content
     assert "[最终代码设计](./spec/architecture_code_design.md)" in content
 
 

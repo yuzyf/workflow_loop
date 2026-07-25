@@ -47,8 +47,8 @@ _Avoid_: 在 start --intent 里静默安装并直接开跑；把未安装当成�
 _Avoid_: 要求目标项目里先有 workflow.py, 全局命令安装与项目安装要求用户执行两条命令, 安装时猜错项目根, start 时静默安装, 把安装做成带三道闸的正式 Stage, 安装时创建 state.json, 使用非 AGENTS.md 的契约文件名, 预建空产物目录, 下发 role 文档仓库
 
 
-**Template Seeding** (模板与规范下发):
-官方安装脚本安装当前项目时，将系统自带的默认 **Template_Repository**（提示词/模板仓库）与 **Standardized_Repository**（规范词仓库）复制进项目 `.workflow_loop/`。之后 `discuss` 从**项目内**这两份仓库加载提示词与规范（不在运行时直读全局安装包，便于项目定制）。
+**Template Seeding** (产物文档模板与阶段工作规范下发):
+官方安装脚本安装当前项目时，将系统自带的默认 **Template_Repository**（产物文档模板仓库）与 **Standardized_Repository**（阶段工作规范仓库）复制进项目 `.workflow_loop/`。之后 `discuss` 从**项目内**这两份仓库加载当前阶段的产物文档模板和阶段工作规范（不在运行时直读全局安装包，便于项目定制）。
 **默认内容来源（打包）**：两套仓库作为 Python 包装内资源随 `workflow-loop` 安装分发（如包内 `…/data/Template_Repository` 与 `…/data/Standardized_Repository`），用 `importlib.resources`（或等价）定位后复制。不依赖开发仓库路径，也不以 `~/.workflow_loop/templates` 为唯一源。
 清场从不删除项目内两套仓库；系统升级默认不覆盖项目已改内容。
 _Avoid_: 安装只建空模板目录, 运行时只读系统目录导致项目无法定制, 清场删掉模板/规范仓库, 全局 CLI 从本机 spike 源码树读模板, 仅主目录松散模板无包装内资源
@@ -265,13 +265,13 @@ _Avoid_: 一个 Workflow Run 强制只能有一个主题, 使用抽象主题名,
 
 **Artifact** (产出):
 某 Stage 要求落盘的文档或文件集合；门禁会检查其是否就绪。落盘位置在**项目根下的产物目录**（如 `spec/product.md`、`plan/<主题>.md`），**不是** `.workflow_loop/Template_Repository/` 里的同名子目录。
-_Avoid_: Output, deliverable（可作同义，但正式词用 Artifact）, 把 Template_Repository 下的提示词当成产物
+_Avoid_: Output, deliverable（可作同义，但正式词用 Artifact）, 把 Template_Repository 下的产物文档模板当成项目根产物
 
 **Process Artifact Roots** (过程产物根目录):
 项目根下由 workflow 管理、清场可能删除的目录/文件约定位置，与模板仓库分离：
 - 产物侧（可清场）：**固定落在项目根**（不是 `.workflow_loop/` 内）：`spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 等实际写出的文档
-- 模板/规范侧（永不因清场删除）：`.workflow_loop/Template_Repository/`（含其中的 `spec/` 等**阶段提示词**子目录）、`.workflow_loop/Standardized_Repository/`
-同名 `spec` 出现两次时含义不同：`Template_Repository/spec/` = 写产品说明时用的提示词；项目根 `spec/` = 写出来的 product.md / 架构文档等。
+- 模板/规范侧（永不因清场删除）：`.workflow_loop/Template_Repository/`（含其中的 `spec/` 等**产物文档模板**子目录）、`.workflow_loop/Standardized_Repository/`
+同名 `spec` 出现两次时含义不同：`Template_Repository/spec/` = 写产品说明时用的产物文档模板；项目根 `spec/` = 写出来的 product.md / 架构文档等。
 不把产物收到 `.workflow_loop/artifacts/`，也不统一改到 `docs/spec/` 等前缀（避免无收益大改路径）。
 _Avoid_: 清场扫 Template_Repository, 认为产物写在 Template_Repository/spec 下, 混用两套 spec 路径, 产物迁入 .workflow_loop 或 docs/ 统一前缀
 
@@ -305,24 +305,30 @@ _Avoid_: start --entry 旧四场景菜单, start 内补做项目安装, 状态�
 **Start Success Output** (带意图开工成功时的 stdout):
 `workflow start --intent …` 真正初始化 Run 成功后，stdout 先打印**路径向开工摘要**（这局怎么走），不是提示词正文：
 - `workflow_id`、`intent`、本局 Stage 路线图、当前 stage、清场/项目设计初始化跳过等标记
-**下一步**：`workflow discuss` —— 由 discuss **完整打印**当前 stage 的提示词与规范（见 Prompt Full Print）。
-「精简开工摘要」**仅**指 start 不倾倒文档百科、不代替 discuss；**绝不**表示提示词可以摘要、截断或不打印。
-_Avoid_: 把开工摘要理解成精简提示词, start 不打印路线图, 用摘要替代 discuss 的完整提示词加载
+**下一步**：`workflow discuss` —— 由 discuss **完整打印**当前 stage 的产物文档模板与阶段工作规范（见 Prompt Full Print）。
+「精简开工摘要」**仅**指 start 不倾倒文档百科、不代替 discuss；**绝不**表示阶段材料可以摘要、截断或不打印。
+_Avoid_: 把开工摘要理解成精简阶段材料, start 不打印路线图, 用摘要替代 discuss 的完整材料加载
 
 **Discuss Command** (讨论加载命令):
 `workflow discuss`：给**当前 AI**加载本 stage 工作材料。从项目内 `.workflow_loop/Template_Repository` 与 `Standardized_Repository` 读取后，在命令 stdout 中**完整输出**（AI 跑 CLI 时从工具结果读到全文，不是编一本给终端用户看的说明书）。固定拼装：
 1. 当前 stage 名与角色说明全文（没有角色定义时明示无）
 2. **全局写作规范全文**：固定读取 `Standardized_Repository/global/document_writing.md`
-3. **提示词全文**（给 AI 的工作指令，不是给用户读的产品文案）
-4. **阶段规范全文**（给 AI 的约束；该 stage 无规范则明示无）
+3. **产物文档模板全文**（规定最终要写出的文档结构和内容）
+4. **阶段工作规范全文**（规定怎样调查、讨论、执行和检查；该 stage 无独立规范则明示无）
 5. 当前 stage 的附加材料、指令和约定产出路径
-6. 下一步：AI 按提示词与**用户**讨论业务/方案；用户说讨论完毕后，AI 调 `workflow gate <stage> --discuss-done`
-用户参与的是「业务讨论」；用户不负责阅读或批准提示词模板本身。无活跃 Run 或已 completed/aborted 则报错。不在每次 discuss 倾倒整份文档结构百科。
+6. 下一步：AI 按阶段工作规范调查和讨论，并使用产物文档模板整理文件；用户说讨论完毕后，AI 调 `workflow gate <stage> --discuss-done`
+用户参与的是「业务讨论」；用户不负责阅读或批准内部工作材料本身。无活跃 Run 或已 completed/aborted 则报错。不在每次 discuss 倾倒整份文档结构百科。
 **可重复加载**：同一 stage 在 Run 仍为 active 且该 stage 尚未整轮结束前，允许多次 `discuss`，每次完整下发提示词/规范（AI 重载指令用）。重复 discuss **不**自动清零已通过的门禁（discussion_complete / code_validated / user_confirmed 不因 discuss 回滚）。
 
-**Prompt Full Print** (提示词完整下发):
-提示词/规范的消费者是 **AI**。`discuss` 必须在 stdout 给出**完整正文**，以便 AI 当轮上下文拿到全文；不得改成摘要版、截断版，也不得只打印文件路径让 AI「自己去读」却不给正文（路径可作附注）。不因 start 的路径摘要而缩短 discuss 输出。
-_Avoid_: 把提示词当成写给用户的说明书, discuss 只打印路径不给正文, 提示词/规范摘要截断, 要求用户阅读/确认提示词模板, 每次 discuss 倾倒完整文档百科, 每 stage 只允许 discuss 一次, 重复 discuss 自动回滚门禁
+**Prompt Full Print** (阶段材料完整下发):
+产物文档模板和阶段工作规范的消费者是 **AI**。`discuss` 必须在 stdout 给出**完整正文**，以便 AI 当轮上下文拿到全文；不得改成摘要版、截断版，也不得只打印文件路径让 AI「自己去读」却不给正文（路径可作附注）。不因 start 的路径摘要而缩短 discuss 输出。
+_Avoid_: 把阶段材料当成写给用户的说明书, discuss 只打印路径不给正文, 阶段材料摘要截断, 要求用户阅读或批准内部材料, 每次 discuss 倾倒完整文档百科, 每 stage 只允许 discuss 一次, 重复 discuss 自动回滚门禁
+
+**Stage Material Responsibility Split**（阶段材料职责划分）:
+确定不变的阶段顺序、三道门、允许状态、固定字段、产物路径、主题登记时机、哈希和文件结构校验由程序执行，不能依靠 Markdown 提醒 AI 自觉遵守。`Template_Repository` 保存产物文档模板，主要规定最终文档要写哪些章节、字段、表格和内容边界；`Standardized_Repository` 保存阶段工作规范，主要规定 AI 怎样调查、讨论、执行和检查，并说明怎样使用产物文档模板。能够明确判断的固定规则同时由代码门禁校验。产物文档模板、阶段工作规范和代码不得重复维护同一套确定规则。现有阶段材料若与此职责相反，后续按该全局规则调整。
+
+只有阶段确实生成需要长期保存、并会被后续人员或阶段读取的独立文档时，才为该产物建立 `Template_Repository` 模板。每份模板必须能明确对应一个或一组真实 Artifact 路径；只负责协调其它工作、执行代码门禁或记录状态的 Stage 不为凑齐材料而创建模板。一个 Stage 可以没有产物模板，也可以只加载它实际生成的下层产物模板。是否进入下一阶段、是否通过、是否已经得到用户确认等状态，优先记录在 State Snapshot、Journal 和追踪表中，不再为同一状态额外生成重复汇总文档。
+_Avoid_: 把产物文档模板写成访谈脚本, 没有独立产物仍创建模板, 为每个 Stage 强行配一份模板, 用汇总文档重复已有状态和证据, 阶段工作规范只列目录, Markdown 重复阶段顺序和门禁代码, 固定规则只写文档不写代码, 同一规则在模板和规范各写一遍, 不同 stage 对 Template_Repository 使用不同含义
 
 **Plain-Language Output Standard**（直白输出规范）:
 所有工作流正式文档和 AI 对用户的回复共同遵守的表达规则。输出前先弄清读者实际想知道或完成什么、已经确认哪些事实、受什么限制、读完后应知道或能做什么，再只写完成这个目的所需的内容。能用普通人听得懂的话就不用抽象词；确实必须使用专业词时，当场说明它具体指什么。句子要说清谁在什么情况下做什么、会得到什么结果；不规定固定表达顺序，不写删除后不影响事实、决定、行动或理由的废话。正式文档使用直白、准确、简洁的语气；AI 聊天使用直白、自然、像同事交流的语气。核心规则直接写入安装生成的 `AGENTS.md`，保证聊天从第一条回复开始受约束；详细规则、反例、改写例子和输出前检查放在 `.workflow_loop/Standardized_Repository/global/document_writing.md`。每次 `workflow discuss` 在角色说明之后、阶段模板之前完整加载该文件，使后续阶段材料和产物共同受约束。当前仓库立即使用，未来新安装项目随安装包获得；其他已安装项目不自动覆盖，升级机制另行设计。`workflow` 命令行 stdout 不受此规范约束。
@@ -417,9 +423,9 @@ _Avoid_: 让门禁猜测自由文本含义, 用“基本完成”等自定义状
 当前工作意图为 `bugfix` 时，门2必须拒绝任何写有“产品设计影响：需要修改”的穿刺项，并明确提示当前结果不能继续按修 bug 流程推进，应结束当前 Run 后启动 `product_change`。如果用户选择保持原产品行为的其他修复方案，必须重新写清方案与证据，并把产品设计影响写为“无需修改”后才能继续。程序只检查明确字段，不自行判断某段自由文字是否暗中改变产品行为，门3仍由用户审查实际内容。
 _Avoid_: bugfix 门禁允许修改产品行为, AI 只改字段不改实际方案, 程序声称能从自由文字判断产品语义, 需要改产品仍推进 fix_plan
 
-**Spike Prompt Split**（穿刺模板与规范职责）:
-`Template_Repository/spike/spike.md` 只定义最终产物结构和内容质量，包括 `spec/spike_index.md`、每份 `spec/spike_<english-name>.md`、结果状态、代码设计影响字段和完成前文档检查；不写 AI 的调查与执行顺序。`Standardized_Repository/spike/spike.md` 定义 AI 怎样读取产品与代码设计、识别真实场景不确定性、逐项让用户选择、选择最小验证方法、按需使用 prototype 方法、执行并记录真实证据、形成结论、更新代码设计、经过门禁和清理临时内容。prototype 内容改写后进入流程规范，不直接作为运行时外部依赖，也不放进文档模板。
-_Avoid_: 模板写成访谈脚本, 规范只列文档目录, 直接引用开发者本机 prototype 路径, 两份文件重复整套规则
+**Spike Material Split**（穿刺产物模板与阶段工作规范职责）:
+`Template_Repository/spike/spike.md` 负责规定最终保留的穿刺清单和结论文档结构、字段和内容边界；`Standardized_Repository/spike/spike.md` 负责规定 AI 怎样读取已有事实、识别真实场景中的不确定性、让用户决定执行项、选择最小验证方法、执行真实验证、形成结论和同步设计。允许状态、阻塞判断、设计哈希比较、临时目录清理和阶段推进由代码执行。prototype 方法可以改写后进入阶段工作规范，不直接作为运行时外部依赖。
+_Avoid_: 产物模板写成访谈脚本, 阶段工作规范只列文档目录, 直接引用开发者本机 prototype 路径, 两份文件重复整套规则, 用 Markdown 代替程序门禁
 
 **Prototype Validation Method**（原型验证方法）:
 用最小的抛弃式代码确认一个明确不确定性，是 `spike` 可选择的验证方法之一，不等于整个 `spike` 流程。Workflow Loop 可以吸收 prototype 技能中“目标明确、使用现有技术栈、暴露关键状态”等方法，但不能吸收“默认不接真实数据”的规则：原型代码可以是临时和最小的，验证对象仍必须来自真实场景，包括真实接口、真实文件、真实数据特征、目标平台或实际数据规模；敏感数据可以脱敏，但不能改变本次要验证的结构和特征。临时代码统一放在 `.workflow_loop/spike_tmp/`，不修改生产代码，不在运行时依赖本机 prototype 技能目录。执行方式不强制压成一条命令，必须记录最少且可以重复执行的完整命令步骤。拿不到真实场景证据时，结论只能是“仍未确认”。
@@ -491,7 +497,7 @@ _Avoid_: 把完整流程写进 AGENTS.md, 因改全局 CLI 而取消提示词加
 
 **Clean Scope** (清场范围):
 - **整目录删除**：项目根下 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 只要含有文件，就删除命中的整个目录及全部内容。这些目录中即使放了非 workflow 文件，也会一起删除。
-- **不删除目录外内容**：`.workflow_loop/Template_Repository/` 与 `.workflow_loop/Standardized_Repository/` 全部内容（含其中的 `spec/`、`plan/` 等提示词与规范子目录）；`.workflow_loop/project.json` 文件本身（只更新初始化字段）；上述六个目录之外的源代码、`.git` 和项目文件；`.workflow_loop/` 运行时骨架本身。
+- **不删除目录外内容**：`.workflow_loop/Template_Repository/` 与 `.workflow_loop/Standardized_Repository/` 全部内容（含其中的 `spec/`、`plan/` 等产物文档模板和阶段工作规范子目录）；`.workflow_loop/project.json` 文件本身（只更新初始化字段）；上述六个目录之外的源代码、`.git` 和项目文件；`.workflow_loop/` 运行时骨架本身。
 - **确认**：有可删过程产物时才走清场确认；无则跳过（见 Clean Confirm）。
 _Avoid_: 从零做复用旧架构并跳过初步, 删除 Template/Standardized 仓库或其下 stage 子目录, 把模板 spec 当产物删, 默认删除源代码, 静默清场不确认, 无过程产物仍强制 --confirm-clean
 
@@ -543,7 +549,7 @@ _Avoid_: 只有角色交互没有代码映射, 把多个场景和函数内部流
 _Avoid_: 读过代码就写成运行验证, 隐藏或不可达代码直接写成正式产品功能, 证据冲突仍选一个写成事实
 
 **Code Design Process Standard**（代码设计流程规范）:
-规定 AI 怎样从已确认产品设计形成代码覆盖清单，推导架构层和关键节点，逐个功能设计完整代码过程，落实产品规则与异常，设计共享代码和验证方式，并在用户确认后生成正式文档。`code_design` 形成计划设计；`project_design_init` 还必须遵守存量项目调查和运行规范。
+规定 AI 怎样从已确认产品设计形成代码覆盖清单，推导架构层和关键节点，逐个功能设计完整代码过程，落实产品规则与异常，设计共享代码和验证方式，并在用户确认后使用共同的 `Template_Repository/code_design/code_design.md` 生成正式架构文档。`code_design` 形成计划设计；`project_design_init` 还必须遵守存量项目调查和运行规范；`revise_code_design` 和 `update_code_design` 只改变工作规范，不另建同结构的模板。
 _Avoid_: 从代码目录开始拼架构, 产品设计未确认就生成文档, 只设计成功路径不落实规则和异常, 不经用户确认直接写正式产物
 
 **Revise Code Design Stage** (`revise_code_design`):
@@ -551,20 +557,20 @@ _Avoid_: 从代码目录开始拼架构, 产品设计未确认就生成文档, �
 _Avoid_: 与 update_code_design 共用同一 stage 名当主键
 
 **Project Design Init Stage** (`project_design_init`):
-首次处理已有代码项目时，为 `product_change` / `bugfix` 共享的前置 Stage，中文名“项目设计架构初始化”。角色为“存量产品与架构分析师”。它必须查看现有代码；具备安全运行条件时必须运行项目，用真实表现校准代码理解；无法运行时写清原因和未确认内容。根据现有代码及可运行行为一次建立 `spec/product.md`、多个 `spec/feature_<english-name>.md`、`spec/architecture_code_design.md`，并生成 `spec/project_design_init_evidence.md` 记录实际检查的代码路径、运行条件、命令、结果和文档校准结论。门2要求产品设计、代码设计和调查证据都相对讨论完成时的基线发生变化，并检查证据中的代码路径真实存在。门3确认后写 `project_design_initialized=true` 与 `architecture.preliminary_done=true`。程序不能证明证据没有伪造，用户必须在门3核对。该 Stage 完成前作废不得写 true。
-_Avoid_: 只生成 architecture_code_design.md, 拆成彼此可能不一致的产品反推和架构反推两轮, 用旧文档存在冒充本次初始化完成, 把从零设计提示词当成代码反推提示词
+首次处理已有代码项目时，为 `product_change` / `bugfix` 共享的前置 Stage，中文名“项目设计架构初始化”。角色为“存量产品与架构分析师”。它必须查看现有代码；具备安全运行条件时必须运行项目，用真实表现校准代码理解；无法运行时写清原因和未确认内容。根据现有代码及可运行行为一次建立 `spec/product.md`、多个 `spec/feature_<english-name>.md`、`spec/architecture_code_design.md`，并生成 `spec/project_design_init_evidence.md`。产品文档使用产品文档模板，代码架构使用共同的代码架构文档模板，调查证据使用独立的调查证据模板；阶段工作规范只规定怎样调查和校准。门2要求产品设计、代码设计和调查证据都相对讨论完成时的基线发生变化，并检查证据中的代码路径真实存在。门3确认后写 `project_design_initialized=true` 与 `architecture.preliminary_done=true`。程序不能证明证据没有伪造，用户必须在门3核对。该 Stage 完成前作废不得写 true。
+_Avoid_: 只生成 architecture_code_design.md, 拆成彼此可能不一致的产品反推和架构反推两轮, 用旧文档存在冒充本次初始化完成, 为项目初始化另建一份代码架构模板
 
 **Product Spec Stage** (`spec`):
 统一负责“产品设计 + 功能拆分”。角色为产品设计师；加载 `.workflow_loop/Template_Repository/spec/spec.md` 与 `.workflow_loop/Standardized_Repository/spec/spec.md`；产物为 `spec/product.md` 与多个 `spec/feature_<english-name>.md`。`from_scratch` 中负责从零建立；`product_change` 中负责基于现状重新设计，可新增、修改或删除功能文档。用户确认讨论完成时记录相关文件路径与内容哈希，门2比较前后变化。`from_scratch` 要求新建 product.md 且至少新建一个功能文档；`product_change` 要求 product.md 有变化且至少一个功能文档新增、修改或删除。
 _Avoid_: 只校验 product.md, 独立生成 requirement_<临时名>.md, 把产品更新与功能拆分拆成两个后续 Stage, 旧功能文件冒充本 Run 产物
 
-**Product Spec Template Prompt**（产品设计模板提示词）:
-`.workflow_loop/Template_Repository/spec/spec.md`，是适用于所有产品类型的通用模板，提供可直接生成文件的 `spec/product.md` 完整九章骨架和 `spec/feature_<english-name>.md` 完整六章骨架，并说明每章应该写什么、不写什么、表格字段及无内容时如何标记；它说明“最终文档应是什么”，不承担逐题访谈流程，也不强制所有产品套用数据进入、整理、计算、输出等固定分类。没有相关内容时明确写“暂无”，不得为填满模板编造内容。
-_Avoid_: 把模板提示词写成访谈脚本, 只给目录不定义内容质量, 把某类数据产品的处理环节规定成所有产品必用维度
+**Product Spec Document Template**（产品设计产物文档模板）:
+`.workflow_loop/Template_Repository/spec/spec.md` 是适用于所有产品类型的产品文档模板，提供 `spec/product.md` 和 `spec/feature_<english-name>.md` 的章节骨架、字段、内容边界和完成前检查；它说明“最终文档应是什么”，不承担逐题访谈流程，也不强制所有产品套用数据进入、整理、计算、输出等固定分类。
+_Avoid_: 把产物模板写成访谈脚本, 只给目录不定义内容质量, 把某类数据产品的处理环节规定成所有产品必用维度
 
-**Product Spec Process Prompt**（产品设计流程提示词）:
-`.workflow_loop/Standardized_Repository/spec/spec.md`，定义产品设计阶段如何根据当前产品灵活地逐题讨论需求、检查讨论结果并取得用户确认；它说明“怎样形成最终文档”，不规定固定的需求讨论顺序，也不重复定义模板正文。流程区分四种情况：从零设计从用户需求建立产品；修改已有产品先读取现有文档和代码，只讨论本次新增、修改、删除以及需要保留的旧规则；已有代码但没有产品文档时，必须先查看代码并在安全条件下实际运行，用真实表现校准当前产品；修 bug 时，项目设计未初始化则先建立产品设计，已经初始化则使用现有产品设计，需要改变产品行为时改走修改产品。产品背景和功能设计原因必须来自用户确认或可核实事实，不能从提示词、文件名或代码结构推断历史。任何情况都不让用户重复说明可从环境查明的事实。讨论结束时先总结产品背景、目标、用户、场景、边界、组成、产品通用规则、功能拆分和未决问题，用户明确确认后才生成或修改产品文档。
-_Avoid_: 与模板提示词重复抄写全部定义, 强制所有需求按固定步骤讨论, 未总结共识就要求确认, 未确认共识就写产物
+**Product Spec Work Standard**（产品设计阶段工作规范）:
+`.workflow_loop/Standardized_Repository/spec/spec.md` 规定产品设计阶段怎样调查事实、和用户讨论、检查共同理解以及使用产品文档模板生成或修改文档。产品背景和功能设计原因必须来自用户确认或可核实事实，不能从文件名、提示词或代码结构推断历史；没有相关内容时写“暂无”，不得为了填满模板编造内容。
+_Avoid_: 阶段工作规范只列文档目录, 产物模板承担整套访谈, 强制所有需求按固定顺序讨论, 为填满模板编造产品内容
 
 **Product Design Phase Scope**（产品设计阶段范围）:
 产品设计阶段从调查已知事实和讨论需求开始，经过共同理解确认，最后生成或修改产品设计文档。`spec/product.md` 描述整个产品设计阶段，不只描述最后的文档生成动作。需求讨论属于阶段内的工作过程，不单独生成一份功能文档。
@@ -713,8 +719,8 @@ _Avoid_: 各主题单独通过后直接结束, 只测试新增功能不检查原
 
 **Acceptance Plan Stage** (`acceptance_plan`):
 根据已经确认的需求确定本次全部验收主题，并为每个主题制定“什么算完成”的验收计划。主题在此阶段由用户确认；不执行测试、实施或验收。
-验收计划的流程模板和规范归入 `.workflow_loop/Template_Repository/acceptance/` 与 `.workflow_loop/Standardized_Repository/acceptance/`。`qa/` 只保存测试计划、测试执行和最终全量回归相关模板，不再混放验收计划。
-_Avoid_: 写完验收计划就视为已验收, 在 plan 阶段才确定主题, 主题只在当前 Run 内唯一
+`Template_Repository/acceptance/acceptance_plan.md` 负责规定 `traceability.md` 和 `acceptance/<topic>_plan.md` 的最终文档结构、字段和内容边界；`Standardized_Repository/acceptance/acceptance_plan.md` 负责规定 AI 怎样根据已确认需求讨论验收主题和验收条件，并使用产物文档模板生成文件。主题登记、固定章节、编号、追踪表列数、初始状态、链接和门禁由代码检查。`qa/` 只保存测试计划、测试执行和最终全量回归相关材料，不混放验收计划。
+_Avoid_: 写完验收计划就视为已验收, 在 plan 阶段才确定主题, 主题只在当前 Run 内唯一, 产物模板重复整套用户访谈, 阶段工作规范只列文档目录, 用 Markdown 代替程序门禁
 
 **Test Plan Stage** (`test_plan`):
 根据已经确认的验收主题和验收计划制定测试计划，不实际执行测试，也不得自行改变主题。
@@ -725,14 +731,19 @@ _Avoid_: 测试计划自行新增删除主题, 写测试计划冒充已经测试
 _Avoid_: 在 plan 阶段重新拆主题, 把计划制定和实际实施混在一起, 强制实施任务与主题一一对应
 
 **Topic Execution Stage** (`topic_execution`):
-在一个顶层阶段内，分别推进各主题的实施、测试和主题验收。独立主题可以处于不同进度；存在依赖时按实施计划确定的顺序推进。每个主题必须留下实施记录、绑定当前工作流且写“测试结果：通过”的测试结果，以及写“验收结果：通过”的主题验收结果。全部主题完成后，`topic_execution` 才能结束；阶段确认时程序更新 `traceability.md`，bugfix 同时把缺陷状态更新为“主题验收通过，待全量回归”。测试计划的具体测试项和主题内部文档细节仍由对应阶段材料讨论。
-_Avoid_: 顶层固定成所有 impl 完成后才允许任何 test, 一个主题失败就清零全部主题, 把主题执行细节塞进路径编排规则
+在一个顶层阶段内，分别推进各主题的实施、测试和主题验收。独立主题可以处于不同进度；存在依赖时按实施计划确定的顺序推进。每个主题必须留下实施记录、绑定当前工作流的测试结果和主题验收结果。全部主题完成后，`topic_execution` 才能结束；阶段确认时程序更新 `traceability.md`，bugfix 同时把缺陷状态更新为“主题验收通过，待全量回归”。
+
+`topic_execution` 自己不生成 `topic_execution.md` 或其它独立汇总文档，因此不建立 `Template_Repository/execution/topic_execution.md`。它可以保留阶段工作规范，并按实际需要加载实施记录、主题测试结果和主题验收结果各自的产物模板。测试计划、实施记录、测试结果和主题验收结果的具体结构由对应材料单独确定，不能用一份“主题执行模板”把这些不同产物混在一起。
+_Avoid_: 顶层固定成所有 impl 完成后才允许任何 test, 一个主题失败就清零全部主题, 把主题执行细节塞进路径编排规则, 为协调 Stage 虚构独立产物模板, 用一份 topic_execution 模板代替实施测试验收三类产物
 
 **Regression Test Stage** (`regression_test`):
 全部主题完成后，对全部已合并代码运行最终全量回归，产出 `qa/final_regression_result.md`。程序门禁检查结果中的工作流编号和固定字段“回归状态：通过”；文件不存在、编号不一致、失败或阻塞都不能进入整体验收。阶段确认时程序更新 `traceability.md`；bugfix 回归失败时把缺陷状态改为“回归失败，重新处理中”。这些固定条件直接写在代码中，不依赖规范文档提醒 AI 自觉遵守。
 
 **Overall Acceptance Stage** (`overall_acceptance`):
-最终全量回归通过后，由用户确认整个需求是否完成，产出 `acceptance/overall_result.md`。程序门禁先重新检查最终全量回归已经通过，再检查整体验收结果中的工作流编号和固定字段“整体验收状态：通过”；阶段确认时程序更新 `traceability.md`。bugfix 只有在这里通过后才把缺陷记录及 `bug/index.md` 改为“已修复并验收”。之后仍必须经过第三道用户确认门禁，任一条件不满足都不能进入详细代码设计更新。这个通过条件同样由代码执行，不另建只重复固定规则的规范文件。
+最终全量回归通过后，由用户确认整个需求是否完成。程序门禁重新检查当前工作流的全部主题验收结果和最终全量回归结果都已经通过；第三道门记录用户是否明确接受整个需求的交付结果。该阶段不生成 `acceptance/overall_result.md`，也不建立整体验收产物模板或只重复固定门禁的独立规范文件。用户确认结果写入 State Snapshot、Journal 和 `traceability.md`；bugfix 只有在这里通过后才把缺陷记录及 `bug/index.md` 改为“已修复并验收”。任一前置结果或用户确认不满足时，不能进入详细代码设计更新。
+
+`overall_acceptance` 不修改代码设计文档。唯一负责根据最终代码、测试和验收结果更新 `spec/architecture_code_design.md` 的 Stage 是后续 `update_code_design`。
+_Avoid_: 为整体验收重复生成汇总文档, 把最终全量回归等同于用户整体验收, AI 根据测试通过自动代替用户确认, 在 overall_acceptance 修改代码设计文档, 未完成整体验收就进入 update_code_design
 
 **Verification Invalidation** (验证结果自动失效):
 当前流程骨架先实现顶层失效：验收计划变化时退回 `acceptance_plan`；测试计划变化时退回 `test_plan`；实施代码、实施记录或主题测试结果变化时退回 `topic_execution`；最终全量回归结果变化时退回 `regression_test`。程序同时清零该阶段及其后续顶层阶段的门禁和旧哈希，并把 `current_stage` 移到最早需要重做的阶段，stdout 打印对应的下一条命令。主题内部怎样只让受影响主题失效，留到 `topic_execution` 的状态和规范讨论中实现，当前代码不声称已经具备该能力。

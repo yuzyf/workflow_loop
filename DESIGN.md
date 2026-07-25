@@ -95,8 +95,8 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   │   ├─ base.py                      # StageStrategy ABC + clean_spike_tmp
   │   │   └─ stages.py                    # 所有具体 Stage 类
   │   └─ data/                            # 随包装分发的资源
-  │       ├─ Template_Repository/         # 提示词模板
-  │       └─ Standardized_Repository/     # 规范词
+  │       ├─ Template_Repository/         # 产物文档模板
+  │       └─ Standardized_Repository/     # 阶段工作规范
   │           └─ global/
   │               └─ document_writing.md # 所有 stage 共用的写作规范
   ├─ tests/                               # pytest 单元测试
@@ -475,12 +475,12 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
      → 从 state.stage_path 找对应 Stage 策略类实例
      → 加载 role_doc.py 里该 stage 的角色定义
      → 加载 .workflow_loop/Standardized_Repository/global/document_writing.md
-     → 从项目内 .workflow_loop/Template_Repository/ 与 Standardized_Repository/ 加载当前 stage 提示词与规范
-     → stdout 完整输出：角色全文 + 全局写作规范全文 + 提示词全文 + stage 规范全文 + stage.instruction()
+     → 从项目内 .workflow_loop/Template_Repository/ 与 Standardized_Repository/ 加载当前 stage 的产物文档模板与阶段工作规范
+     → stdout 完整输出：角色全文 + 全局写作规范全文 + 产物文档模板全文 + 阶段工作规范全文 + stage.instruction()
      → 写 journal: 提示词加载 / 角色文档加载
 
 [S2] AI 和用户讨论
-     → AI 用提示词里的问题/结构和用户交互
+     → AI 用阶段工作规范调查和讨论，用产物文档模板整理最终文件
      → workflow 不参与对话，但提示词是 workflow 加载的
      → 讨论持续到双方满意
      → （spike stage 特殊：AI 先查事实、识别真实场景中的技术不确定性，用户逐项决定执行或全部跳过，见第 7.3 节）
@@ -648,19 +648,27 @@ class StageStrategy(ABC):
 - 不做关键词封禁。代码只检查全局规范已安装并被 `discuss` 加载，不能声称自动判断写作质量
 - 本次只更新当前仓库和未来新安装项目；其他已安装项目不自动覆盖，升级机制以后单独设计
 
+### 6.8 阶段材料职责
+
+- `Template_Repository` 保存产物文档模板：规定最终文档的章节、字段、表格、内容边界和完成前检查。
+- `Standardized_Repository` 保存阶段工作规范：规定 AI 怎样调查、讨论、执行、取得用户确认，并说明怎样使用产物文档模板。
+- Python 代码执行确定的阶段顺序、三道门、主题登记、允许状态、文件和字段校验、哈希、追踪表更新和阶段推进。
+- 同一个最终文档被多个阶段新建、修订或更新时，共用一份产物文档模板；各阶段的不同工作方法分别写入对应阶段工作规范。
+- `prompt_doc_path()`（提示词文档路径）和命令行“流程模版”是尚未完成全仓迁移的旧代码名称，不能用它们判断文件职责。产品设计、代码设计、穿刺和验收资源已经按本节职责校准；测试计划及后续未讨论资源将在对应阶段讨论时迁移。
+
 ---
 
 ## 7. Stage 详典
 
-每个 stage 的角色 / 提示词路径 / 规范路径 / 产物路径 / `code_validate` / `on_advance` / instruction。提示词路径相对 `.workflow_loop/`，规范路径同。
+每个 stage 的角色 / 产物文档模板路径 / 阶段工作规范路径 / 产物路径 / `code_validate` / `on_advance` / instruction。路径均相对 `.workflow_loop/`。代码中的 `prompt_doc_path()` 是兼容旧实现的字段名。
 
 ### 7.1 spec（产品设计 + 功能拆分）
 
 | 字段 | 值 |
 |---|---|
 | 角色 | 产品设计师 |
-| 提示词 | `Template_Repository/spec/spec.md` |
-| 规范 | `Standardized_Repository/spec/spec.md` |
+| 产物文档模板 | `Template_Repository/spec/spec.md` |
+| 阶段工作规范 | `Standardized_Repository/spec/spec.md` |
 | 产物 | `spec/product.md` + `spec/feature_<english-name>.md`（可能多个，文件名使用英文，正文使用中文） |
 | `code_validate` | 检查 `spec/product.md` 存在 + 至少一个 `spec/feature_*.md` 存在；第一次 `--discuss-done` 时记录相关文件路径与内容哈希，校验时比较前后变化（证明产物属于本 Run） |
 | `on_advance` | no-op；`from_scratch` 中若 `code_design` 也已 `--confirmed`，置 `project_design_initialized=true` |
@@ -683,8 +691,8 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 代码架构设计师（初步） |
-| 提示词 | `Template_Repository/code_design/code_design.md` |
-| 规范 | `Standardized_Repository/code_design/code_design.md` |
+| 产物文档模板 | `Template_Repository/code_design/code_design.md` |
+| 阶段工作规范 | `Standardized_Repository/code_design/code_design.md` |
 | 产物 | `spec/architecture_code_design.md` |
 | `code_validate` | 默认（检查文件存在） |
 | `on_advance` | 置 `architecture.preliminary_done=true`；`from_scratch` 中若 `spec` 也已 `--confirmed`，置 `project_design_initialized=true` |
@@ -703,8 +711,8 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 技术不确定性验证工程师 |
-| 提示词 | `Template_Repository/spike/spike.md` |
-| 规范 | `Standardized_Repository/spike/spike.md` |
+| 产物文档模板 | `Template_Repository/spike/spike.md` |
+| 阶段工作规范 | `Standardized_Repository/spike/spike.md` |
 | 产物 | `spec/spike_index.md` + 每项 `spec/spike_<english-name>.md`；需要时临时代码、样本和原始输出进 `.workflow_loop/spike_tmp/<english-name>/` |
 | `code_validate` | `SpikeStage` 调 `spike_validation.validate_spike_stage()`：检查当前工作流编号、唯一穿刺项编号、文档链接、八章、固定字段、结果一致性、阻塞状态、剩余风险、意图边界和设计哈希 |
 | `on_advance` | 删除 `.workflow_loop/spike_tmp/` 下所有内容，保留清单、结论和设计文档 |
@@ -738,8 +746,8 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 存量产品与架构分析师 |
-| 提示词 | `Template_Repository/code_design/project_design_init.md`，并附加加载 `Template_Repository/spec/spec.md` + `Template_Repository/code_design/code_design.md` |
-| 规范 | `Standardized_Repository/code_design/project_design_init.md`，并附加加载 `Standardized_Repository/spec/spec.md` + `Standardized_Repository/code_design/code_design.md` |
+| 产物文档模板 | `Template_Repository/code_design/project_design_init_evidence.md`，并附加加载 `Template_Repository/spec/spec.md` + `Template_Repository/code_design/code_design.md` |
+| 阶段工作规范 | `Standardized_Repository/code_design/project_design_init.md`，并附加加载 `Standardized_Repository/spec/spec.md` + `Standardized_Repository/code_design/code_design.md` |
 | 产物 | `spec/product.md` + 多个 `spec/feature_<english-name>.md` + `spec/architecture_code_design.md` + `spec/project_design_init_evidence.md`（调查证据） |
 | `code_validate` | 校验产品设计、代码设计和调查证据都存在且相对讨论完成时的基线发生变化；调查证据必须绑定当前工作流编号，列出至少一个真实存在的代码文件，并按运行条件记录命令、结果或无法运行原因 |
 | `on_advance` | 置 `project_design_initialized=true` 与 `architecture.preliminary_done=true` |
@@ -758,8 +766,8 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 架构文档修订者 |
-| 提示词 | `Template_Repository/code_design/revise_code_design.md` |
-| 规范 | `Standardized_Repository/code_design/revise_code_design.md` |
+| 产物文档模板 | 共用 `Template_Repository/code_design/code_design.md` |
+| 阶段工作规范 | `Standardized_Repository/code_design/revise_code_design.md` |
 | 产物 | 更新 `spec/architecture_code_design.md`（已存在，按新设计改） |
 | `code_validate` | 检查 `spec/architecture_code_design.md` 存在且有变化（内容哈希前后比对） |
 | `on_advance` | 置 `architecture.preliminary_done=true` |
@@ -772,10 +780,10 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 架构文档更新者（详细落地） |
-| 提示词 | `Template_Repository/code_design/update_code_design.md` |
-| 规范 | `Standardized_Repository/code_design/update_code_design.md` |
+| 产物文档模板 | 共用 `Template_Repository/code_design/code_design.md` |
+| 阶段工作规范 | `Standardized_Repository/code_design/update_code_design.md` |
 | 产物 | 写入/更新 `spec/architecture_code_design.md` |
-| `code_validate` | 检查文件和当前工作流追踪表存在；bugfix 无结构变化时显式确认"无结构变化"（不省略 stage） |
+| `code_validate` | 检查架构文档确实在本阶段发生变化，并且当前工作流追踪表存在；bugfix 无结构变化时也要在文档中补充本轮核对结论（不省略 stage） |
 | 门3确认处理 | 更新追踪表的最终代码设计列，并置 `architecture.detailed_done=true` |
 | instruction | "详细架构收尾：写入/更新 spec/architecture_code_design.md，反映最终被验证和接受的真实结构" |
 
@@ -786,26 +794,28 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 验收计划制定者 |
-| 提示词 | `Template_Repository/acceptance/acceptance_plan.md` |
-| 规范 | `Standardized_Repository/acceptance/acceptance_plan.md` |
+| 产物文档模板 | `Template_Repository/acceptance/acceptance_plan.md` |
+| 阶段工作规范 | `Standardized_Repository/acceptance/acceptance_plan.md` |
 | 产物 | 项目根 `traceability.md` + `acceptance/<topic>_plan.md` |
 | `code_validate` | 校验当前工作流追踪章节、九列交付链路、每个主题的六个固定章节、`AC-01` 形式的验收条件、逐条追踪行、初始状态和上下游路径；`bugfix` 额外校验计划主题与缺陷记录中已确认的主题完全一致 |
 | 门3确认处理 | `from_scratch`、`product_change` 把主题列表写入 `state.topics` 和项目 `topic_history`；`bugfix` 只复核 `reproduce` 已登记的主题；三种意图都记录 `verification.acceptance_plan_hash` |
 | instruction | "从零开发和修改产品先确定全部验收主题；修 bug 复用缺陷复现阶段已经确认的主题。为每个主题写清什么算完成，并建立需求交付追踪表" |
 
+**材料职责**：`Template_Repository/acceptance/acceptance_plan.md` 规定 `traceability.md` 和主题验收计划的最终文档结构；`Standardized_Repository/acceptance/acceptance_plan.md` 规定 AI 怎样调查需求、确认主题清单、逐个讨论验收条件并取得用户确认。固定门禁不在两份 Markdown 中重复维护。
+
 **讨论顺序**：`from_scratch` 和 `product_change` 先让用户确认完整主题清单，再逐个主题讨论验收条件。`bugfix` 不重新讨论主题名称，只讨论缺陷记录中既有主题的验收范围和验收条件。
 
 **主题计划结构**：每份 `acceptance/<topic>_plan.md` 固定包含“本次需求与验收目标、产品设计依据、验收范围、验收条件、完成判定、上下游文档”。每条验收条件必须写清“条件与触发、预期结果、产品设计或缺陷依据”，不能写测试环境、测试数据、执行命令、代码方案或实施步骤。
 
-**需求交付追踪表**：`traceability.md` 按工作流编号分段，每条验收条件单独占一行。验收计划阶段填写来源、主题和验收条件；测试计划和实施计划列写“待制定”，实施记录、测试结果和验收结果列写“待执行”，最终代码设计列写“待更新”。后续阶段只更新自己负责的列：`test_plan` 更新测试计划，`plan/fix_plan` 更新实施计划，`topic_execution` 更新实施记录、主题测试结果和主题验收结果，`regression_test` 更新最终回归结果，`overall_acceptance` 更新整体验收结果，`update_code_design` 更新最终代码设计。验收计划哈希只计算主题计划文件，不包含持续更新的追踪表。
+**需求交付追踪表**：`traceability.md` 按工作流编号分段，每条验收条件单独占一行。验收计划阶段填写来源、主题和验收条件；测试计划和实施计划列写“待制定”，实施记录、测试结果和验收结果列写“待执行”，最终代码设计列写“待更新”。后续阶段只更新自己负责的列：`test_plan` 更新测试计划，`plan/fix_plan` 更新实施计划，`topic_execution` 更新实施记录、主题测试结果和主题验收结果，`regression_test` 更新最终回归结果，`overall_acceptance` 记录“整体验收：用户已确认”，`update_code_design` 更新最终代码设计。验收计划哈希只计算主题计划文件，不包含持续更新的追踪表。
 
 ### 7.8 test_plan（测试计划制定）
 
 | 字段 | 值 |
 |---|---|
 | 角色 | 测试计划制定者 |
-| 提示词 | `Template_Repository/qa/test_plan.md` |
-| 规范 | `Standardized_Repository/qa/test_plan.md` |
+| 产物文档模板 | `Template_Repository/qa/test_plan.md`；当前为待讨论占位文件 |
+| 阶段工作规范 | `Standardized_Repository/qa/test_plan.md`；当前为待讨论占位文件 |
 | 产物 | `qa/<topic>_plan.md` + 更新 `qa/index.md` |
 | `code_validate` | `state.topics` 中每个主题都有同名 `qa/<topic>_plan.md`，并且当前工作流追踪表存在 |
 | 门3确认处理 | 记录 `verification.test_plan_hash`，更新追踪表的测试计划列 |
@@ -818,8 +828,8 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 实施计划制定者 |
-| 提示词 | `Template_Repository/plan/plan.md` |
-| 规范 | `Standardized_Repository/plan/plan.md` |
+| 产物文档模板 | `Template_Repository/plan/plan.md`；当前为待讨论占位文件 |
+| 阶段工作规范 | `Standardized_Repository/plan/plan.md`；当前为待讨论占位文件 |
 | 产物 | `plan/index.md` + 至少一份实施计划文档 |
 | `code_validate` | 检查 `plan/index.md`、实施计划文档和当前工作流追踪表存在 |
 | 门3确认处理 | 更新追踪表的实施计划与任务列 |
@@ -832,8 +842,8 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 修复实施计划制定者 |
-| 提示词 | `Template_Repository/plan/fix_plan.md` |
-| 规范 | `Standardized_Repository/plan/fix_plan.md` |
+| 产物文档模板 | `Template_Repository/plan/fix_plan.md`；当前为待讨论占位文件 |
+| 阶段工作规范 | `Standardized_Repository/plan/fix_plan.md`；当前为待讨论占位文件 |
 | 产物 | `plan/index.md` + 至少一份修复实施计划文档 |
 | `code_validate` | 同 plan，且检查当前工作流追踪表存在 |
 | 门3确认处理 | 更新追踪表的实施计划与任务列 |
@@ -844,14 +854,16 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 按主题执行协调者 |
-| 提示词 | `Template_Repository/execution/topic_execution.md` |
+| 产物文档模板 | 无；本 Stage 不生成独立的 `topic_execution.md` |
 | 规范 | `Standardized_Repository/execution/topic_execution.md` |
+| 附加产物文档模板 | `Template_Repository/acceptance/acceptance_result.md` |
+| 附加阶段工作规范 | `Standardized_Repository/acceptance/acceptance.md` |
 | 产物 | 实际代码、实施记录、每个主题的测试结果与验收结果 |
 | `code_validate` | 当前工作流追踪表存在；`state.topics` 中每个主题都有实施记录、当前工作流编号匹配且写“测试结果：通过”的测试结果、当前工作流编号匹配且写“验收结果：通过”的主题验收结果 |
 | 门3确认处理 | 记录实施代码快照与全部主题测试结果哈希，更新追踪表的实施记录、测试结果和验收结果列；bugfix 追加“主题验收通过，待全量回归” |
 | instruction | "分别推进各主题的实施、测试和验收；全部主题完成后才结束本阶段" |
 
-固定字段和阶段结果由程序校验；测试项、测试数据、实施任务和主题内部文档结构仍由后续提示词和规范讨论决定。
+固定字段和阶段结果由程序校验；测试项、测试数据、实施任务和主题内部文档结构仍由后续提示词和规范讨论决定。不能为协调 Stage 额外创建一个汇总模板。
 
 ### 7.12 regression_test（最终全量回归）
 
@@ -870,13 +882,13 @@ class StageStrategy(ABC):
 | 字段 | 值 |
 |---|---|
 | 角色 | 整体验收执行者 |
-| 提示词 | `Template_Repository/acceptance/overall_acceptance.md` |
-| 规范 | 无独立规范文件；固定通过条件由 `OverallAcceptanceStage.code_validate()` 执行 |
-| 产物 | `acceptance/overall_result.md` |
-| `code_validate` | 先复核当前工作流追踪表和最终全量回归已经通过，再检查结果绑定当前工作流编号，并且明确写“整体验收状态：通过” |
-| 门3确认处理 | 更新追踪表的验收结果列；bugfix 追加“已修复并验收”并更新 `bug/index.md` |
+| 产物文档模板 | 无；本 Stage 不生成独立的整体结果文档 |
+| 阶段工作规范 | 无独立规范；固定前置条件由 `OverallAcceptanceStage.code_validate()` 执行，用户确认由门3记录 |
+| 产物 | 无；用户确认写入 State Snapshot、Journal 和 `traceability.md` |
+| `code_validate` | 先复核当前工作流全部主题验收结果和最终全量回归已经通过，不读取整体结果文档 |
+| 门3确认处理 | 记录“整体验收：用户已确认”；bugfix 追加“已修复并验收”并更新 `bug/index.md` |
 | `on_advance` | no-op |
-| instruction | "最终全量回归通过后，由用户确认整个需求是否完成" |
+| instruction | "最终全量回归和全部主题验收通过后，由用户确认整个需求是否完成；本阶段不生成新的结果文档" |
 
 ### 7.14 reproduce（bug 复现，bugfix 专用）
 
@@ -1094,7 +1106,7 @@ State Snapshot 中记录架构完成度：
 - `code_design` / `revise_code_design` / `update_code_design` / `project_design_init`：`spec/architecture_code_design.md`
 - `reproduce`：使用 bug 描述
 - `regression_test`：`qa/final_regression_result.md`
-- `overall_acceptance`：`acceptance/overall_result.md`
+- `overall_acceptance`：无独立文档；记录 State Snapshot、Journal 和 `traceability.md` 中的用户确认
 
 ---
 
@@ -1199,4 +1211,4 @@ bug/
 - 机制：无 Verification Invalidation + 无 Architecture Gate Marks + 无 Clean Confirm + 无 Optional Spike --skip → 全部新增
 - 穿刺：只检查任意 `spike_*.md` → 当前工作流清单 + 每项结论 + 固定状态 + 阻塞检查 + 产品/代码设计修改哈希校验
 
-**当前状态**：穿刺流程代码、提示词、产品文档和代码设计已经同步；完整测试已通过。当前工作流停在 `spike` 第二道门之前，穿刺结论通过代码校验后还需要用户完成第三道门确认。
+**当前状态**：产品设计、代码设计、穿刺、缺陷复现和验收阶段已经按“产物文档模板 + 阶段工作规范 + Python 门禁”重新校准；代码设计的初步设计、产品变更修订和最终更新共用同一份架构文档模板；没有独立产物的主题执行和整体验收不再虚构模板。计划、实施和测试材料尚未讨论的内容已改成明确占位文件，不能当成正式规则。完整测试已通过 108 项。当前工作流停在 `test_plan`，下一步是单独讨论并迁移测试计划阶段材料。

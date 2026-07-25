@@ -285,10 +285,9 @@ def update_for_stage(
             workflow_id,
             topics,
             7,
-            lambda _topic, current: _set_or_append_link(
+            lambda _topic, current: _set_or_append_text(
                 current,
-                "整体验收",
-                "./acceptance/overall_result.md",
+                "整体验收：用户已确认",
             ),
         )
 

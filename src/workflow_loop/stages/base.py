@@ -9,7 +9,7 @@ SPIKE_TMP_DIR = os.path.join(".workflow_loop", "spike_tmp")
 
 # Stage 策略基类（ABC）
 # 每个 stage = 一个工作流环节（如 spec、acceptance_plan、topic_execution）
-# 知道：自己叫什么、期望产出什么文件、加载哪个提示词/规范、怎么校验产出、推进时做啥
+# 知道：自己叫什么、期望产出什么文件、加载哪些阶段材料、怎么校验产出、推进时做啥
 # 加新 stage = 加一个子类，在 path_composer.py 的路径列表里插入
 class StageStrategy(ABC):
     # stage 标识名，存到 state.json 的 stage_path 和 stages 的 key
@@ -25,13 +25,12 @@ class StageStrategy(ABC):
     @abstractmethod
     def role_doc_path(self) -> str | None: ...
 
-    # 提示词文档路径（相对 .workflow_loop/），如 "Template_Repository/spec/spec.md"
-    # discuss 命令加载这个文档内容，打印给 AI 用
+    # 阶段主文档路径（相对 .workflow_loop/）。已校准阶段指向产物文档模板；
+    # 方法名保留 prompt_doc_path 兼容旧代码，后续全仓迁移时统一重命名。
     @abstractmethod
     def prompt_doc_path(self) -> str | None: ...
 
-    # 规范词文档路径（相对 .workflow_loop/），如 "Standardized_Repository/spec/spec.md"
-    # discuss 命令加载这个文档内容，打印给 AI 用
+    # 阶段规范文档路径（相对 .workflow_loop/）。已校准阶段指向阶段工作规范。
     @abstractmethod
     def standard_doc_path(self) -> str | None: ...
 
@@ -64,8 +63,8 @@ class StageStrategy(ABC):
     def change_tracked_paths(self, project_root: str) -> list[str]:
         return []
 
-    # 附加提示词/规范路径列表（discuss 命令额外加载）
-    # 默认空列表；project_design_init 重写：加载 spec + code_design 两组
+    # 附加阶段材料路径列表（discuss 命令额外加载）
+    # 默认空列表；project_design_init 和 topic_execution 按需加载共享材料。
     def additional_doc_paths(self) -> list[tuple[str, str]]:
         return []
 

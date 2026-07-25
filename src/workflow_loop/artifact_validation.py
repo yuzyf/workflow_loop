@@ -9,7 +9,6 @@ from .verification import compute_file_hashes
 PROJECT_INIT_EVIDENCE_PATH = os.path.join("spec", "project_design_init_evidence.md")
 TRACEABILITY_PATH = "traceability.md"
 FINAL_REGRESSION_RESULT_PATH = os.path.join("qa", "final_regression_result.md")
-OVERALL_ACCEPTANCE_RESULT_PATH = os.path.join("acceptance", "overall_result.md")
 BUG_FILENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}-.+\.md$")
 ACCEPTANCE_CRITERION_RE = re.compile(r"^###\s+(AC-\d{2,})：?.*$", re.MULTILINE)
 ACCEPTANCE_PLAN_SECTIONS = [
@@ -423,30 +422,26 @@ def validate_final_regression_result(
     return (True, "最终全量回归已明确通过")
 
 
-def validate_overall_acceptance_result(
+def validate_overall_acceptance_prerequisites(
     project_root: str,
     workflow_id: str,
+    topics: list[str],
 ) -> tuple[bool, str]:
-    """整体验收必须建立在已通过的最终回归上，并明确记录当前工作流通过。"""
+    """整体验收只校验前置结果，不读取或要求独立的整体结果文档。"""
+    if not topics:
+        return (False, "当前工作流没有验收主题，不能进行整体验收")
+    topic_ok, topic_detail = validate_topic_execution_results(
+        project_root,
+        workflow_id,
+        topics,
+    )
+    if not topic_ok:
+        return (False, f"主题验收尚未全部通过，不能进行整体验收: {topic_detail}")
+
     regression_ok, regression_detail = validate_final_regression_result(
         project_root,
         workflow_id,
     )
     if not regression_ok:
         return (False, regression_detail)
-
-    full_path = os.path.join(project_root, OVERALL_ACCEPTANCE_RESULT_PATH)
-    if not os.path.isfile(full_path):
-        return (False, f"{OVERALL_ACCEPTANCE_RESULT_PATH} 不存在")
-
-    content = _read_text(project_root, OVERALL_ACCEPTANCE_RESULT_PATH)
-    if _field(content, "工作流编号") != workflow_id:
-        return (False, "整体验收结果中的工作流编号与当前工作流不一致")
-
-    status = _field(content, "整体验收状态")
-    if status != "通过":
-        return (
-            False,
-            "整体验收没有明确写“整体验收状态：通过”，不能进入代码设计收尾",
-        )
-    return (True, "最终全量回归和整体验收都已明确通过")
+    return (True, "全部主题验收和最终全量回归都已明确通过，可以请用户确认整体验收")

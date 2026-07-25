@@ -179,10 +179,10 @@ def record_overall_acceptance_pass(project_root: str, workflow_id: str, topics: 
         project_root,
         workflow_id,
         topics,
-        stage_label="整体验收结果",
+        stage_label="整体验收确认",
         status="已修复并验收",
         details=[
             "- 最终全量回归：[回归结果](../qa/final_regression_result.md)",
-            "- 整体验收：[整体验收结果](../acceptance/overall_result.md)",
+            "- 整体验收：用户已确认",
         ],
     )
