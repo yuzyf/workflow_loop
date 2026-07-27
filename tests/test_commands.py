@@ -182,6 +182,23 @@ def _write_valid_acceptance_documents(tmp_path, workflow_id, topics):
 |---|---|---|---|---|---|---|---|---|
 {chr(10).join(rows)}
 """)
+    index_rows = []
+    for order, topic in enumerate(topics, start=1):
+        index_rows.append(
+            f"| {order} | {topic} | 无 | "
+            f"[验收计划](./{topic}_plan.md) | [验收结果](./{topic}_result.md) |"
+        )
+    with open(os.path.join(acceptance_dir, "index.md"), "w") as f:
+        f.write(f"""# 验收主题索引
+
+## {workflow_id}
+
+### 主题关系
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+{chr(10).join(index_rows)}
+""")
 # 测试 workflow start 无 intent 且无 active Run 时：列出可选意图
 def test_start_no_intent_no_run(tmp_path):
     # 初始化项目
@@ -471,58 +488,6 @@ def test_wrong_stage_gate_prints_acceptance_plan_stage_next_step(tmp_path):
     assert "workflow gate acceptance_plan --discuss-done" in out
 
 
-def test_old_plan_first_state_migrates_to_acceptance_plan_first(tmp_path):
-    _setup_project(tmp_path)
-    _run(["start", "--intent", "from_scratch"], str(tmp_path))
-    state_path = os.path.join(str(tmp_path), ".workflow_loop", "state.json")
-    with open(state_path) as f:
-        data = __import__("json").load(f)
-
-    old_path = [
-        "spec", "code_design", "spike", "plan", "acceptance_plan",
-        "test_plan", "impl", "test", "acceptance", "update_code_design",
-    ]
-    old_stages = {}
-    for stage_name in old_path:
-        old_stages[stage_name] = data["stages"].get(stage_name, {
-            "status": "pending",
-            "artifact_paths": [],
-            "artifact_produced_at": None,
-            "gate": {
-                "discussion_complete": False,
-                "code_validated": False,
-                "user_confirmed": False,
-            },
-        })
-    for stage_name in ["spec", "code_design", "spike"]:
-        old_stages[stage_name]["status"] = "done"
-        old_stages[stage_name]["gate"] = {
-            "discussion_complete": True,
-            "code_validated": True,
-            "user_confirmed": True,
-        }
-    old_stages["plan"]["status"] = "in_progress"
-    old_stages["plan"]["gate"]["discussion_complete"] = True
-    data["stage_path"] = old_path
-    data["stages"] = old_stages
-    data["current_stage"] = "plan"
-    with open(state_path, "w") as f:
-        __import__("json").dump(data, f)
-
-    code, out, _ = _run(["status"], str(tmp_path))
-
-    assert code == 0
-    assert "当前 stage: acceptance_plan" in out
-    with open(state_path) as f:
-        migrated = __import__("json").load(f)
-    assert migrated["stage_path"] == [
-        "spec", "code_design", "spike", "acceptance_plan", "test_plan",
-        "plan", "topic_execution", "regression_test", "overall_acceptance",
-        "update_code_design",
-    ]
-    assert migrated["stages"]["plan"]["gate"]["discussion_complete"] is False
-
-
 def test_status_refreshes_acceptance_plan_artifact_paths_without_stage_order_change(tmp_path):
     _setup_project(tmp_path)
     _run(["start", "--intent", "from_scratch"], str(tmp_path))
@@ -540,6 +505,7 @@ def test_status_refreshes_acceptance_plan_artifact_paths_without_stage_order_cha
         migrated = __import__("json").load(f)
     assert migrated["stages"]["acceptance_plan"]["artifact_paths"] == [
         "traceability.md",
+        "acceptance/index.md",
         "acceptance/",
     ]
 
@@ -593,7 +559,32 @@ def test_test_plan_gate_runs_and_records_unified_test_entry(tmp_path):
         "# 上传文件验收计划\n\n### AC-01：上传完成\n",
         encoding="utf-8",
     )
-    (qa_dir / "index.md").write_text("- [上传文件](./上传文件_plan.md)\n", encoding="utf-8")
+    (acceptance_dir / "index.md").write_text(
+        f"""# 验收主题索引
+
+## {workflow_id}
+
+### 主题关系
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+| 1 | 上传文件 | 无 | [验收计划](./上传文件_plan.md) | [验收结果](./上传文件_result.md) |
+""",
+        encoding="utf-8",
+    )
+    (qa_dir / "index.md").write_text(
+        f"""# 测试计划索引
+
+## {workflow_id}
+
+### 主题关系
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
+|---|---|---|---|---|---|
+| 1 | 上传文件 | 无 | [验收计划](../acceptance/上传文件_plan.md) | [测试计划](./上传文件_plan.md) | [测试结果](./上传文件_result.md) |
+""",
+        encoding="utf-8",
+    )
     (qa_dir / "上传文件_plan.md").write_text(
         f"""# 上传文件测试计划
 
@@ -621,7 +612,7 @@ def test_test_plan_gate_runs_and_records_unified_test_entry(tmp_path):
 ## 5. 上下游文档
 
 - 上游验收计划：[验收计划](../acceptance/上传文件_plan.md)
-- 下游实施计划：[实施计划](../plan/index.md)
+- 下游实施计划：[实施计划](../impl/index.md)
 - 下游测试结果：[测试结果](./上传文件_result.md)
 """,
         encoding="utf-8",
@@ -658,7 +649,7 @@ def test_test_plan_gate_runs_and_records_unified_test_entry(tmp_path):
     assert code == 0, f"test_plan confirmation failed: {out} {err}"
     with open(state_path) as f:
         confirmed_state = json.load(f)
-    assert confirmed_state["current_stage"] == "plan"
+    assert confirmed_state["current_stage"] == "impl"
 
     with open(tmp_path / ".workflow_loop" / "journal.jsonl") as f:
         journal = [json.loads(line) for line in f if line.strip()]

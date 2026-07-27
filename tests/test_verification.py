@@ -13,7 +13,7 @@ from workflow_loop.verification import (
 # 测试辅助函数：构造一个已经进入后半段、带验证哈希的 WorkflowState
 def _make_state(project_root, impl_hash=None, test_plan_hash=None, acceptance_plan_hash=None, test_result_hash=None):
     stage_path = [
-        "acceptance_plan", "test_plan", "plan", "topic_execution",
+        "acceptance_plan", "test_plan", "impl", "topic_execution",
         "regression_test", "overall_acceptance", "update_code_design",
     ]
     state = WorkflowState(

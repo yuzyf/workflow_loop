@@ -249,28 +249,33 @@ def update_for_stage(
             ),
         )
 
-    if stage_name in {"plan", "fix_plan"}:
-        return _update_stage_rows(
+    if stage_name == "impl":
+        plan_update = _update_stage_rows(
             project_root,
             workflow_id,
             topics,
             4,
-            lambda _topic, current: _set_or_append_link(
+            lambda topic, current: _set_or_append_link(
                 current,
-                "实施计划索引",
-                "./plan/index.md",
+                "实施前计划",
+                f"./impl/{topic}.md#2-实施前计划",
             ),
         )
-
-    if stage_name == "topic_execution":
-        implementation = _link_files(project_root, "impl", "实施记录")
-        return _update_stage_rows(
+        record_update = _update_stage_rows(
             project_root,
             workflow_id,
             topics,
             5,
-            lambda _topic, current: _set_or_append_text(current, implementation),
-        ) + "；" + _update_stage_rows(
+            lambda topic, current: _set_or_append_link(
+                current,
+                "实施后记录",
+                f"./impl/{topic}.md#3-实施后记录",
+            ),
+        )
+        return plan_update + "；" + record_update
+
+    if stage_name == "topic_execution":
+        return _update_stage_rows(
             project_root,
             workflow_id,
             topics,

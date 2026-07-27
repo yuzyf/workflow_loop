@@ -1,5 +1,5 @@
 # 文档概览文本（start 命令和 status 命令可能打印）
-# 给 AI 和用户介绍项目文档结构：spec/plan/bug/qa/acceptance/impl 各是什么、命名规则
+# 给 AI 和用户介绍项目文档结构：spec/bug/qa/acceptance/impl 各是什么、命名规则
 # AI 读完理解项目文档全貌，后面每个 stage 基于这个理解工作
 DOC_OVERVIEW = """═══ 文档概览 ═══
 
@@ -9,10 +9,6 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
   - product.md：产品设计说明书 + 功能路由
   - feature_*.md：按功能拆分的功能设计文档，文件名使用英文，正文使用中文
   - architecture_code_design.md：代码架构设计文档
-
-【plan/】计划册
-  - 一个实施任务一份 .md：文件名由实施计划确定，不要求与验收主题同名
-  - index.md：计划索引表
 
 【bug/】bug 册（沉淀已解决问题）
   - YYYY-MM-DD_HHmm-<bug描述>.md：单个 bug 记录
@@ -25,6 +21,7 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
   - index.md：测试索引表
 
 【acceptance/】验收
+  - index.md：验收主题关系和验收文档索引
   - <topic>_plan.md：验收计划
   - <topic>_result.md：验收执行结果
 
@@ -32,10 +29,11 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
   - 按工作流编号记录需求、验收主题、验收条件和后续阶段的对应位置
 
 【impl/】实施记录
-  - 一个实施任务一份 .md：文件名由实施计划确定，不要求与验收主题同名
+  - index.md：继承验收主题关系的实施索引
+  - <topic>.md：每个验收主题一份实施计划和实施记录
 
 验收计划、测试计划和主题测试/验收结果使用同一个主题名。
-从零开发和修改产品在 acceptance_plan stage 确定主题；修 bug 在 reproduce stage 确定主题。实施计划和实施记录围绕这些验收主题组织，但不要求一一对应。"""
+从零开发和修改产品在 acceptance_plan stage 确定主题；修 bug 在 reproduce stage 确定主题。每个验收主题都有一份 impl/<topic>.md，保存该主题的实施前计划和实施后记录。"""
 
 # stage 名 → 角色定义的映射表
 # discuss 命令用 get_role_doc(stage_name) 拿角色定义，打印给 AI 看
@@ -72,20 +70,10 @@ ROLE_DOC_MAP = {
         "role": "架构文档更新者（详细）",
         "description": "最终全量回归和整体验收通过后，更新/写全 spec/architecture_code_design.md，反映最终真实结构。",
     },
-    # 实施计划制定阶段：使用验收计划已经确认的主题
-    "plan": {
-        "role": "实施计划制定者",
-        "description": "根据已确认的验收主题和测试计划制定实施步骤，产出计划文档和 plan/index.md，不在这里重新确定主题。",
-    },
-    # 修复实施计划阶段：使用验收计划已经确认的主题
-    "fix_plan": {
-        "role": "修复实施计划制定者",
-        "description": "根据已确认的验收主题和测试计划制定修复步骤，产出计划文档和 plan/index.md，不在这里重新确定主题。",
-    },
     # 验收计划制定阶段
     "acceptance_plan": {
         "role": "验收计划制定者",
-        "description": "根据已确认需求确定或复用全部验收主题，并为每个主题制定什么算完成。产出 traceability.md 和 acceptance/<topic>_plan.md。",
+        "description": "根据已确认需求确定或复用全部验收主题，确认主题前置关系，并为每个主题制定什么算完成。产出 traceability.md、acceptance/index.md 和 acceptance/<topic>_plan.md。",
     },
     # 测试计划制定阶段
     "test_plan": {
@@ -95,7 +83,7 @@ ROLE_DOC_MAP = {
     # 实施执行阶段：改真实代码
     "impl": {
         "role": "实施执行者",
-        "description": "执行已确认的实施/修复计划并修改真实代码。按实施任务产出 impl/ 下的实施记录，不要求与验收主题同名。",
+        "description": "先根据验收计划和测试计划为全部主题确认实施前计划，再修改真实代码，并在 impl/<topic>.md 中记录实际实施结果。",
     },
     # 测试执行阶段：按计划执行测试并记录证据
     "test": {
@@ -109,7 +97,7 @@ ROLE_DOC_MAP = {
     },
     "topic_execution": {
         "role": "按主题执行协调者",
-        "description": "按照实施计划分别推进各主题的实施、测试和验收。独立主题可以分别推进；全部主题完成后进入最终全量回归。",
+        "description": "在实施完成后，按主题推进正式测试和主题验收。独立主题可以分别推进；全部主题完成后进入最终全量回归。",
     },
     "regression_test": {
         "role": "最终回归测试执行者",

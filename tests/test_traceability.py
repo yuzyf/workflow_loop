@@ -74,7 +74,7 @@ def _write_test_plans(tmp_path: Path) -> None:
 ## 5. 上下游文档
 
 - 上游验收计划：[验收计划](../acceptance/{topic}_plan.md)
-- 下游实施计划：[实施计划](../plan/index.md)
+- 下游实施计划：[实施计划](../impl/index.md)
 - 下游测试结果：[测试结果](./{topic}_result.md)
 """,
         )
@@ -104,8 +104,9 @@ def test_traceability_updates_each_downstream_column(tmp_path):
     _write_traceability(tmp_path)
     _write_acceptance_plans(tmp_path)
     _write_test_plans(tmp_path)
-    _write(tmp_path / "impl" / "upload.md", "# 实施记录\n")
-    _write(tmp_path / "plan" / "index.md", "# 实施计划索引\n")
+    _write(tmp_path / "impl" / "上传文件.md", "# 实施记录\n")
+    _write(tmp_path / "impl" / "查看状态.md", "# 实施记录\n")
+    _write(tmp_path / "impl" / "index.md", "# 实施索引\n")
     _write(tmp_path / "qa" / "上传文件_result.md", "# 测试结果\n")
     _write(tmp_path / "qa" / "查看状态_result.md", "# 测试结果\n")
     _write(tmp_path / "acceptance" / "上传文件_result.md", "# 验收结果\n")
@@ -113,12 +114,12 @@ def test_traceability_updates_each_downstream_column(tmp_path):
     _write(tmp_path / "qa" / "final_regression_result.md", "# 回归\n")
     _write(tmp_path / "spec" / "architecture_code_design.md", "# 架构\n")
 
-    for stage in ["test_plan", "plan", "topic_execution", "regression_test", "overall_acceptance", "update_code_design"]:
+    for stage in ["test_plan", "impl", "topic_execution", "regression_test", "overall_acceptance", "update_code_design"]:
         update_for_stage(str(tmp_path), WORKFLOW_ID, TOPICS, stage)
 
     content = (tmp_path / "traceability.md").read_text(encoding="utf-8")
-    assert "[实施计划索引](./plan/index.md)" in content
-    assert "[upload.md](./impl/upload.md)" in content
+    assert "./impl/上传文件.md#2-实施前计划" in content
+    assert "./impl/查看状态.md#3-实施后记录" in content
     assert "[测试结果](./qa/上传文件_result.md)" in content
     assert "[主题验收结果](./acceptance/查看状态_result.md)" in content
     assert "[最终全量回归](./qa/final_regression_result.md)" in content

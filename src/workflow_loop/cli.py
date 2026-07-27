@@ -13,6 +13,7 @@ from . import bug_record as bug_record_mod
 from . import traceability as traceability_mod
 from . import topic as topic_mod
 from . import test_runner as test_runner_mod
+from .verification import compute_code_snapshot_hash
 from .path_composer import build_stage_path, INTENT_CHOICES
 from .stages import ProjectDesignInitStage
 from .stages.base import StageStrategy, clean_spike_tmp
@@ -25,7 +26,7 @@ WORKFLOW_LOOP_DIRNAME = ".workflow_loop"
 GLOBAL_WRITING_STANDARD_PATH = "Standardized_Repository/global/document_writing.md"
 # from_scratch 清场时探测的过程产物目录列表（Clean Detect List）
 # 这些目录下有文件时需要 --confirm-clean 才能删除
-CLEAN_DETECT_DIRS = ["spec", "plan", "acceptance", "qa", "impl", "bug"]
+CLEAN_DETECT_DIRS = ["spec", "acceptance", "qa", "impl", "bug"]
 # from_scratch 清场时需要一起删除的项目根文件
 CLEAN_DETECT_FILES = ["traceability.md"]
 
@@ -188,11 +189,11 @@ def ensure_stage_artifact_baseline(
 
 
 def ensure_stage_path_current(project_root: str, wf_state: state_mod.WorkflowState) -> bool:
-    """把旧工作流状态迁移到当前阶段顺序，并保留已经完成的前置阶段。"""
+    """让当前状态中的阶段路径和现行阶段定义保持一致。"""
     stage_instances = build_stage_path(wf_state.intent, project_root)
 
     # project_design_init（项目设计初始化）只在开工时决定是否加入路径。
-    # 旧 Run 已经包含它时，即使项目标记后来变为 true，也要保留这段历史。
+    # 本次 Run 已经包含它时，即使项目标记后来变为 true，也要保留本次路径。
     if "project_design_init" in wf_state.stage_path and not any(
         stage.name() == "project_design_init" for stage in stage_instances
     ):
@@ -216,7 +217,6 @@ def ensure_stage_path_current(project_root: str, wf_state: state_mod.WorkflowSta
             )
         return artifact_paths_changed
 
-    old_names = wf_state.stage_path
     old_stages = wf_state.stages
     new_stages = {}
     for stage in stage_instances:
@@ -232,32 +232,6 @@ def ensure_stage_path_current(project_root: str, wf_state: state_mod.WorkflowSta
                 gate=state_mod.GateState(),
             )
         new_stages[stage_name] = stage_state
-
-    # 旧顺序先做 plan/fix_plan。新顺序要求先验收计划、再测试计划、最后实施计划。
-    implementation_plan_name = "fix_plan" if wf_state.intent == "bugfix" else "plan"
-    if (
-        implementation_plan_name in old_names
-        and "acceptance_plan" in old_names
-        and old_names.index(implementation_plan_name) < old_names.index("acceptance_plan")
-        and (
-            new_stages["acceptance_plan"].status != "done"
-            or new_stages["test_plan"].status != "done"
-        )
-    ):
-        new_stages[implementation_plan_name] = state_mod.StageState(
-            status="pending",
-            artifact_paths=new_stages[implementation_plan_name].artifact_paths,
-        )
-
-    # 新增最终全量回归与整体验收后，旧版提前完成的详细架构不能继续算完成。
-    if "regression_test" not in old_names or "overall_acceptance" not in old_names:
-        update_state = new_stages.get("update_code_design")
-        if update_state is not None and update_state.status == "done":
-            new_stages["update_code_design"] = state_mod.StageState(
-                status="pending",
-                artifact_paths=update_state.artifact_paths,
-            )
-            wf_state.architecture.detailed_done = False
 
     current_stage = "completed"
     for stage_name in expected_names:
@@ -596,8 +570,7 @@ def apply_stage_completion_updates(
     topics = topic_mod.current_workflow_topics(project_root)
     if stage_name in {
         "test_plan",
-        "plan",
-        "fix_plan",
+        "impl",
         "topic_execution",
         "regression_test",
         "overall_acceptance",
@@ -767,6 +740,13 @@ def cmd_gate(args) -> None:
         # 兼容旧状态：第一道门前处理产物路径迁移，并标记缺失的入场基线
         if stage_name == "spike" and ensure_spike_baseline(project_root, wf_state):
             state_mod.save_state(project_root, wf_state)
+        if stage_name == "impl" and not gate.discussion_complete:
+            valid, detail = stage.discussion_validate(project_root, wf_state)
+            if not valid:
+                print(f"═══ {stage_name} 讨论完成校验失败 ═══")
+                print(f"详情: {detail}")
+                print_next_step(f"补齐实施前计划后重新调 `workflow gate {stage_name} --discuss-done`")
+                return
         # 已经标记过了 → 提示
         if gate.discussion_complete:
             print(f"提示：{stage_name} 的讨论已经标记完毕了")
@@ -982,16 +962,22 @@ def cmd_gate(args) -> None:
     # bugfix 主题已经在 reproduce 确认，这里只复核，不再登记或新增。
     elif stage_name == "acceptance_plan":
         if wf_state.intent == "bugfix":
-            topics = topic_mod.current_workflow_topics(project_root)
+            topics = topic_mod.list_acceptance_index_topics(
+                project_root,
+                wf_state.workflow_id,
+            )
             if not topics:
                 print("错误：修 bug 的验收主题必须先在缺陷复现阶段确定")
                 print_next_step("返回 reproduce 阶段补充验收主题")
                 return
         else:
-            topics = topic_mod.candidate_topics(project_root)
+            topics = topic_mod.list_acceptance_index_topics(
+                project_root,
+                wf_state.workflow_id,
+            )
         if not topics:
-            print("错误：没有找到本次新增的验收主题")
-            print_next_step("补充 acceptance/<topic>_plan.md 后重新执行验收计划门禁")
+            print("错误：没有找到 acceptance/index.md 中的本次验收主题")
+            print_next_step("补充 acceptance/index.md 和 acceptance/<topic>_plan.md 后重新执行验收计划门禁")
             return
         if wf_state.intent != "bugfix":
             previous_topics = set(wf_state.topics or ([wf_state.topic] if wf_state.topic else []))
@@ -1114,6 +1100,15 @@ def cmd_gate(args) -> None:
         # 新流程在真正进入 spike 时记录设计基线
         if next_stage == "spike":
             ensure_spike_baseline(project_root, wf_state, capture_if_missing=True)
+        if next_stage == "impl":
+            wf_state.stages[next_stage].code_baseline_hash = compute_code_snapshot_hash(project_root)
+            journal_mod.append_entry(
+                project_root,
+                "实施代码基线",
+                "workflow.py",
+                stage=next_stage,
+                code_snapshot_hash=wf_state.stages[next_stage].code_baseline_hash,
+            )
         # 保存 state
         state_mod.save_state(project_root, wf_state)
         # 写 journal：阶段推进

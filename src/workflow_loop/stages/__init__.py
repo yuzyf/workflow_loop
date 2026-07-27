@@ -5,7 +5,6 @@ from .stages import (
     SpecStage,
     CodeDesignStage,
     SpikeStage,
-    PlanStage,
     AcceptancePlanStage,
     TestPlanStage,
     ImplStage,
@@ -18,7 +17,6 @@ from .stages import (
     ProjectDesignInitStage,
     ReviseCodeDesignStage,
     ReproduceStage,
-    FixPlanStage,
 )
 
 # 对外公开的阶段 API 清单，约束 from workflow_loop.stages import * 的导出范围，避免内部实现泄露
@@ -28,7 +26,6 @@ __all__ = [
     "SpecStage",
     "CodeDesignStage",
     "SpikeStage",
-    "PlanStage",
     "AcceptancePlanStage",
     "TestPlanStage",
     "ImplStage",
@@ -41,5 +38,4 @@ __all__ = [
     "ProjectDesignInitStage",
     "ReviseCodeDesignStage",
     "ReproduceStage",
-    "FixPlanStage",
 ]

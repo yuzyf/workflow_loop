@@ -56,8 +56,7 @@ FOLLOW_UP_STAGES = {
     "无",
     "acceptance_plan",
     "test_plan",
-    "plan",
-    "fix_plan",
+    "impl",
     "topic_execution",
     "regression_test",
     "overall_acceptance",
@@ -332,11 +331,6 @@ def validate_spike_stage(project_root: str) -> tuple[bool, str]:
             errors.append(
                 f"{detail_rel_path} 需要修改产品设计，不能继续 bugfix；请结束当前流程后启动 product_change"
             )
-        if state.intent == "bugfix" and follow_up == "plan":
-            errors.append(f"{detail_rel_path} 在 bugfix 中应使用 fix_plan，不应使用 plan")
-        if state.intent != "bugfix" and follow_up == "fix_plan":
-            errors.append(f"{detail_rel_path} 当前不是 bugfix，不能使用 fix_plan")
-
         product_location = impact_fields.get("产品设计更新位置")
         code_location = impact_fields.get("代码设计更新位置")
         if product_impact == "需要修改":

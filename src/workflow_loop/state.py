@@ -23,7 +23,7 @@ class GateState:
 
 
 # 单个 stage 的完整状态
-# 嵌套在 WorkflowState.stages 字典里，key 是 stage 名（如 "spec" / "plan"）
+# 嵌套在 WorkflowState.stages 字典里，key 是 stage 名（如 "spec" / "impl"）
 @dataclass
 class StageState:
     # stage 生命周期状态：pending（没开始）→ in_progress（AI 在做）→ gated（等门禁）→ done（过了门禁）
@@ -36,6 +36,8 @@ class StageState:
     artifact_baseline_captured_at: str | None = None
     # 基线文件哈希，key 是项目根下的相对路径，value 是 SHA256；文件当时不存在时为 None
     artifact_baseline_hashes: dict[str, str | None] = field(default_factory=dict)
+    # impl 阶段进入时的代码快照哈希；用于阻止实施计划确认前修改代码
+    code_baseline_hash: str | None = None
     # 该 stage 的 3 道闸状态，嵌套 dataclass
     gate: GateState = field(default_factory=GateState)
 
@@ -61,7 +63,7 @@ class VerificationState:
     # qa/<topic>_plan.md 内容的 SHA256 哈希
     # 在 gate test_plan --confirmed 时记录；变化时使主题执行、最终全量回归和整体验收失效
     test_plan_hash: str | None = None
-    # acceptance/<topic>_plan.md 内容的 SHA256 哈希
+    # acceptance/index.md 和 acceptance/<topic>_plan.md 内容的 SHA256 哈希
     # 在 gate acceptance_plan --confirmed 时记录；变化时退回测试计划和后续阶段
     acceptance_plan_hash: str | None = None
     # qa/<topic>_result.md 内容的 SHA256 哈希
@@ -121,7 +123,7 @@ class WorkflowState:
     # Run 生命周期：active（进行中）/ completed（done 收工）/ aborted（abort 作废）
     # 替代用 current_stage=completed 推断 Run 状态的旧模型
     run_status: str = "active"
-    # 当前 stage 名（如 "spec" / "plan" / ...）；末段 --confirmed 后临时置 "completed"，由 done 确认
+    # 当前 stage 名（如 "spec" / "impl" / ...）；末段 --confirmed 后临时置 "completed"，由 done 确认
     current_stage: str = ""
     # 启动时间 ISO 8601 UTC
     started_at: str = ""
@@ -190,6 +192,7 @@ def state_from_dict(data: dict) -> WorkflowState:
             artifact_produced_at=stage_data.get("artifact_produced_at"),
             artifact_baseline_captured_at=stage_data.get("artifact_baseline_captured_at"),
             artifact_baseline_hashes=stage_data.get("artifact_baseline_hashes", {}),
+            code_baseline_hash=stage_data.get("code_baseline_hash"),
             gate=gate,
         )
     # 读 architecture 字段（架构门禁标记）

@@ -120,9 +120,9 @@ def compute_code_snapshot_hash(project_root: str) -> str:
     return hashlib.sha256("\n".join(sorted(file_digests)).encode("utf-8")).hexdigest()
 
 
-# 计算主题执行阶段的实施综合哈希（impl_hash）
+# 计算实施阶段和主题执行阶段使用的实施综合哈希（impl_hash）
 # 包含两部分：impl/ 下全部实施记录内容哈希 + 代码快照哈希
-# 在 gate topic_execution --confirmed 时记录；进入最终全量回归和整体验收前检查
+# 在 gate impl --confirmed 时首次绑定，主题执行阶段继续使用；进入最终全量回归和整体验收前检查
 def compute_impl_hash(project_root: str, topics: str | list[str] | None = None) -> str:
     # 收集哈希的各部分
     parts = []
@@ -152,14 +152,17 @@ def compute_test_plan_hash(project_root: str, topics: str | list[str] | None) ->
     return compute_document_set_hash(project_root, paths)
 
 
-# 计算验收计划文件 acceptance/<topic>_plan.md 的 SHA256
+# 计算验收计划文件和验收主题索引的 SHA256
 # 在 gate acceptance_plan --confirmed 时记录
-# acceptance_plan 变化时把 test_plan 和后续阶段退回待检查
+# acceptance_plan 或主题关系变化时把 test_plan 和后续阶段退回待检查
 def compute_acceptance_plan_hash(project_root: str, topics: str | list[str] | None) -> str | None:
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
-    paths = [os.path.join("acceptance", f"{topic}_plan.md") for topic in topic_list]
+    paths = [
+        os.path.join("acceptance", "index.md"),
+        *[os.path.join("acceptance", f"{topic}_plan.md") for topic in topic_list],
+    ]
     return compute_document_set_hash(project_root, paths)
 
 
@@ -220,8 +223,7 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
                 [
                     "acceptance_plan",
                     "test_plan",
-                    "plan",
-                    "fix_plan",
+                    "impl",
                     "topic_execution",
                     "test",
                     "acceptance",
@@ -246,8 +248,7 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
                 state,
                 [
                     "test_plan",
-                    "plan",
-                    "fix_plan",
+                    "impl",
                     "topic_execution",
                     "test",
                     "acceptance",

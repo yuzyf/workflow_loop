@@ -34,6 +34,11 @@ class StageStrategy(ABC):
     @abstractmethod
     def standard_doc_path(self) -> str | None: ...
 
+    # 第一道门的额外校验。默认阶段只记录讨论完成；impl 用它检查
+    # 全部实施前计划和“计划确认前代码没有变化”。
+    def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
+        return (True, "")
+
     # 门禁的代码侧校验（第 2 道闸）
     # 默认实现：检查 artifact_paths() 里的所有文件是否都存在
     # 子类可重写做更复杂校验（查目录下有特定文件、查内容哈希等）
@@ -76,7 +81,7 @@ class StageStrategy(ABC):
 # 清理 spike stage 的临时代码、样本和原始输出
 # 删除 .workflow_loop/spike_tmp/ 下的所有内容（保留目录本身）
 # 在 spike stage 的 on_advance 里调用（gate spike --confirmed 时）
-# 这样临时代码在推进到 plan 或 fix_plan 前被自动清理，只保留穿刺清单和结论文档
+# 这样临时代码在推进到 acceptance_plan 前被自动清理，只保留穿刺清单和结论文档
 def clean_spike_tmp(project_root: str) -> list[str]:
     # 拼出 spike_tmp 的完整路径
     tmp_dir = os.path.join(project_root, SPIKE_TMP_DIR)

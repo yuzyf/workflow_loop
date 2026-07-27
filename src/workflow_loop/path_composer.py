@@ -3,7 +3,7 @@ from .stages import (
     SpecStage,
     CodeDesignStage,
     SpikeStage,
-    PlanStage,
+    ImplStage,
     AcceptancePlanStage,
     TestPlanStage,
     TopicExecutionStage,
@@ -13,15 +13,14 @@ from .stages import (
     ProjectDesignInitStage,
     ReviseCodeDesignStage,
     ReproduceStage,
-    FixPlanStage,
 )
 from .stages.base import StageStrategy
 
 # from_scratch（从零做）的完整 stage 路径
 # 顺序固定：先产品设计与功能拆分、后初步架构（先定做什么，再定怎么搭）
-# 然后验证技术不确定性 → 验收计划 → 测试计划 → 实施计划 → 主题实施/测试/验收
+# 然后验证技术不确定性 → 验收计划 → 测试计划 → 实施/记录 → 主题测试/验收
 # → 最终全量回归 → 整体验收 → 详细架构收尾
-# 共享后半截：acceptance_plan → test_plan → plan/fix_plan → topic_execution
+# 共享后半截：acceptance_plan → test_plan → impl → topic_execution
 # → regression_test → overall_acceptance → update_code_design
 FROM_SCRATCH_PATH = [
     # 产品设计阶段：产出 spec/product.md + spec/feature_*.md
@@ -31,13 +30,13 @@ FROM_SCRATCH_PATH = [
     # 穿刺阶段：验证真实场景中的技术不确定性，写清单和每项结论；临时代码按需进入 spike_tmp/
     # 可选 stage，可通过 gate spike --skip 跳过
     SpikeStage,
-    # 验收计划阶段：制定什么算完成，产出 traceability.md + acceptance/<topic>_plan.md
+    # 验收计划阶段：制定什么算完成，产出 traceability.md + acceptance/index.md + acceptance/<topic>_plan.md
     AcceptancePlanStage,
     # 测试计划阶段：把验收条件转为可执行测试范围，产出 qa/<topic>_plan.md
     TestPlanStage,
-    # 实施计划阶段：根据验收主题和测试计划制定实施步骤
-    PlanStage,
-    # 按主题分别实施、测试和验收；独立主题不互相等待
+    # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
+    ImplStage,
+    # 按主题分别测试和验收；独立主题不互相等待
     TopicExecutionStage,
     # 全部主题完成后，对合并代码执行最终全量回归
     RegressionTestStage,
@@ -63,9 +62,9 @@ PRODUCT_CHANGE_BASE = [
     AcceptancePlanStage,
     # 测试计划阶段
     TestPlanStage,
-    # 实施计划阶段
-    PlanStage,
-    # 按主题分别实施、测试和验收
+    # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
+    ImplStage,
+    # 按主题分别测试和验收
     TopicExecutionStage,
     # 最终全量回归
     RegressionTestStage,
@@ -76,8 +75,8 @@ PRODUCT_CHANGE_BASE = [
 ]
 
 # bugfix（修 bug）的基础 stage 路径（不含 project_design_init 前置）
-# 和 from_scratch 的差异：没有 spec/plan，先 reproduce，再经过可选 spike；
-# 在共享后半截中使用 fix_plan 制定修复实施计划
+# 和 from_scratch 的差异：没有 spec/code_design，先 reproduce，再经过可选 spike；
+# 在共享后半截中使用 impl 制定并执行修复实施计划
 # 末段 update_code_design 即使无结构变化也必须走，在门禁中显式确认"无结构变化"
 BUGFIX_BASE = [
     # 复现阶段：复现 bug + 根因分析，并确定一份缺陷记录对应的验收主题
@@ -88,9 +87,9 @@ BUGFIX_BASE = [
     AcceptancePlanStage,
     # 测试计划阶段
     TestPlanStage,
-    # 修复实施计划阶段
-    FixPlanStage,
-    # 按主题分别实施、测试和验收
+    # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
+    ImplStage,
+    # 按主题分别测试和验收
     TopicExecutionStage,
     # 最终全量回归
     RegressionTestStage,

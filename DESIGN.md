@@ -123,7 +123,7 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
 - 仓库根**不再有** `workflow.py`/`state.py`/`journal.py`/`role_doc.py`/`strategies/`，全部搬进 `src/workflow_loop/`（CONTEXT.md "Package Layout" + "避免全局 CLI 长期绑根目录 workflow.py"）
 - `src/workflow_loop/data/Template_Repository/` 与 `src/workflow_loop/data/Standardized_Repository/` 是**打包源**，用 `importlib.resources` 定位后由 installer 复制到目标项目 `.workflow_loop/`
 - 本仓库根的 `.workflow_loop/` 是本仓库自己作为被管理项目的运行时骨架（开发态用 `pipx install -e . --force` 把开发版链到全局，然后跑 `workflow install-project` 刷新本仓库的 `.workflow_loop/`）
-- 项目根下的产物目录（`spec/`/`plan/`/`acceptance/`/`qa/`/`impl/`/`bug/`）**不在安装时预建**，首次写产物时才建（CONTEXT.md "瘦骨架"）
+- 项目根下的产物目录（`spec/`/`acceptance/`/`qa/`/`impl/`/`bug/`）**不在安装时预建**，首次写产物时才建（CONTEXT.md "瘦骨架"）
 
 ### 2.6 AGENTS.md 最小契约
 仓库根 `AGENTS.md` 既是模板（被 `workflow install-project` 写入到目标项目），也是本仓库自己的开发契约。内容固定为：
@@ -174,7 +174,7 @@ AI 回复用户和编写正式文档时：
   "spike_skipped": false,
   "stage_path": [
     "spec", "code_design", "spike", "acceptance_plan",
-    "test_plan", "plan", "topic_execution",
+    "test_plan", "impl", "topic_execution",
     "regression_test", "overall_acceptance", "update_code_design"
   ],
   "stages": {
@@ -408,12 +408,12 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 无论是否发现并删除旧产物，都把 `project.json` 的 `project_design_initialized` 置为 `false`；之后固定走 `spec` → `code_design`（初步）→ ... → 末段 `update_code_design`。
 
 ### 4.6 Clean Scope（清场范围）
-- **整目录删除**：只要 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中存在文件，就删除命中的整个目录及其中全部内容。放在这些目录中的非 workflow 文件也会一起删除。
+- **整目录删除**：只要 `spec/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中存在文件，就删除命中的整个目录及其中全部内容。放在这些目录中的非 workflow 文件也会一起删除。
 - **删除根文件**：项目根存在 `traceability.md` 时一并删除，避免新的从零开发工作流继承旧需求的交付追踪记录。
 - **不删除其他目录外内容**：`.workflow_loop/Template_Repository/` 与 `Standardized_Repository/` 全部内容；`.workflow_loop/project.json` 本身（只更新初始化字段）；上述六个目录和 `traceability.md` 之外的源代码、`.git` 和项目文件；`.workflow_loop/` 运行时骨架本身。
 
 **Clean Detect List**（监测清单）：
-- 监测：项目根下 `spec/`、`plan/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中**已存在且含文件**的路径
+- 监测：项目根下 `spec/`、`acceptance/`、`qa/`、`impl/`、`bug/` 中**已存在且含文件**的路径
 - 监测：项目根下已存在的 `traceability.md`
 - 不监测：`.workflow_loop/Template_Repository/**`、`.workflow_loop/Standardized_Repository/**`
 - 有命中 → 打印将删清单，需 `--confirm-clean`；全无命中 → 直接开工
@@ -438,15 +438,15 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 
 | intent | 条件 | Stage Path |
 |---|---|---|
-| `from_scratch` | 总是 | 清场确认 → `spec` → `code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
-| `product_change` | `project_design_initialized=false` | `project_design_init` → `spec` → `revise_code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
-| `product_change` | `project_design_initialized=true` | `spec` → `revise_code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
-| `bugfix` | `project_design_initialized=false` | `project_design_init` → `reproduce` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `fix_plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
-| `bugfix` | `project_design_initialized=true` | `reproduce` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `fix_plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `from_scratch` | 总是 | 清场确认 → `spec` → `code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `impl` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `product_change` | `project_design_initialized=false` | `project_design_init` → `spec` → `revise_code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `impl` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `product_change` | `project_design_initialized=true` | `spec` → `revise_code_design` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `impl` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `bugfix` | `project_design_initialized=false` | `project_design_init` → `reproduce` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `impl` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
+| `bugfix` | `project_design_initialized=true` | `reproduce` → `spike`（可选）→ `acceptance_plan` → `test_plan` → `impl` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design` |
 
 **清场确认**不是 stage，是 `from_scratch` 在 `start --intent` 时的前置动作（见 4.5）。
 
-**共享后半截**：`acceptance_plan` → `test_plan` → `plan` / `fix_plan` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design`。
+**共享后半截**：`acceptance_plan` → `test_plan` → `impl` → `topic_execution` → `regression_test` → `overall_acceptance` → `update_code_design`。
 
 ### 5.3 Stage 命名规则（CONTEXT.md 强制）
 
@@ -455,14 +455,14 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 - 存量项目首次初始化 stage 名 = `project_design_init`
 - **所有意图**末段详细架构收尾 stage 名 = `update_code_design`
 - 废弃 `generate_code_design`（初步阶段已可能创建同文件，末环不是"首次生成"语义）
-- `acceptance_plan`、`test_plan`、`plan` / `fix_plan` 各进入一次，分别完成验收计划、测试计划和实施计划
-- `topic_execution` 统筹各主题分别实施、测试和验收，不在顶层路径强制 `impl → test → acceptance` 全局串行
+- `acceptance_plan`、`test_plan`、`impl` 各进入一次，分别完成验收计划、测试计划以及实施前计划和真实代码实施
+- `topic_execution` 在实施完成后统筹各主题分别测试和验收，不在顶层路径强制所有主题全局串行
 - `regression_test` 是全部主题完成后的最终全量回归；`overall_acceptance` 是整个需求的最终确认
 - 任何意图不得跳过末段 `update_code_design`
 
 ### 5.4 Optional Spike
 - `spike` 在 `from_scratch` / `product_change` / `bugfix` 路径上**默认在路径中**
-- `bugfix` 前段顺序固定为 `reproduce → spike`，之后进入共享后半截的 `acceptance_plan → test_plan → fix_plan`；`reproduce` 确认缺陷和根因，`spike` 只验证修复仍依赖的具体技术不确定性
+- `bugfix` 前段顺序固定为 `reproduce → spike`，之后进入共享后半截的 `acceptance_plan → test_plan → impl`；`reproduce` 确认缺陷和根因，`spike` 只验证修复仍依赖的具体技术不确定性
 - 用户确认不需要穿刺后，通过显式门禁动作跳过：`workflow gate spike --skip`
 - state 记 `spike_skipped=true`、journal 记跳过并推进下一 Stage
 - 跳过时不要求 `spike_index.md`、结论文档和临时代码，并清理已存在的 `spike_tmp`
@@ -554,7 +554,7 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
 
 **跳步抛错**：直接调 `gate --confirmed` 而没跑前两道 → 报错并提示正确顺序。
 
-**门禁策略第一版**：每个正式 Stage 保留三道门、顺序硬性。`topic_execution`（按主题实施、测试和验收）、`regression_test`（最终全量回归）与 `overall_acceptance`（整体验收）是强制 Stage，不提供 `--skip`；自动测试不可用时可执行人工测试并记录证据。AI 不得自动替用户验收。
+**门禁策略第一版**：每个正式 Stage 保留三道门、顺序硬性。`topic_execution`（按主题执行测试和验收）、`regression_test`（最终全量回归）与 `overall_acceptance`（整体验收）是强制 Stage，不提供 `--skip`；自动测试不可用时可执行人工测试并记录证据。AI 不得自动替用户验收。
 
 ### 6.3 StageStrategy ABC 接口
 
@@ -599,7 +599,7 @@ class StageStrategy(ABC):
 |---|---|---|
 | `impl_hash` | `impl/` 下全部实施记录 + 当前代码修改快照 | `gate topic_execution --confirmed` 时 |
 | `test_plan_hash` | 本次全部 `qa/<topic>_plan.md` | `gate test_plan --confirmed` 时 |
-| `acceptance_plan_hash` | 本次全部 `acceptance/<topic>_plan.md` | `gate acceptance_plan --confirmed` 时 |
+| `acceptance_plan_hash` | `acceptance/index.md` + 本次全部 `acceptance/<topic>_plan.md` | `gate acceptance_plan --confirmed` 时 |
 | `test_result_hash` | 本次全部 `qa/<topic>_result.md` | `gate topic_execution --confirmed` 时 |
 | `regression_test_result_hash` | `qa/final_regression_result.md` | `gate regression_test --confirmed` 时 |
 
@@ -734,9 +734,9 @@ class StageStrategy(ABC):
 | 产物 | `spec/spike_index.md` + 每项 `spec/spike_<english-name>.md`；需要时临时代码、样本和原始输出进 `.workflow_loop/spike_tmp/<english-name>/` |
 | `code_validate` | `SpikeStage` 调 `spike_validation.validate_spike_stage()`：检查当前工作流编号、唯一穿刺项编号、文档链接、八章、固定字段、结果一致性、阻塞状态、剩余风险、意图边界和设计哈希 |
 | `on_advance` | 删除 `.workflow_loop/spike_tmp/` 下所有内容，保留清单、结论和设计文档 |
-| instruction | "先查产品设计、代码设计、相关代码和运行事实，识别真实场景中的技术不确定性；用户决定执行清单或全部跳过。正常执行时写清单和每项结论，需要临时代码时放入 spike_tmp，并在进入计划前同步受影响的设计文档。" |
+| instruction | "先查产品设计、代码设计、相关代码和运行事实，识别真实场景中的技术不确定性；用户决定执行清单或全部跳过。正常执行时写清单和每项结论，需要临时代码时放入 spike_tmp，并在进入验收计划前同步受影响的设计文档。" |
 
-**适用路径**：`from_scratch`、`product_change`、`bugfix`。修 bug 时位于 `reproduce` 和 `fix_plan` 之间。
+**适用路径**：`from_scratch`、`product_change`、`bugfix`。修 bug 时位于 `reproduce` 和 `acceptance_plan` 之间。
 
 **候选识别**：AI 必须先查看产品设计、代码设计、相关代码、测试、日志、依赖文档和已有运行结果；具备运行条件时先运行相关现有功能。已经能确认的事项不进入穿刺。语义重复由 AI 比较真实场景、不确定内容、证据和结果用途，程序不声称能判断。
 
@@ -791,7 +791,7 @@ class StageStrategy(ABC):
 | `on_advance` | 置 `architecture.preliminary_done=true` |
 | instruction | "设计期架构修订：按变更后的产品设计改 spec/architecture_code_design.md" |
 
-**强制**：`product_change` 在 `spec` 之后、`plan` 之前必须经过 `revise_code_design`。
+**强制**：`product_change` 在 `spec` 之后、`acceptance_plan` 之前必须经过 `revise_code_design`。
 
 ### 7.6 update_code_design（末段详细架构收尾）
 
@@ -814,18 +814,18 @@ class StageStrategy(ABC):
 | 角色 | 验收计划制定者 |
 | 产物文档模板 | `Template_Repository/acceptance/acceptance_plan.md` |
 | 阶段工作规范 | `Standardized_Repository/acceptance/acceptance_plan.md` |
-| 产物 | 项目根 `traceability.md` + `acceptance/<topic>_plan.md` |
-| `code_validate` | 校验当前工作流追踪章节、九列交付链路、每个主题的六个固定章节、`AC-01` 形式的验收条件、逐条追踪行、初始状态和上下游路径；`bugfix` 额外校验计划主题与缺陷记录中已确认的主题完全一致 |
+| 产物 | 项目根 `traceability.md` + `acceptance/index.md` + `acceptance/<topic>_plan.md` |
+| `code_validate` | 校验当前工作流验收索引的主题关系、展示顺序、前置关系和链接；校验追踪章节、九列交付链路、每个主题的六个固定章节、`AC-01` 形式的验收条件、逐条追踪行、初始状态和上下游路径；`bugfix` 额外校验计划主题与缺陷记录中已确认的主题完全一致 |
 | 门3确认处理 | `from_scratch`、`product_change` 把主题列表写入 `state.topics` 和项目 `topic_history`；`bugfix` 只复核 `reproduce` 已登记的主题；三种意图都记录 `verification.acceptance_plan_hash` |
 | instruction | "从零开发和修改产品先确定全部验收主题；修 bug 复用缺陷复现阶段已经确认的主题。为每个主题写清什么算完成，并建立需求交付追踪表" |
 
-**材料职责**：`Template_Repository/acceptance/acceptance_plan.md` 规定 `traceability.md` 和主题验收计划的最终文档结构；`Standardized_Repository/acceptance/acceptance_plan.md` 规定 AI 怎样调查需求、确认主题清单、逐个讨论验收条件并取得用户确认。固定门禁不在两份 Markdown 中重复维护。
+**材料职责**：`Template_Repository/acceptance/acceptance_plan.md` 规定 `traceability.md`、`acceptance/index.md` 和主题验收计划的最终文档结构；`Standardized_Repository/acceptance/acceptance_plan.md` 规定 AI 怎样调查需求、确认主题清单和主题关系、逐个讨论验收条件并取得用户确认。固定门禁不在两份 Markdown 中重复维护。
 
 **讨论顺序**：`from_scratch` 和 `product_change` 先让用户确认完整主题清单，再逐个主题讨论验收条件。`bugfix` 不重新讨论主题名称，只讨论缺陷记录中既有主题的验收范围和验收条件。
 
 **主题计划结构**：每份 `acceptance/<topic>_plan.md` 固定包含“本次需求与验收目标、产品设计依据、验收范围、验收条件、完成判定、上下游文档”。每条验收条件必须写清“条件与触发、预期结果、产品设计或缺陷依据”，不能写测试环境、测试数据、执行命令、代码方案或实施步骤。
 
-**需求交付追踪表**：`traceability.md` 按工作流编号分段，每条验收条件单独占一行。验收计划阶段填写来源、主题和验收条件；测试计划和实施计划列写“待制定”，实施记录、测试结果和验收结果列写“待执行”，最终代码设计列写“待更新”。后续阶段只更新自己负责的列：`test_plan` 更新测试计划，`plan/fix_plan` 更新实施计划，`topic_execution` 更新实施记录、主题测试结果和主题验收结果，`regression_test` 更新最终回归结果，`overall_acceptance` 记录“整体验收：用户已确认”，`update_code_design` 更新最终代码设计。验收计划哈希只计算主题计划文件，不包含持续更新的追踪表。
+**需求交付追踪表**：`traceability.md` 按工作流编号分段，每条验收条件单独占一行。验收计划阶段填写来源、主题和验收条件；测试计划和实施计划列写“待制定”，实施记录、测试结果和验收结果列写“待执行”，最终代码设计列写“待更新”。后续阶段只更新自己负责的列：`test_plan` 更新测试计划，`impl` 更新实施计划和实施记录，`topic_execution` 更新主题测试结果和主题验收结果，`regression_test` 更新最终回归结果，`overall_acceptance` 记录“整体验收：用户已确认”，`update_code_design` 更新最终代码设计。验收计划哈希包含验收索引和主题计划文件，不包含持续更新的追踪表。
 
 ### 7.8 test_plan（测试计划制定）
 
@@ -842,33 +842,22 @@ class StageStrategy(ABC):
 
 测试计划不生成测试结果文档；实施代码完成后由主题执行阶段执行测试，所有主题完成后由 `regression_test` 执行最终全量回归。
 
-### 7.9 plan（实施计划制定）
+### 7.9 impl（实施计划与真实代码实施）
 
 | 字段 | 值 |
 |---|---|
-| 角色 | 实施计划制定者 |
-| 产物文档模板 | `Template_Repository/plan/plan.md`；当前为待讨论占位文件 |
-| 阶段工作规范 | `Standardized_Repository/plan/plan.md`；当前为待讨论占位文件 |
-| 产物 | `plan/index.md` + 至少一份实施计划文档 |
-| `code_validate` | 检查 `plan/index.md`、实施计划文档和当前工作流追踪表存在 |
-| 门3确认处理 | 更新追踪表的实施计划与任务列 |
-| instruction | "根据已确认的验收计划和测试计划制定实施步骤；不在这里重新确定主题" |
+| 角色 | 实施执行者 |
+| 产物文档模板 | `Template_Repository/impl/impl.md`；提供 `impl/index.md` 和各主题实施文档的章节、字段、表格、链接和内容边界 |
+| 阶段工作规范 | `Standardized_Repository/impl/impl.md`；规定 AI 怎样调查代码、讨论实施前计划、修改代码和记录实际结果 |
+| 产物 | `impl/index.md` + 每个验收主题的 `impl/<topic>.md` |
+| `discussion_validate` | 检查验收索引关系已继承、全部主题实施前计划存在、未决问题为“暂无”、进入 impl 后代码没有变化 |
+| `code_validate` | 检查实施索引和主题实施文档、实施后记录、未完成内容、上下游链接；不得包含“计划与实际的差异”；确认真实代码相对 impl 入场基线发生变化 |
+| 门3确认处理 | 更新追踪表的实施计划与实施记录列，记录实施综合哈希；用户确认后进入 `topic_execution` |
+| instruction | "根据已确认的验收计划和测试计划，先确认全部主题实施前计划，再修改真实代码并记录实施结果" |
 
-实施计划文档可以按实施任务拆分，不要求与验收主题一一对应。具体正文结构后续单独完善。
+`impl` 不重新确定主题，不降低验收条件，不记录正式测试结果或主题验收结果。提交和推送代码不是固定门禁，只有用户明确要求时执行。
 
-### 7.10 fix_plan（修复实施计划制定，bugfix 专用）
-
-| 字段 | 值 |
-|---|---|
-| 角色 | 修复实施计划制定者 |
-| 产物文档模板 | `Template_Repository/plan/fix_plan.md`；当前为待讨论占位文件 |
-| 阶段工作规范 | `Standardized_Repository/plan/fix_plan.md`；当前为待讨论占位文件 |
-| 产物 | `plan/index.md` + 至少一份修复实施计划文档 |
-| `code_validate` | 同 plan，且检查当前工作流追踪表存在 |
-| 门3确认处理 | 更新追踪表的实施计划与任务列 |
-| instruction | "根据已确认的验收计划和测试计划制定修复步骤；不在这里重新确定主题" |
-
-### 7.11 topic_execution（按主题执行）
+### 7.10 topic_execution（按主题测试与验收）
 
 | 字段 | 值 |
 |---|---|
@@ -877,14 +866,14 @@ class StageStrategy(ABC):
 | 规范 | `Standardized_Repository/execution/topic_execution.md` |
 | 附加产物文档模板 | `Template_Repository/acceptance/acceptance_result.md` |
 | 附加阶段工作规范 | `Standardized_Repository/acceptance/acceptance.md` |
-| 产物 | 实际代码、实施记录、每个主题的测试结果与验收结果 |
-| `code_validate` | 当前工作流追踪表存在；`state.topics` 中每个主题都有实施记录、当前工作流编号匹配且写“测试结果：通过”的测试结果、当前工作流编号匹配且写“验收结果：通过”的主题验收结果 |
-| 门3确认处理 | 记录实施代码快照与全部主题测试结果哈希，更新追踪表的实施记录、测试结果和验收结果列；bugfix 追加“主题验收通过，待全量回归” |
-| instruction | "分别推进各主题的实施、测试和验收；全部主题完成后才结束本阶段" |
+| 产物 | 每个主题的测试结果与验收结果 |
+| `code_validate` | 当前工作流追踪表存在；`state.topics` 中每个主题都有来自 `impl` 的实施文档、当前工作流编号匹配且写“测试结果：通过”的测试结果、当前工作流编号匹配且写“验收结果：通过”的主题验收结果 |
+| 门3确认处理 | 记录全部主题测试结果哈希，更新追踪表的测试结果和验收结果列；bugfix 追加“主题验收通过，待全量回归” |
+| instruction | "实施完成后分别推进各主题的测试和验收；全部主题完成后才结束本阶段" |
 
 固定字段和阶段结果由程序校验；测试项、测试数据、实施任务和主题内部文档结构仍由后续提示词和规范讨论决定。不能为协调 Stage 额外创建一个汇总模板。
 
-### 7.12 regression_test（最终全量回归）
+### 7.11 regression_test（最终全量回归）
 
 | 字段 | 值 |
 |---|---|
@@ -896,7 +885,7 @@ class StageStrategy(ABC):
 | 门3确认处理 | 记录 `verification.regression_test_result_hash`，更新追踪表的测试结果列；bugfix 失败时在门2记录“回归失败，重新处理中” |
 | instruction | "全部主题完成后，对全部已合并代码执行最终全量回归" |
 
-### 7.13 overall_acceptance（整体验收）
+### 7.12 overall_acceptance（整体验收）
 
 | 字段 | 值 |
 |---|---|
@@ -909,7 +898,7 @@ class StageStrategy(ABC):
 | `on_advance` | no-op |
 | instruction | "最终全量回归和全部主题验收通过后，由用户确认整个需求是否完成；本阶段不生成新的结果文档" |
 
-### 7.14 reproduce（bug 复现，bugfix 专用）
+### 7.13 reproduce（bug 复现，bugfix 专用）
 
 | 字段 | 值 |
 |---|---|
@@ -1065,7 +1054,7 @@ class StageStrategy(ABC):
   4. 写 `AGENTS.md`（最小工作流契约 + 核心表达要求；存在则整份覆盖，不询问、不合并、不备份）
   5. 写 `.workflow_loop/project.json`（`installer_version`、`installed_at`、`project_design_initialized=false`）
   6. 不创建 `state.json`（那是 `start --intent` 的事）
-  7. 不预建空产物目录（`spec/`/`plan/` 等首次写产物时才建）
+  7. 不预建空产物目录（`spec/`、`acceptance/`、`qa/`、`impl/` 等首次写产物时才建）
 - **stdout 末尾**：`项目安装完成。启动 Codex/OpenCode 并提出需求即可。`
 
 ---
@@ -1112,7 +1101,7 @@ State Snapshot 中记录架构完成度：
 
 ### 10.3 如何复用
 - 验收计划、测试计划、主题测试结果和主题验收结果使用同一个主题名称
-- 实施计划和实施记录只要求写清关联主题，不强制与主题一一对应
+- 每个验收主题都有一份 `impl/<topic>.md`，同一份文档保存该主题的实施前计划和实施后记录
 - 修 bug 的验收计划不能新增、改名、拆分或合并缺陷复现阶段确认的主题
 
 ### 10.4 主题前的命名规则
@@ -1230,4 +1219,4 @@ bug/
 - 机制：无 Verification Invalidation + 无 Architecture Gate Marks + 无 Clean Confirm + 无 Optional Spike --skip → 全部新增
 - 穿刺：只检查任意 `spike_*.md` → 当前工作流清单 + 每项结论 + 固定状态 + 阻塞检查 + 产品/代码设计修改哈希校验
 
-**当前状态**：产品设计、代码设计、穿刺、缺陷复现、验收计划和测试计划阶段材料已经按“流程模板提示词 + 流程规范提示词 + Python 门禁”重新校准；代码设计的初步设计、产品变更修订和最终更新共用同一份架构文档模板；没有独立产物的主题执行和整体验收不再虚构模板。计划和实施材料尚未讨论的内容仍保持明确占位，不能当成正式规则。项目统一测试入口已通过 `.workflow_loop/project.json` 的 `test_entry` 配置并接入 `test_plan` 门禁，当前全量测试通过 117 项。当前工作流停在 `test_plan`，下一步是继续细化测试执行和最终回归阶段。
+**当前状态**：产品设计、代码设计、穿刺、缺陷复现、验收计划、测试计划和实施阶段材料已经按“流程模板提示词 + 流程规范提示词 + Python 门禁”重新校准；代码设计的初步设计、产品变更修订和最终更新共用同一份架构文档模板；没有独立产物的主题执行和整体验收不再虚构模板。测试执行和最终回归阶段的详细材料仍保持明确占位，不能当成正式规则。项目统一测试入口已通过 `.workflow_loop/project.json` 的 `test_entry` 配置并接入 `test_plan` 门禁，当前全量测试通过 122 项。当前工作流停在 `impl`，下一步是先用 `workflow discuss` 加载实施阶段材料，完成全部主题的实施前计划后再进入代码修改。

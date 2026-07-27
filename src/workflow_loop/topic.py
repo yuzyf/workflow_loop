@@ -3,6 +3,7 @@ import re
 
 from .project import load_project
 from .state import load_state
+from .topic_relations import read_topic_index
 
 
 def list_acceptance_plan_topics(project_root: str) -> list[str]:
@@ -17,6 +18,27 @@ def list_acceptance_plan_topics(project_root: str) -> list[str]:
         for filename in os.listdir(acceptance_dir)
         if filename.endswith(suffix) and filename != suffix
     )
+
+
+def list_acceptance_index_topics(
+    project_root: str,
+    workflow_id: str | None = None,
+) -> list[str]:
+    """按 acceptance/index.md 的展示顺序读取验收主题。"""
+
+    state = load_state(project_root)
+    effective_workflow_id = workflow_id or (state.workflow_id if state is not None else None)
+    if effective_workflow_id is None:
+        return []
+    try:
+        relations = read_topic_index(
+            project_root,
+            os.path.join("acceptance", "index.md"),
+            effective_workflow_id,
+        )
+    except ValueError:
+        return []
+    return [relation.topic for relation in relations]
 
 
 def list_reproduce_topics(project_root: str, workflow_id: str | None = None) -> list[str]:
@@ -56,9 +78,12 @@ def candidate_topics(project_root: str) -> list[str]:
     current = set(current_workflow_topics(project_root))
     project = load_project(project_root)
     history = set(project.topic_history if project is not None else [])
+    topics = list_acceptance_index_topics(project_root)
+    if not topics:
+        topics = list_acceptance_plan_topics(project_root)
     return [
         topic
-        for topic in list_acceptance_plan_topics(project_root)
+        for topic in topics
         if topic in current or topic not in history
     ]
 

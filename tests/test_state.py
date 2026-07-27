@@ -144,7 +144,7 @@ def test_full_schema_fields(tmp_path):
         topics=["修复上传失败"],
         clean_confirmed=False,
         spike_skipped=False,
-        stage_path=["reproduce", "fix_plan"],
+        stage_path=["reproduce", "acceptance_plan", "test_plan", "impl"],
         stages={"reproduce": StageState()},
         architecture=ArchitectureState(preliminary_done=True, detailed_done=False),
         verification=VerificationState(

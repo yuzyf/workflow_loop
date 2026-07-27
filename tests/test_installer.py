@@ -48,10 +48,6 @@ def test_install_project_copies_templates(tmp_path):
     assert not os.path.exists(os.path.join(template_dir, "code_design", "update_code_design.md"))
     # 验证 spike/spike.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "spike", "spike.md"))
-    # 验证 plan/plan.md 模板存在
-    assert os.path.exists(os.path.join(template_dir, "plan", "plan.md"))
-    # 验证 plan/fix_plan.md 模板存在
-    assert os.path.exists(os.path.join(template_dir, "plan", "fix_plan.md"))
     # 验证 acceptance/ 下的验收计划和主题验收模板存在
     assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance_plan.md"))
     assert os.path.exists(os.path.join(template_dir, "acceptance", "acceptance_result.md"))
@@ -227,14 +223,8 @@ def test_install_project_marks_undiscussed_stage_materials_as_pending(tmp_path):
     install_project(str(tmp_path))
     workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
     pending_paths = [
-        ("Template_Repository", "plan", "plan.md"),
-        ("Template_Repository", "plan", "fix_plan.md"),
-        ("Template_Repository", "impl", "impl.md"),
         ("Template_Repository", "qa", "test.md"),
         ("Template_Repository", "qa", "final_regression.md"),
-        ("Standardized_Repository", "plan", "plan.md"),
-        ("Standardized_Repository", "plan", "fix_plan.md"),
-        ("Standardized_Repository", "impl", "impl.md"),
         ("Standardized_Repository", "qa", "test.md"),
     ]
 
@@ -244,6 +234,18 @@ def test_install_project_marks_undiscussed_stage_materials_as_pending(tmp_path):
             content = f.read()
         assert "待讨论" in content
         assert "尚未与用户讨论" in content
+
+    # impl 是当前流程的正式模板，不能再被当成“尚未讨论”的占位文件。
+    for parts in [
+        ("Template_Repository", "impl", "impl.md"),
+        ("Standardized_Repository", "impl", "impl.md"),
+    ]:
+        path = os.path.join(workflow_dir, *parts)
+        with open(path) as f:
+            content = f.read()
+        assert "实施前计划" in content
+        assert "实施后记录" in content
+        assert "待讨论" not in content
 
     template_path = os.path.join(
         workflow_dir, "Template_Repository", "qa", "test_plan.md",
@@ -305,12 +307,12 @@ def test_install_project_no_state_json(tmp_path):
     assert not os.path.exists(os.path.join(str(tmp_path), ".workflow_loop", "journal.jsonl"))
 
 
-# 测试 install_project 不创建产品目录（spec/plan/acceptance 等是 Run 时产物）
+# 测试 install_project 不创建产品目录（spec/acceptance 等是 Run 时产物）
 def test_install_project_no_product_dirs(tmp_path):
     # 执行安装
     install_project(str(tmp_path))
     # 遍历所有产品目录名
-    for d in ["spec", "plan", "acceptance", "qa", "impl", "bug"]:
+    for d in ["spec", "acceptance", "qa", "impl", "bug"]:
         # 验证产品目录不存在
         assert not os.path.exists(os.path.join(str(tmp_path), d))
 

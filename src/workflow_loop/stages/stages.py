@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 
 from ..artifact_validation import (
     PROJECT_INIT_EVIDENCE_PATH,
@@ -7,6 +8,7 @@ from ..artifact_validation import (
     validate_acceptance_plan_documents,
     validate_downstream_traceability,
     validate_final_regression_result,
+    validate_inherited_topic_index,
     validate_overall_acceptance_prerequisites,
     validate_project_design_init_evidence,
     validate_reproduce_documents,
@@ -21,6 +23,7 @@ from ..topic import (
     list_acceptance_plan_topics,
     missing_topic_files,
 )
+from ..verification import compute_code_snapshot_hash
 from .base import StageStrategy, clean_spike_tmp
 
 
@@ -103,7 +106,7 @@ class SpecStage(StageStrategy):
 
 
 # 初步代码架构 stage：从已确认产品设计推导代码设计
-# 产出 spec/architecture_code_design.md，后续 spike/plan 基于这个设计
+# 产出 spec/architecture_code_design.md，后续 spike、验收计划和实施阶段基于这个设计
 class CodeDesignStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
@@ -170,66 +173,8 @@ class SpikeStage(StageStrategy):
         return (
             "穿刺阶段：先查产品设计、代码设计、相关代码和运行事实，识别真实场景中的技术不确定性；"
             "用户决定执行清单或全部跳过。正常执行时写 spec/spike_index.md 和每项结论文档，"
-            "需要临时代码时放入 .workflow_loop/spike_tmp/，并在进入计划前同步受影响的设计文档。"
+            "需要临时代码时放入 .workflow_loop/spike_tmp/，并在进入验收计划前同步受影响的设计文档。"
         )
-
-
-# 计划 stage：根据已确认的验收主题和测试计划制定实施计划
-# 产出 plan/ 下的实施计划文档 + plan/index.md；不在这里重新确定主题
-class PlanStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
-    def name(self) -> str:
-        return "plan"
-
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
-    def artifact_paths(self) -> list[str]:
-        return ["plan/index.md"]
-
-    # 角色文档路径（相对 .workflow_loop/），plan 无角色文档返回 None
-    def role_doc_path(self) -> str | None:
-        return None
-
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/plan/plan.md"
-
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/plan/plan.md"
-
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 plan/index.md 存在 + plan/ 下至少有一个非 index.md 的计划文件
-    def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 plan/index.md 的完整路径
-        index_md = os.path.join(project_root, "plan", "index.md")
-        # index.md 不存在 → 直接判失败
-        if not os.path.exists(index_md):
-            return (False, "plan/index.md 不存在")
-        # 列出 plan/ 下所有 .md 文件（排除 index.md）
-        plan_files = [f for f in os.listdir(os.path.join(project_root, "plan")) if f.endswith(".md") and f != "index.md"]
-        # 没有任何计划文件 → 判失败
-        if not plan_files:
-            return (False, "plan/ 下没有计划 .md 文件")
-        state = load_state(project_root)
-        if state is None:
-            return (False, "找不到当前工作流状态")
-        topics = current_workflow_topics(project_root)
-        if not topics:
-            return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan")
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not trace_ok:
-            return (False, trace_detail)
-        # 找到计划文件 → 通过，列出文件名
-        return (True, f"计划文档存在: {plan_files}")
-
-    # 该 stage 的指令文本，打印给 AI 看
-    def instruction(self) -> str:
-        return "实施计划阶段：根据已确认的验收主题和测试计划，产出实施计划文档 + plan/index.md；不在这里新增、删除或改名主题"
 
 
 # 验收计划 stage：制定什么算完成的验收计划
@@ -242,7 +187,7 @@ class AcceptancePlanStage(StageStrategy):
     # 期望产出的文件路径列表（相对项目根）
     # traceability.md 是跨阶段追踪入口；acceptance/ 下保存每个主题的验收计划
     def artifact_paths(self) -> list[str]:
-        return ["traceability.md", "acceptance/"]
+        return ["traceability.md", "acceptance/index.md", "acceptance/"]
 
     # 角色文档路径（相对 .workflow_loop/），acceptance_plan 无角色文档返回 None
     def role_doc_path(self) -> str | None:
@@ -302,7 +247,7 @@ class AcceptancePlanStage(StageStrategy):
         return (
             "验收计划阶段：从零开发和修改产品先确定本次需求的全部验收主题；"
             "修 bug 复用缺陷复现阶段已经确认的主题。为每个主题写清什么算完成，"
-            "产出 traceability.md + acceptance/<topic>_plan.md。"
+            "确认主题关系，产出 traceability.md + acceptance/index.md + acceptance/<topic>_plan.md。"
         )
 
 
@@ -382,17 +327,16 @@ class TestPlanStage(StageStrategy):
         return "测试计划阶段：把验收条件转换为可执行测试范围，产出 qa/<topic>_plan.md + 更新 qa/index.md"
 
 
-# 旧版独立实施 stage，保留用于读取历史状态；新顶层路径由 topic_execution 统筹。
-# 实施记录按实施任务命名，不要求与验收主题一一对应。
+# 实施 stage：按验收主题承接实施前计划和真实代码实施。
 class ImplStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "impl"
 
     # 期望产出的文件路径列表（相对项目根）
-    # 这里只列 impl/ 目录，code_validate 会查 .md 文件
+    # 目录下的每个主题文档由 code_validate 继续检查
     def artifact_paths(self) -> list[str]:
-        return ["impl/"]
+        return ["impl/index.md"]
 
     # 角色文档路径（相对 .workflow_loop/），impl 无角色文档返回 None
     def role_doc_path(self) -> str | None:
@@ -406,25 +350,157 @@ class ImplStage(StageStrategy):
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/impl/impl.md"
 
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 impl/ 目录存在 + 至少有一个 .md 实施记录文件
-    def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 impl/ 目录的完整路径
+    def _validate_topic_documents(
+        self,
+        project_root: str,
+        workflow_state,
+        *,
+        require_execution_record: bool,
+    ) -> tuple[bool, str, list[str]]:
+        topics = current_workflow_topics(project_root)
+        if not topics:
+            return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan", [])
+
+        qa_ok, qa_detail = validate_inherited_topic_index(
+            project_root,
+            workflow_state.workflow_id,
+            topics,
+            os.path.join("qa", "index.md"),
+            ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
+            {
+                "验收计划": "../acceptance/{topic}_plan.md",
+                "测试计划": "./{topic}_plan.md",
+                "测试结果": "./{topic}_result.md",
+            },
+        )
+        if not qa_ok:
+            return (False, qa_detail, topics)
+
         impl_dir = os.path.join(project_root, "impl")
-        # impl/ 目录不存在 → 直接判失败
-        if not os.path.exists(impl_dir):
-            return (False, "impl/ 目录不存在")
-        # 列出 impl/ 下所有 .md 文件
-        md_files = [f for f in os.listdir(impl_dir) if f.endswith(".md")]
-        # 没有任何 .md → 判失败
-        if not md_files:
-            return (False, "impl/ 下没有 .md 文件")
-        # 找到实施记录文件 → 通过，列出文件名
-        return (True, f"实施记录文档存在: {md_files}")
+        index_path = os.path.join(impl_dir, "index.md")
+        if not os.path.isfile(index_path):
+            return (False, "impl/index.md 不存在", topics)
+        index_ok, index_detail = validate_inherited_topic_index(
+            project_root,
+            workflow_state.workflow_id,
+            topics,
+            os.path.join("impl", "index.md"),
+            ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "实施文档"],
+            {
+                "验收计划": "../acceptance/{topic}_plan.md",
+                "测试计划": "../qa/{topic}_plan.md",
+                "实施文档": "./{topic}.md",
+            },
+        )
+        if not index_ok:
+            return (False, index_detail, topics)
+
+        missing_topics = []
+        for topic in topics:
+            topic_path = os.path.join(impl_dir, f"{topic}.md")
+            if not os.path.isfile(topic_path):
+                missing_topics.append(f"impl/{topic}.md")
+                continue
+            with open(topic_path, "r", encoding="utf-8") as stream:
+                topic_content = stream.read()
+            if f"- 工作流编号：{workflow_state.workflow_id}" not in topic_content:
+                return (False, f"impl/{topic}.md 的工作流编号与当前工作流不一致", topics)
+            if "## 1. 实施依据" not in topic_content:
+                return (False, f"impl/{topic}.md 缺少“实施依据”", topics)
+            if "## 2. 实施前计划" not in topic_content:
+                return (False, f"impl/{topic}.md 缺少“实施前计划”", topics)
+            if "## 4. 计划与实际的差异" in topic_content:
+                return (False, f"impl/{topic}.md 不得包含“计划与实际的差异”章节", topics)
+            if "## 4. 上下游文档" not in topic_content:
+                return (False, f"impl/{topic}.md 缺少“上下游文档”", topics)
+            unresolved = self._subsection_text(topic_content, "2.4 未决问题")
+            if unresolved is None:
+                return (False, f"impl/{topic}.md 缺少“2.4 未决问题”", topics)
+            if self._has_unresolved_content(unresolved):
+                return (False, f"impl/{topic}.md 仍有未决问题，不能进入代码实施", topics)
+            if require_execution_record:
+                if "## 3. 实施后记录" not in topic_content:
+                    return (False, f"impl/{topic}.md 缺少“实施后记录”", topics)
+                if "## 3.3 未完成内容" not in topic_content:
+                    return (False, f"impl/{topic}.md 缺少“3.3 未完成内容”", topics)
+                unfinished = self._subsection_text(topic_content, "3.3 未完成内容")
+                if unfinished is None or self._has_unresolved_content(unfinished):
+                    return (False, f"impl/{topic}.md 仍有未完成内容，不能通过实施门禁", topics)
+            if "测试结果：通过" in topic_content or "测试结果：失败" in topic_content:
+                return (False, f"impl/{topic}.md 不能提前填写正式测试结果", topics)
+
+        if missing_topics:
+            return (False, f"缺少主题实施文档: {missing_topics}", topics)
+        return (True, "", topics)
+
+    @staticmethod
+    def _subsection_text(content: str, heading: str) -> str | None:
+        match = re.search(
+            rf"^###\s+{re.escape(heading)}\s*$\n(.*?)(?=^###\s+|^##\s+|\Z)",
+            content,
+            re.MULTILINE | re.DOTALL,
+        )
+        return match.group(1).strip() if match else None
+
+    @staticmethod
+    def _has_unresolved_content(content: str) -> bool:
+        normalized = re.sub(r"[\s`*_-]", "", content)
+        return normalized not in {"暂无", "无"}
+
+    def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
+        # 第一道门确认的是全部实施前计划；此时不允许代码快照先发生变化。
+        valid, detail, _ = self._validate_topic_documents(
+            project_root,
+            workflow_state,
+            require_execution_record=False,
+        )
+        if not valid:
+            return (False, detail)
+
+        stage_state = workflow_state.stages.get(self.name())
+        if stage_state is None or stage_state.code_baseline_hash is None:
+            return (False, "缺少进入 impl 时的代码基线，不能确认计划前没有修改代码")
+        current_hash = compute_code_snapshot_hash(project_root)
+        if current_hash != stage_state.code_baseline_hash:
+            return (False, "实施计划确认前代码已经变化，不能通过 impl 的第一道门")
+        return (True, "全部验收主题的实施前计划已就绪，代码尚未修改")
+
+    # 门禁的代码侧校验（第 2 道闸）
+    # 检查每个主题的实施记录，并确认计划确认后确实修改了代码。
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        valid, detail, topics = self._validate_topic_documents(
+            project_root,
+            state,
+            require_execution_record=True,
+        )
+        if not valid:
+            return (False, detail)
+
+        stage_state = state.stages.get(self.name())
+        if stage_state is None or stage_state.code_baseline_hash is None:
+            return (False, "缺少进入 impl 时的代码基线，不能确认实施代码变化")
+        current_hash = compute_code_snapshot_hash(project_root)
+        if current_hash == stage_state.code_baseline_hash:
+            return (False, "实施代码没有相对计划确认时的代码基线发生变化")
+
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
+        return (True, f"{len(topics)} 个验收主题的实施计划和实施记录完整，代码已发生实施变更")
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "实施阶段：执行已确认的实施/修复计划并修改真实代码，按实施任务产出 impl/ 下的实施记录"
+        return (
+            "实施阶段：依据全部验收主题的验收计划和测试计划，先写完实施前计划；"
+            "用户确认后再修改真实代码，并在同一份 impl/<主题>.md 中追加实施后记录"
+        )
 
 
 # 旧版独立测试 stage，保留用于读取历史状态；新顶层路径在 topic_execution 内执行主题测试。
@@ -560,10 +636,11 @@ class TopicExecutionStage(StageStrategy):
             return (False, "当前工作流还没有确认验收主题")
 
         impl_dir = os.path.join(project_root, "impl")
-        if not os.path.isdir(impl_dir) or not any(
-            filename.endswith(".md") for filename in os.listdir(impl_dir)
-        ):
-            return (False, "impl/ 下没有实施记录 .md 文件")
+        if not os.path.isdir(impl_dir):
+            return (False, "impl/ 目录不存在")
+        missing_impl = missing_topic_files(project_root, "impl", ".md", topics)
+        if missing_impl:
+            return (False, f"缺少主题实施文档: {missing_impl}")
 
         missing_tests = missing_topic_files(project_root, "qa", "_result.md", topics)
         missing_acceptance = missing_topic_files(
@@ -598,7 +675,7 @@ class TopicExecutionStage(StageStrategy):
 
     def instruction(self) -> str:
         return (
-            "按主题执行阶段：按照实施计划推进各主题的实施、测试和验收；"
+            "按主题执行阶段：实施代码已经完成后，按主题执行正式测试和主题验收；"
             "独立主题可以分别推进，全部主题完成后才能通过本阶段"
         )
 
@@ -911,7 +988,7 @@ class ReviseCodeDesignStage(StageStrategy):
 
 
 # 复现 stage：和用户讨论 bug 现象、复现步骤
-# 产出 bug/<YYYY-MM-DD_HHmm-<bug描述>>.md + 更新 bug/index.md，后续 fix_plan 基于此
+# 产出 bug/<YYYY-MM-DD_HHmm-<bug描述>>.md + 更新 bug/index.md，后续 acceptance_plan 复用其中已确认的验收主题
 class ReproduceStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
@@ -981,65 +1058,3 @@ class ReproduceStage(StageStrategy):
             "缺陷复现阶段：使用真实环境和真实输入复现缺陷并确认根因，"
             "产出 bug/<YYYY-MM-DD_HHmm-缺陷描述>.md 并更新 bug/index.md"
         )
-
-
-# 修复计划 stage：根据已确认的验收主题和测试计划制定修复实施计划
-class FixPlanStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
-    def name(self) -> str:
-        return "fix_plan"
-
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
-    def artifact_paths(self) -> list[str]:
-        return ["plan/index.md"]
-
-    # 角色文档路径（相对 .workflow_loop/），fix_plan 无角色文档返回 None
-    def role_doc_path(self) -> str | None:
-        return None
-
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/plan/fix_plan.md"
-
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/plan/fix_plan.md"
-
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 plan/ 目录存在 + plan/index.md 存在 + 至少有一个非 index.md 的修复计划文件
-    def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 plan/ 目录的完整路径
-        plan_dir = os.path.join(project_root, "plan")
-        # plan/ 目录不存在 → 直接判失败
-        if not os.path.exists(plan_dir):
-            return (False, "plan/ 目录不存在")
-        # 拼出 plan/index.md 的完整路径
-        index_md = os.path.join(plan_dir, "index.md")
-        # index.md 不存在 → 判失败
-        if not os.path.exists(index_md):
-            return (False, "plan/index.md 不存在")
-        # 列出 plan/ 下所有 .md 文件（排除 index.md 索引文件）
-        plan_files = [f for f in os.listdir(plan_dir) if f.endswith(".md") and f != "index.md"]
-        # 没有任何修复计划文件 → 判失败
-        if not plan_files:
-            return (False, "plan/ 下没有修复计划 .md 文件")
-        state = load_state(project_root)
-        if state is None:
-            return (False, "找不到当前工作流状态")
-        topics = current_workflow_topics(project_root)
-        if not topics:
-            return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan")
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not trace_ok:
-            return (False, trace_detail)
-        # 找到修复计划文件 → 通过，列出文件名
-        return (True, f"修复计划文档存在: {plan_files}")
-
-    # 该 stage 的指令文本，打印给 AI 看
-    def instruction(self) -> str:
-        return "修复实施计划阶段：根据已确认的验收主题和测试计划制定修复步骤，产出计划文档 + plan/index.md；不在这里重新确定主题"

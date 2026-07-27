@@ -2,6 +2,7 @@ from workflow_loop.project import create_project, register_topics
 from workflow_loop.state import StageState, WorkflowState, save_state
 from workflow_loop.stages.stages import (
     AcceptancePlanStage,
+    ImplStage,
     ProjectDesignInitStage,
     ReproduceStage,
     RegressionTestStage,
@@ -50,8 +51,121 @@ def _write_test_plan(tmp_path, topic):
 ## 5. 上下游文档
 
 - 上游验收计划：[验收计划](../acceptance/{topic}_plan.md)
-- 下游实施计划：[实施计划](../plan/index.md)
+- 下游实施计划：[实施计划](../impl/index.md)
 - 下游测试结果：[测试结果](./{topic}_result.md)
+""",
+    )
+
+
+def _write_qa_index(tmp_path, workflow_id, topics):
+    rows = []
+    for order, topic in enumerate(topics, start=1):
+        rows.append(
+            f"| {order} | {topic} | 无 | "
+            f"[验收计划](../acceptance/{topic}_plan.md) | "
+            f"[测试计划](./{topic}_plan.md) | [测试结果](./{topic}_result.md) |"
+        )
+    _write(tmp_path / "qa" / "index.md", f"""# 测试计划索引
+
+## {workflow_id}
+
+### 主题关系
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
+|---|---|---|---|---|---|
+{chr(10).join(rows)}
+""")
+
+
+def _write_impl_index(tmp_path, workflow_id, topics):
+    rows = []
+    for order, topic in enumerate(topics, start=1):
+        rows.append(
+            f"| {order} | {topic} | 无 | "
+            f"[验收计划](../acceptance/{topic}_plan.md) | "
+            f"[测试计划](../qa/{topic}_plan.md) | [实施文档](./{topic}.md) |"
+        )
+    _write(tmp_path / "impl" / "index.md", f"""# 实施索引
+
+## {workflow_id}
+
+### 主题关系
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 实施文档 |
+|---|---|---|---|---|---|
+{chr(10).join(rows)}
+""")
+
+
+def _write_impl_topic(tmp_path, workflow_id, topic, *, with_record=False, with_difference=False):
+    record = """
+## 3. 实施后记录
+
+### 3.1 实际代码修改
+
+| 对应计划步骤 | 文件 | 类、函数或配置项 | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 对应验收条件和测试项 |
+|---|---|---|---|---|---|
+| 1 | src/app.py | run | 修改处理逻辑 | 输出改变 | AC-01；TC-01 |
+
+### 3.2 开发检查记录
+
+| 检查命令或方法 | 检查范围 | 实际反馈 | 是否需要继续修改 |
+|---|---|---|---|
+| pytest | 主题逻辑 | 通过 | 否 |
+
+### 3.3 未完成内容
+
+暂无
+""" if with_record else ""
+    difference = """
+## 4. 计划与实际的差异
+
+暂无
+""" if with_difference else """
+## 4. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/<topic>_plan.md) | 验收依据 |
+| 上游 | [测试计划](../qa/<topic>_plan.md) | 测试依据 |
+| 下游 | [测试结果](../qa/<topic>_result.md) | 正式测试 |
+"""
+    _write(
+        tmp_path / "impl" / f"{topic}.md",
+        f"""# 【实施】{topic}
+
+- 工作流编号：{workflow_id}
+- 验收主题：{topic}
+
+## 1. 实施依据
+
+| 依据类型 | 具体内容 | 文档位置 |
+|---|---|---|
+| 验收条件 | AC-01：{topic}完成 | [验收计划](../acceptance/{topic}_plan.md#ac-01) |
+| 测试项 | TC-01：验证{topic}完成 | [测试计划](../qa/{topic}_plan.md#tc-01) |
+
+## 2. 实施前计划
+
+### 2.1 预期产品结果
+
+用户得到 {topic} 的结果。
+
+### 2.2 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改的具体逻辑 | 数据、状态或输出变化 | 对应验收条件和测试项 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | src/app.py | run | 当前逻辑 | 修改处理 | 输出变化 | AC-01；TC-01 | 无 |
+
+### 2.3 开发检查计划
+
+| 检查命令或方法 | 检查范围 | 预期观察结果 |
+|---|---|---|
+| pytest | 主题逻辑 | 观察到结果 |
+
+### 2.4 未决问题
+
+暂无
+{record}{difference}
 """,
     )
 
@@ -210,6 +324,22 @@ def _write_acceptance_documents(tmp_path, workflow_id, topics):
 | 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
 |---|---|---|---|---|---|---|---|---|
 {chr(10).join(rows)}
+""")
+    index_rows = []
+    for order, topic in enumerate(topics, start=1):
+        index_rows.append(
+            f"| {order} | {topic} | 无 | "
+            f"[验收计划](./{topic}_plan.md) | [验收结果](./{topic}_result.md) |"
+        )
+    _write(tmp_path / "acceptance" / "index.md", f"""# 验收主题索引
+
+## {workflow_id}
+
+### 主题关系
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+{chr(10).join(index_rows)}
 """)
 
 
@@ -453,7 +583,7 @@ def test_acceptance_plan_finds_new_topics_and_test_plan_requires_same_topics(tmp
         topics=["上传文件", "查看状态"],
     ))
     _write_test_plan(tmp_path, "上传文件")
-    _write(tmp_path / "qa" / "index.md", "- [上传文件](./上传文件_plan.md)\n")
+    _write_qa_index(tmp_path, "test", ["上传文件"])
 
     ok, detail = TestPlanStage().code_validate(str(tmp_path))
     assert ok is False
@@ -461,13 +591,121 @@ def test_acceptance_plan_finds_new_topics_and_test_plan_requires_same_topics(tmp
 
     _write_acceptance_documents(tmp_path, "test", ["上传文件", "查看状态"])
     _write_test_plan(tmp_path, "查看状态")
-    _write(
-        tmp_path / "qa" / "index.md",
-        "- [上传文件](./上传文件_plan.md)\n- [查看状态](./查看状态_plan.md)\n",
-    )
+    _write_qa_index(tmp_path, "test", ["上传文件", "查看状态"])
     ok, detail = TestPlanStage().code_validate(str(tmp_path))
     assert ok is True, detail
     assert "覆盖 2 条验收条件" in detail
+
+
+def test_acceptance_plan_requires_topic_index(tmp_path):
+    create_project(str(tmp_path))
+    save_state(str(tmp_path), WorkflowState(
+        workflow_id="test",
+        intent="from_scratch",
+        topics=["上传文件"],
+    ))
+    _write_acceptance_documents(tmp_path, "test", ["上传文件"])
+    (tmp_path / "acceptance" / "index.md").unlink()
+
+    ok, detail = AcceptancePlanStage().code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "acceptance/index.md 不存在" in detail
+
+
+def test_acceptance_plan_rejects_cyclic_topic_dependencies(tmp_path):
+    create_project(str(tmp_path))
+    save_state(str(tmp_path), WorkflowState(
+        workflow_id="test",
+        intent="from_scratch",
+        topics=["上传文件", "查看状态"],
+    ))
+    _write_acceptance_documents(tmp_path, "test", ["上传文件", "查看状态"])
+    _write(
+        tmp_path / "acceptance" / "index.md",
+        """# 验收主题索引
+
+## test
+
+### 主题关系
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+| 1 | 上传文件 | 查看状态 | [验收计划](./上传文件_plan.md) | [验收结果](./上传文件_result.md) |
+| 2 | 查看状态 | 上传文件 | [验收计划](./查看状态_plan.md) | [验收结果](./查看状态_result.md) |
+""",
+    )
+
+    ok, detail = AcceptancePlanStage().code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "前置主题“查看状态”必须排在前面" in detail
+
+
+def _prepare_impl_stage(tmp_path, *, with_record=False, with_difference=False):
+    topic = "上传文件"
+    _write_acceptance_documents(tmp_path, "test", [topic])
+    _write_test_plan(tmp_path, topic)
+    _write_qa_index(tmp_path, "test", [topic])
+    _write_impl_index(tmp_path, "test", [topic])
+    _write_impl_topic(
+        tmp_path,
+        "test",
+        topic,
+        with_record=with_record,
+        with_difference=with_difference,
+    )
+    state = WorkflowState(
+        workflow_id="test",
+        intent="from_scratch",
+        current_stage="impl",
+        topics=[topic],
+        stages={
+            "impl": StageState(
+                status="in_progress",
+                artifact_paths=["impl/index.md"],
+                code_baseline_hash=__import__(
+                    "workflow_loop.verification",
+                    fromlist=["compute_code_snapshot_hash"],
+                ).compute_code_snapshot_hash(str(tmp_path)),
+            ),
+        },
+    )
+    save_state(str(tmp_path), state)
+    return topic
+
+
+def test_impl_discussion_requires_all_confirmed_plans_before_code(tmp_path):
+    topic = _prepare_impl_stage(tmp_path)
+
+    ok, detail = ImplStage().discussion_validate(str(tmp_path), __import__(
+        "workflow_loop.state",
+        fromlist=["load_state"],
+    ).load_state(str(tmp_path)))
+
+    assert ok is True, detail
+    assert topic in detail or "实施前计划" in detail
+
+
+def test_impl_code_gate_requires_actual_record_and_code_change(tmp_path):
+    topic = _prepare_impl_stage(tmp_path, with_record=True)
+    _write(tmp_path / "src" / "app.py", "def run():\n    return 'ok'\n")
+    state = __import__("workflow_loop.state", fromlist=["load_state"]).load_state(str(tmp_path))
+
+    ok, detail = ImplStage().code_validate(str(tmp_path))
+
+    assert ok is True, detail
+    assert "实施计划和实施记录完整" in detail
+
+
+def test_impl_code_gate_rejects_plan_difference_section(tmp_path):
+    _prepare_impl_stage(tmp_path, with_record=True, with_difference=True)
+    _write(tmp_path / "src" / "app.py", "def run():\n    return 'ok'\n")
+
+    ok, detail = ImplStage().code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "计划与实际的差异" in detail
 
 
 def test_test_plan_rejects_missing_acceptance_to_test_item_mapping(tmp_path):
@@ -488,7 +726,7 @@ def test_test_plan_rejects_missing_acceptance_to_test_item_mapping(tmp_path):
         ),
         encoding="utf-8",
     )
-    _write(tmp_path / "qa" / "index.md", "- [上传文件](./上传文件_plan.md)\n")
+    _write_qa_index(tmp_path, "test", ["上传文件"])
 
     ok, detail = TestPlanStage().code_validate(str(tmp_path))
 
@@ -533,7 +771,8 @@ def test_topic_execution_requires_results_for_every_topic(tmp_path):
         topics=["上传文件", "查看状态"],
     ))
     _write_acceptance_documents(tmp_path, "test", ["上传文件", "查看状态"])
-    _write(tmp_path / "impl" / "upload_task.md")
+    _write(tmp_path / "impl" / "上传文件.md")
+    _write(tmp_path / "impl" / "查看状态.md")
     _write(tmp_path / "qa" / "上传文件_result.md", "- 工作流编号：test\n- 测试结果：通过\n")
     _write(tmp_path / "qa" / "查看状态_result.md", "- 工作流编号：test\n- 测试结果：通过\n")
     _write(tmp_path / "acceptance" / "上传文件_result.md", "- 工作流编号：test\n- 验收结果：通过\n")

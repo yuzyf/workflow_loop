@@ -3,6 +3,7 @@ import re
 
 from .state import load_state
 from .traceability import validate_structure as validate_traceability_structure
+from .topic_relations import relation_signature, read_topic_index
 from .verification import compute_file_hashes
 
 
@@ -280,6 +281,14 @@ def validate_acceptance_plan_documents(
     topics: list[str],
 ) -> tuple[bool, str]:
     """校验主题验收计划和当前工作流的需求交付追踪表。"""
+    index_ok, index_detail = validate_acceptance_index(
+        project_root,
+        workflow_id,
+        topics,
+    )
+    if not index_ok:
+        return False, index_detail
+
     traceability_ok, traceability_detail = validate_traceability_structure(
         project_root,
         workflow_id,
@@ -355,6 +364,141 @@ def validate_acceptance_plan_documents(
     )
 
 
+def _validate_topic_index_rows(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+    relative_path: str,
+    expected_headers: list[str],
+    expected_links: dict[str, str],
+) -> tuple[bool, str, list]:
+    """校验主题索引的主题集合、顺序、链接和前置关系。"""
+
+    try:
+        relations = read_topic_index(
+            project_root,
+            relative_path,
+            workflow_id,
+            expected_headers,
+        )
+    except ValueError as exc:
+        return False, str(exc), []
+
+    actual_topics = [relation.topic for relation in relations]
+    if len(actual_topics) != len(set(actual_topics)):
+        return False, f"{relative_path} 存在重复验收主题", []
+    if set(actual_topics) != set(topics):
+        return (
+            False,
+            f"{relative_path} 的主题必须覆盖当前工作流全部主题；当前主题 {topics}，索引主题 {actual_topics}",
+            [],
+        )
+
+    orders = [relation.order for relation in relations]
+    if sorted(orders) != list(range(1, len(relations) + 1)):
+        return False, f"{relative_path} 展示顺序必须从 1 开始连续编号", []
+
+    order_by_topic = {relation.topic: relation.order for relation in relations}
+    for relation in relations:
+        for header, path_template in expected_links.items():
+            expected_path = path_template.format(topic=relation.topic)
+            if relation.links.get(header) != expected_path:
+                return False, f"{relative_path} 主题“{relation.topic}”的“{header}”链接错误", []
+        for prerequisite in relation.prerequisites:
+            if prerequisite not in order_by_topic:
+                return False, f"{relative_path} 主题“{relation.topic}”引用了不存在的前置主题“{prerequisite}”", []
+            if prerequisite == relation.topic:
+                return False, f"{relative_path} 主题“{relation.topic}”不能依赖自己", []
+            if order_by_topic[prerequisite] >= relation.order:
+                return (
+                    False,
+                    f"{relative_path} 主题“{relation.topic}”的前置主题“{prerequisite}”必须排在前面",
+                    [],
+                )
+
+    # 依赖关系用深度优先搜索（DFS）检查，避免主题互相等待。
+    dependencies = {
+        relation.topic: relation.prerequisites for relation in relations
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(topic: str) -> bool:
+        if topic in visiting:
+            return False
+        if topic in visited:
+            return True
+        visiting.add(topic)
+        if not all(visit(prerequisite) for prerequisite in dependencies[topic]):
+            return False
+        visiting.remove(topic)
+        visited.add(topic)
+        return True
+
+    if not all(visit(topic) for topic in dependencies):
+        return False, f"{relative_path} 的主题前置关系存在循环", []
+    return True, "", relations
+
+
+def validate_acceptance_index(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """校验验收索引，并作为后续阶段主题关系的来源。"""
+
+    ok, detail, _ = _validate_topic_index_rows(
+        project_root,
+        workflow_id,
+        topics,
+        os.path.join("acceptance", "index.md"),
+        ["展示顺序", "验收主题", "前置主题", "验收计划", "主题验收结果"],
+        {
+            "验收计划": "./{topic}_plan.md",
+            "主题验收结果": "./{topic}_result.md",
+        },
+    )
+    return ok, detail or "acceptance/index.md 结构完整"
+
+
+def validate_inherited_topic_index(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+    relative_path: str,
+    expected_headers: list[str],
+    expected_links: dict[str, str],
+) -> tuple[bool, str]:
+    """校验 qa/ 或 impl/ 索引是否继承验收索引的主题关系。"""
+
+    source_ok, source_detail, source_relations = _validate_topic_index_rows(
+        project_root,
+        workflow_id,
+        topics,
+        os.path.join("acceptance", "index.md"),
+        ["展示顺序", "验收主题", "前置主题", "验收计划", "主题验收结果"],
+        {
+            "验收计划": "./{topic}_plan.md",
+            "主题验收结果": "./{topic}_result.md",
+        },
+    )
+    if not source_ok:
+        return False, source_detail
+    target_ok, target_detail, target_relations = _validate_topic_index_rows(
+        project_root,
+        workflow_id,
+        topics,
+        relative_path,
+        expected_headers,
+        expected_links,
+    )
+    if not target_ok:
+        return False, target_detail
+    if relation_signature(source_relations) != relation_signature(target_relations):
+        return False, f"{relative_path} 的主题关系没有继承 acceptance/index.md"
+    return True, f"{relative_path} 已继承 acceptance/index.md 的主题关系"
+
+
 def validate_downstream_traceability(
     project_root: str,
     workflow_id: str,
@@ -373,6 +517,20 @@ def validate_test_plan_documents(
     index_path = os.path.join(project_root, "qa", "index.md")
     if not os.path.isfile(index_path):
         return False, "qa/index.md 不存在"
+    inherited_ok, inherited_detail = validate_inherited_topic_index(
+        project_root,
+        workflow_id,
+        topics,
+        os.path.join("qa", "index.md"),
+        ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
+        {
+            "验收计划": "../acceptance/{topic}_plan.md",
+            "测试计划": "./{topic}_plan.md",
+            "测试结果": "./{topic}_result.md",
+        },
+    )
+    if not inherited_ok:
+        return False, inherited_detail
     index_content = _read_text(project_root, os.path.join("qa", "index.md"))
     index_links = set(re.findall(r"\[[^\]]+\]\((?:\./)?([^)]*_plan\.md)\)", index_content))
 
@@ -397,7 +555,7 @@ def validate_test_plan_documents(
                 return False, f"{test_rel_path} 缺少“{heading}”"
         if f"../acceptance/{topic}_plan.md" not in test_content:
             return False, f"{test_rel_path} 缺少上游验收计划链接"
-        if "../plan/index.md" not in test_content:
+        if "../impl/index.md" not in test_content:
             return False, f"{test_rel_path} 缺少下游实施计划链接"
         if f"./{topic}_result.md" not in test_content:
             return False, f"{test_rel_path} 缺少下游测试结果链接"
