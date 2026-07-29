@@ -1,15 +1,20 @@
 import os
 import re
+import shlex
 
 from .state import load_state
+from .test_mapping import (
+    automated_topics,
+    automated_test_items,
+    parse_test_plan_items,
+)
 from .traceability import validate_structure as validate_traceability_structure
 from .topic_relations import relation_signature, read_topic_index
-from .verification import compute_file_hashes
+from .verification import compute_code_snapshot_hash, compute_file_hashes
 
 
 PROJECT_INIT_EVIDENCE_PATH = os.path.join("spec", "project_design_init_evidence.md")
 TRACEABILITY_PATH = "traceability.md"
-FINAL_REGRESSION_RESULT_PATH = os.path.join("qa", "final_regression_result.md")
 BUG_FILENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}-.+\.md$")
 ACCEPTANCE_CRITERION_RE = re.compile(r"^###\s+(AC-\d{2,})：?.*$", re.MULTILINE)
 ACCEPTANCE_PLAN_SECTIONS = [
@@ -27,9 +32,6 @@ TEST_PLAN_SECTIONS = [
     "4. 未决测试条件",
     "5. 上下游文档",
 ]
-TEST_ITEM_LINK_RE = re.compile(
-    r"\[(TC-\d{2,})\s+([^\]]+)\]\(#(tc-\d{2,})\)"
-)
 CODE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".java", ".kt", ".kts",
     ".py", ".pyi", ".go", ".rs", ".swift", ".m", ".mm", ".js", ".jsx",
@@ -54,6 +56,19 @@ def _section(content: str, heading: str) -> str | None:
         re.MULTILINE | re.DOTALL,
     )
     return match.group(1).strip() if match else None
+
+
+def _acceptance_criterion_sections(content: str) -> list[tuple[str, str]]:
+    """拆出“验收条件”章节中的每条 AC，供固定字段校验。"""
+    criteria_content = _section(content, "4. 验收条件")
+    if criteria_content is None:
+        return []
+    matches = list(ACCEPTANCE_CRITERION_RE.finditer(criteria_content))
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(criteria_content)
+        sections.append((match.group(1), criteria_content[match.end() : end].strip()))
+    return sections
 
 
 def _workflow_section(content: str, workflow_id: str) -> str | None:
@@ -327,11 +342,19 @@ def validate_acceptance_plan_documents(
             if _section(content, heading) is None:
                 return (False, f"{rel_path} 缺少“{heading}”")
 
-        criterion_ids = ACCEPTANCE_CRITERION_RE.findall(content)
+        criterion_sections = _acceptance_criterion_sections(content)
+        criterion_ids = [criterion_id for criterion_id, _ in criterion_sections]
         if not criterion_ids:
             return (False, f"{rel_path} 至少需要一条 AC-01 形式的验收条件")
         if len(criterion_ids) != len(set(criterion_ids)):
             return (False, f"{rel_path} 存在重复验收条件编号")
+        for criterion_id, criterion_content in criterion_sections:
+            for label in ("条件与触发", "预期结果", "产品设计依据"):
+                if not _has_real_text(_field(criterion_content, label)):
+                    return (False, f"{rel_path} 的 {criterion_id} 缺少具体“{label}”")
+            product_basis = _field(criterion_content, "产品设计依据") or ""
+            if re.search(r"\[[^\]]+\]\([^)]+\)", product_basis) is None:
+                return (False, f"{rel_path} 的 {criterion_id} 产品设计依据必须是可打开的链接")
         if "../traceability.md" not in content:
             return (False, f"{rel_path} 的上下游文档没有链接 ../traceability.md")
         if f"../qa/{topic}_plan.md" not in content:
@@ -371,6 +394,7 @@ def _validate_topic_index_rows(
     relative_path: str,
     expected_headers: list[str],
     expected_links: dict[str, str],
+    allowed_text_values: dict[str, set[str]] | None = None,
 ) -> tuple[bool, str, list]:
     """校验主题索引的主题集合、顺序、链接和前置关系。"""
 
@@ -380,6 +404,7 @@ def _validate_topic_index_rows(
             relative_path,
             workflow_id,
             expected_headers,
+            allowed_text_values,
         )
     except ValueError as exc:
         return False, str(exc), []
@@ -468,6 +493,7 @@ def validate_inherited_topic_index(
     relative_path: str,
     expected_headers: list[str],
     expected_links: dict[str, str],
+    allowed_text_values: dict[str, set[str]] | None = None,
 ) -> tuple[bool, str]:
     """校验 qa/ 或 impl/ 索引是否继承验收索引的主题关系。"""
 
@@ -491,6 +517,7 @@ def validate_inherited_topic_index(
         relative_path,
         expected_headers,
         expected_links,
+        allowed_text_values,
     )
     if not target_ok:
         return False, target_detail
@@ -526,13 +553,21 @@ def validate_test_plan_documents(
         {
             "验收计划": "../acceptance/{topic}_plan.md",
             "测试计划": "./{topic}_plan.md",
-            "测试结果": "./{topic}_result.md",
         },
+        {"测试结果": {"无自动化测试项"}},
     )
     if not inherited_ok:
         return False, inherited_detail
     index_content = _read_text(project_root, os.path.join("qa", "index.md"))
     index_links = set(re.findall(r"\[[^\]]+\]\((?:\./)?([^)]*_plan\.md)\)", index_content))
+    index_relations = read_topic_index(
+        project_root,
+        os.path.join("qa", "index.md"),
+        workflow_id,
+        ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
+        {"测试结果": {"无自动化测试项"}},
+    )
+    relation_by_topic = {relation.topic: relation for relation in index_relations}
 
     total_criteria = 0
     total_test_items = 0
@@ -557,8 +592,6 @@ def validate_test_plan_documents(
             return False, f"{test_rel_path} 缺少上游验收计划链接"
         if "../impl/index.md" not in test_content:
             return False, f"{test_rel_path} 缺少下游实施计划链接"
-        if f"./{topic}_result.md" not in test_content:
-            return False, f"{test_rel_path} 缺少下游测试结果链接"
         if re.search(r"测试(?:结果|状态)\s*[：:]\s*(?:通过|失败)", test_content):
             return False, f"{test_rel_path} 不能提前填写测试通过或失败"
 
@@ -566,33 +599,35 @@ def validate_test_plan_documents(
         if not criterion_ids:
             return False, f"{acceptance_rel_path} 没有可覆盖的验收条件"
         coverage = _section(test_content, "1. 验收条件覆盖") or ""
-        for column in ("验收条件链接", "测试项", "验证方向", "预期观察结果", "证据要求"):
-            if column not in coverage:
-                return False, f"{test_rel_path} 的验收条件覆盖缺少“{column}”列"
-        test_items = TEST_ITEM_LINK_RE.findall(coverage)
-        if not test_items:
-            return False, f"{test_rel_path} 没有带编号、名称和锚点的测试项"
-        for test_id, test_name, anchor_id in test_items:
-            if test_id.lower() != anchor_id.lower():
-                return False, f"{test_rel_path} 的测试项 {test_id} 锚点必须是 #{test_id.lower()}"
-            if not _has_real_text(test_name):
-                return False, f"{test_rel_path} 的测试项 {test_id} 缺少直白名称"
-            if f'id="{anchor_id.lower()}"' not in coverage:
-                return False, f"{test_rel_path} 的测试项 {test_id} 缺少可跳转锚点"
+        try:
+            test_items = parse_test_plan_items(project_root, topic)
+        except ValueError as exc:
+            return False, str(exc)
+        expected_result_cell = (
+            f"./{topic}_result.md"
+            if any(item.requires_test_code for item in test_items)
+            else "无自动化测试项"
+        )
+        if any(item.requires_test_code for item in test_items):
+            if f"./{topic}_result.md" not in test_content:
+                return False, f"{test_rel_path} 缺少下游测试结果链接"
+        elif "无自动化测试结果，转主题验收" not in test_content:
+            return False, f"{test_rel_path} 是纯人工验收主题，必须写“无自动化测试结果，转主题验收”"
+        actual_result_cell = relation_by_topic[topic].links.get("测试结果")
+        if actual_result_cell != expected_result_cell:
+            return (
+                False,
+                f"qa/index.md 主题“{topic}”的测试结果位置应为 {expected_result_cell}",
+            )
         for criterion_id in criterion_ids:
-            criterion_lines = [
-                line for line in coverage.splitlines()
-                if criterion_id in line
+            criterion_items = [
+                item for item in test_items if item.criterion_id == criterion_id
             ]
-            if not criterion_lines:
+            if not criterion_items:
                 return False, f"{test_rel_path} 没有覆盖 {criterion_id}"
-            if not any(
-                f"../acceptance/{topic}_plan.md#" in line
-                for line in criterion_lines
-            ):
+            criterion_lines = [line for line in coverage.splitlines() if criterion_id in line]
+            if not any(f"../acceptance/{topic}_plan.md#" in line for line in criterion_lines):
                 return False, f"{test_rel_path} 的 {criterion_id} 没有链接到验收计划具体位置"
-            if not any(TEST_ITEM_LINK_RE.search(line) for line in criterion_lines):
-                return False, f"{test_rel_path} 的 {criterion_id} 没有关联测试项"
         total_criteria += len(criterion_ids)
         total_test_items += len(test_items)
 
@@ -619,55 +654,196 @@ def _validate_topic_result_file(
     return True, ""
 
 
-def validate_topic_execution_results(
+def _test_result_sections(content: str) -> dict[str, str]:
+    result_content = _section(content, "3. 测试项结果")
+    if result_content is None:
+        return {}
+    matches = list(
+        re.finditer(
+            r"^###\s+(TC-\d{2,})[：:].*$",
+            result_content,
+            re.MULTILINE,
+        )
+    )
+    sections: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(result_content)
+        sections[match.group(1)] = result_content[match.end() : end].strip()
+    return sections
+
+
+def _validate_topic_test_execution_result(
+    project_root: str,
+    workflow_id: str,
+    topic: str,
+    items,
+    tasks,
+) -> tuple[bool, str]:
+    rel_path = os.path.join("qa", f"{topic}_result.md")
+    full_path = os.path.join(project_root, rel_path)
+    if not os.path.isfile(full_path):
+        return False, f"{rel_path} 不存在"
+    content = _read_text(project_root, rel_path)
+    if _field(content, "工作流编号") != workflow_id:
+        return False, f"{rel_path} 的工作流编号与当前工作流不一致"
+    if _field(content, "验收主题") != topic:
+        return False, f"{rel_path} 的验收主题必须是“{topic}”"
+    if _field(content, "自动化测试结果") != "通过":
+        return False, f"{rel_path} 必须明确写“自动化测试结果：通过”"
+
+    all_plan_items = parse_test_plan_items(project_root, topic)
+    needs_manual = any(item.test_method != "自动化测试" for item in all_plan_items)
+    expected_manual_status = "待主题验收" if needs_manual else "无需人工验收"
+    if _field(content, "人工验收状态") != expected_manual_status:
+        return False, f"{rel_path} 的人工验收状态必须是“{expected_manual_status}”"
+    if needs_manual and _section(content, "4. 人工验收交接") in {None, "", "无需人工验收"}:
+        return False, f"{rel_path} 有人工验收内容，但缺少具体人工验收交接"
+
+    sections = _test_result_sections(content)
+    expected_ids = {item.test_id for item in items}
+    if set(sections) != expected_ids:
+        return False, f"{rel_path} 的测试项结果必须正好覆盖 {sorted(expected_ids)}"
+
+    for item in items:
+        task = tasks.get(item.test_id)
+        if task is None:
+            return False, f"{topic} / {item.test_id} 没有登记测试任务"
+        record = task.current_record
+        if task.status != "passed" or record is None:
+            return False, f"{topic} / {item.test_id} 没有当前有效的通过记录"
+        if record.status != "passed" or record.exit_code != 0:
+            return False, f"{topic} / {item.test_id} 的当前执行记录不是退出码 0 的通过状态"
+        if record.command != task.command:
+            return False, f"{topic} / {item.test_id} 的执行命令和登记命令不一致"
+        if set(record.test_entries) != set(task.test_entries):
+            return False, f"{topic} / {item.test_id} 的执行入口和登记入口不一致"
+        if not record.code_snapshot_hash or not record.test_code_hash:
+            return False, f"{topic} / {item.test_id} 的执行记录没有绑定代码快照"
+
+        section = sections[item.test_id]
+        if item.criterion_id not in (_field(section, "对应验收条件") or ""):
+            return False, f"{rel_path} 的 {item.test_id} 没有对应 {item.criterion_id}"
+        if _field(section, "退出码") != "0":
+            return False, f"{rel_path} 的 {item.test_id} 必须写真实退出码 0"
+        if _field(section, "自动化测试结果") != "通过":
+            return False, f"{rel_path} 的 {item.test_id} 必须写“自动化测试结果：通过”"
+        command_text = _field(section, "执行命令") or ""
+        if command_text != shlex.join(task.command):
+            return False, f"{rel_path} 的 {item.test_id} 执行命令与程序记录不一致"
+        entry_text = _field(section, "测试入口") or ""
+        missing_entries = [entry for entry in task.test_entries if entry not in entry_text]
+        if missing_entries:
+            return False, f"{rel_path} 的 {item.test_id} 缺少测试入口: {missing_entries}"
+        if not _field(section, "实际结果"):
+            return False, f"{rel_path} 的 {item.test_id} 缺少实际结果"
+        if not _field(section, "证据"):
+            return False, f"{rel_path} 的 {item.test_id} 缺少可复核证据"
+    return True, ""
+
+
+def validate_test_execution_results(
     project_root: str,
     workflow_id: str,
     topics: list[str],
 ) -> tuple[bool, str]:
-    """主题执行阶段必须同时留下通过的测试结果和主题验收结果。"""
+    """测试执行阶段只校验主题测试结果，不能提前要求主题验收结果。"""
+    failures = []
+    try:
+        automated = automated_topics(project_root, topics)
+        automated_items = automated_test_items(project_root, topics)
+    except ValueError as exc:
+        return False, str(exc)
+    manual_only = [topic for topic in topics if topic not in automated]
+    if not automated:
+        return True, f"全部主题都没有自动化测试项，直接进入主题验收: {manual_only}"
+    state = load_state(project_root)
+    if state is None or state.workflow_id != workflow_id:
+        return False, "找不到当前工作流的测试执行状态"
+    stage_state = state.stages.get("test_execution")
+    if stage_state is None:
+        # 兼容旧的单元测试夹具和旧工作流快照；新的 test_execution 状态一旦存在，
+        # 必须严格检查当前执行记录，不能再只看文档里的“通过”。
+        legacy_failures = []
+        for topic in automated:
+            legacy_ok, legacy_detail = _validate_topic_result_file(
+                project_root,
+                os.path.join("qa", f"{topic}_result.md"),
+                workflow_id,
+                "测试结果",
+            )
+            if not legacy_ok:
+                legacy_failures.append(legacy_detail)
+        if legacy_failures:
+            return False, "；".join(legacy_failures)
+        return True, f"兼容旧状态：主题测试结果都明确通过: {automated}"
+    for topic in automated:
+        topic_items = [item for item in automated_items if item.topic == topic]
+        test_ok, test_detail = _validate_topic_test_execution_result(
+            project_root,
+            workflow_id,
+            topic,
+            topic_items,
+            stage_state.test_tasks.get(topic, {}),
+        )
+        if not test_ok:
+            failures.append(test_detail)
+    if failures:
+        return False, "；".join(failures)
+    if manual_only:
+        return (
+            True,
+            f"自动化主题测试结果都明确通过: {automated}；无自动化测试项: {manual_only}",
+        )
+    return True, f"全部主题测试执行记录和正式结果一致并明确通过: {automated}"
+
+
+def validate_topic_acceptance_results(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """主题验收阶段只校验主题验收结果，测试前置由调用方先检查。"""
     failures = []
     for topic in topics:
-        test_ok, test_detail = _validate_topic_result_file(
-            project_root,
-            os.path.join("qa", f"{topic}_result.md"),
-            workflow_id,
-            "测试结果",
-        )
         acceptance_ok, acceptance_detail = _validate_topic_result_file(
             project_root,
             os.path.join("acceptance", f"{topic}_result.md"),
             workflow_id,
             "验收结果",
         )
-        if not test_ok:
-            failures.append(test_detail)
         if not acceptance_ok:
             failures.append(acceptance_detail)
     if failures:
         return False, "；".join(failures)
-    return True, f"全部主题测试结果和主题验收结果都明确通过: {topics}"
+    return True, f"全部主题验收结果都明确通过: {topics}"
 
 
-def validate_final_regression_result(
+def validate_topic_execution_results(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """兼容旧调用：按新顺序分别校验测试结果和主题验收结果。"""
+    test_ok, test_detail = validate_test_execution_results(project_root, workflow_id, topics)
+    if not test_ok:
+        return False, test_detail
+    return validate_topic_acceptance_results(project_root, workflow_id, topics)
+
+
+def validate_final_regression_state(
     project_root: str,
     workflow_id: str,
 ) -> tuple[bool, str]:
-    """最终全量回归只有明确记录当前工作流通过时才能过门禁。"""
-    full_path = os.path.join(project_root, FINAL_REGRESSION_RESULT_PATH)
-    if not os.path.isfile(full_path):
-        return (False, f"{FINAL_REGRESSION_RESULT_PATH} 不存在")
-
-    content = _read_text(project_root, FINAL_REGRESSION_RESULT_PATH)
-    if _field(content, "工作流编号") != workflow_id:
-        return (False, "最终全量回归结果中的工作流编号与当前工作流不一致")
-
-    status = _field(content, "回归状态")
-    if status != "通过":
-        return (
-            False,
-            "最终全量回归没有明确写“回归状态：通过”，不能进入整体验收",
-        )
-    return (True, "最终全量回归已明确通过")
+    """最终全量回归只接受程序实际执行统一测试入口后的通过状态。"""
+    state = load_state(project_root)
+    if state is None or state.workflow_id != workflow_id:
+        return (False, "找不到当前工作流状态，不能确认最终全量回归")
+    result = state.regression_test
+    if result.status != "passed":
+        return (False, f"最终全量回归状态不是通过：{result.status}")
+    if result.code_snapshot_hash != compute_code_snapshot_hash(project_root):
+        return (False, "最终全量回归完成后代码又发生变化，必须重新执行全量测试")
+    return (True, f"最终全量测试已通过统一入口：{result.command}")
 
 
 def validate_overall_acceptance_prerequisites(
@@ -678,15 +854,23 @@ def validate_overall_acceptance_prerequisites(
     """整体验收只校验前置结果，不读取或要求独立的整体结果文档。"""
     if not topics:
         return (False, "当前工作流没有验收主题，不能进行整体验收")
-    topic_ok, topic_detail = validate_topic_execution_results(
+    test_ok, test_detail = validate_test_execution_results(
         project_root,
         workflow_id,
         topics,
     )
-    if not topic_ok:
-        return (False, f"主题验收尚未全部通过，不能进行整体验收: {topic_detail}")
+    if not test_ok:
+        return (False, f"主题测试尚未全部通过，不能进行整体验收: {test_detail}")
 
-    regression_ok, regression_detail = validate_final_regression_result(
+    acceptance_ok, acceptance_detail = validate_topic_acceptance_results(
+        project_root,
+        workflow_id,
+        topics,
+    )
+    if not acceptance_ok:
+        return (False, f"主题验收尚未全部通过，不能进行整体验收: {acceptance_detail}")
+
+    regression_ok, regression_detail = validate_final_regression_state(
         project_root,
         workflow_id,
     )

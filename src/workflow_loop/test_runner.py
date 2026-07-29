@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import dataclass
 
 from .project import DEFAULT_TEST_ENTRY, load_project
-from .state import TestBaselineState, WorkflowState, now_iso
+from .state import RegressionTestState, TestBaselineState, WorkflowState, now_iso
 from .verification import compute_code_snapshot_hash
 
 
@@ -249,4 +249,100 @@ def baseline_journal_fields(workflow_state: WorkflowState) -> dict:
         "exit_code": baseline.exit_code,
         "code_snapshot_hash": baseline.code_snapshot_hash,
         "output_tail": baseline.output_tail,
+    }
+
+
+def run_final_regression(project_root: str, workflow_state: WorkflowState) -> tuple[bool, str]:
+    """执行最终全量测试入口，不复用修改前基线。"""
+
+    current_snapshot = compute_code_snapshot_hash(project_root)
+    project = load_project(project_root)
+    test_entry = (project.test_entry if project is not None else DEFAULT_TEST_ENTRY).strip()
+    if not test_entry:
+        test_entry = DEFAULT_TEST_ENTRY
+    started_at = now_iso()
+
+    try:
+        command_parts = shlex.split(test_entry)
+    except ValueError as exc:
+        command_parts = []
+        parse_error = f"统一测试入口配置无法解析: {exc}"
+    else:
+        parse_error = ""
+
+    status = "not_run"
+    exit_code = None
+    output_tail = ""
+    if parse_error:
+        status = "unavailable"
+        output_tail = parse_error
+    elif not command_parts:
+        status = "unavailable"
+        output_tail = "统一测试入口为空"
+    else:
+        entry_path = (
+            os.path.join(project_root, command_parts[0])
+            if "/" in command_parts[0]
+            else None
+        )
+        if entry_path is not None and not os.path.isfile(entry_path):
+            status = "unavailable"
+            output_tail = f"找不到统一测试入口: {command_parts[0]}"
+        elif entry_path is not None and not os.access(entry_path, os.X_OK):
+            status = "unavailable"
+            output_tail = f"统一测试入口没有执行权限: {command_parts[0]}"
+        else:
+            try:
+                completed = subprocess.run(
+                    command_parts,
+                    cwd=project_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=TEST_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                status = "passed" if completed.returncode == 0 else "failed"
+                exit_code = completed.returncode
+                output_tail = _output_tail(completed.stdout, completed.stderr)
+            except subprocess.TimeoutExpired as exc:
+                status = "failed"
+                output_tail = (
+                    f"运行超过 {TEST_TIMEOUT_SECONDS} 秒，已终止。\n"
+                    f"{_output_tail(_as_text(exc.stdout), _as_text(exc.stderr))}"
+                ).strip()
+            except OSError as exc:
+                status = "unavailable"
+                output_tail = f"启动统一测试入口失败: {exc}"
+
+    workflow_state.regression_test = RegressionTestState(
+        entry=test_entry,
+        command=test_entry,
+        started_at=started_at,
+        finished_at=now_iso(),
+        status=status,
+        exit_code=exit_code,
+        code_snapshot_hash=current_snapshot,
+        output_tail=output_tail,
+    )
+    if status == "passed":
+        return True, f"最终全量测试通过: {test_entry}；退出码 0"
+    return False, (
+        f"最终全量测试未通过: {test_entry}；状态 {status}；"
+        f"退出码 {exit_code if exit_code is not None else '无'}；输出摘要: {output_tail}"
+    )
+
+
+def regression_journal_fields(workflow_state: WorkflowState) -> dict:
+    """返回最终回归状态，供 journal 记录。"""
+
+    result = workflow_state.regression_test
+    return {
+        "entry": result.entry,
+        "command": result.command,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
+        "status": result.status,
+        "exit_code": result.exit_code,
+        "code_snapshot_hash": result.code_snapshot_hash,
+        "output_tail": result.output_tail,
     }

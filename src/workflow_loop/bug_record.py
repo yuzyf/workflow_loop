@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .state import load_state
+
 
 BUG_DIR = "bug"
 BUG_INDEX = "bug/index.md"
@@ -14,8 +16,6 @@ RESULT_SECTION_RE = re.compile(
     r"^##\s+8\.\s*修复与验收结果\s*$\n(.*?)(?=^##\s+|\Z)",
     re.MULTILINE | re.DOTALL,
 )
-REGRESSION_WORKFLOW_RE = WORKFLOW_RE
-REGRESSION_STATUS_RE = re.compile(r"^-\s*回归状态：\s*(.+?)\s*$", re.MULTILINE)
 
 
 def _records_for_workflow(project_root: str, workflow_id: str, topics: list[str]):
@@ -153,24 +153,18 @@ def record_regression_failure(project_root: str, workflow_id: str, topics: list[
         stage_label="最终全量回归结果",
         status="回归失败，重新处理中",
         details=[
-            "- 回归结果：[最终全量回归](../qa/final_regression_result.md)",
-            "- 处理要求：修复后重新执行主题执行、最终全量回归和整体验收",
+            "- 回归结果：统一测试入口执行失败，详情见当前工作流 state.json 和 journal",
+            "- 处理要求：修复后重新执行测试代码、主题测试、主题验收、最终全量回归和整体验收",
         ],
     )
 
 
 def has_explicit_regression_failure(project_root: str, workflow_id: str) -> bool:
-    path = Path(project_root) / "qa" / "final_regression_result.md"
-    if not path.is_file():
-        return False
-    content = path.read_text(encoding="utf-8")
-    workflow_match = REGRESSION_WORKFLOW_RE.search(content)
-    status_match = REGRESSION_STATUS_RE.search(content)
+    state = load_state(project_root)
     return (
-        workflow_match is not None
-        and workflow_match.group(1).strip() == workflow_id
-        and status_match is not None
-        and status_match.group(1).strip() == "失败"
+        state is not None
+        and state.workflow_id == workflow_id
+        and state.regression_test.status == "failed"
     )
 
 
@@ -182,7 +176,7 @@ def record_overall_acceptance_pass(project_root: str, workflow_id: str, topics: 
         stage_label="整体验收确认",
         status="已修复并验收",
         details=[
-            "- 最终全量回归：[回归结果](../qa/final_regression_result.md)",
+            "- 最终全量回归：统一测试入口已通过，详情见当前工作流 state.json 和 journal",
             "- 整体验收：用户已确认",
         ],
     )

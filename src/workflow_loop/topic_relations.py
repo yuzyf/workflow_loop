@@ -41,7 +41,9 @@ def _table_cells(line: str) -> list[str] | None:
     return cells
 
 
-def _link_path(cell: str) -> str:
+def _link_path(cell: str, allowed_text: set[str] | None = None) -> str:
+    if allowed_text is not None and cell.strip() in allowed_text:
+        return cell.strip()
     match = re.fullmatch(r"\[[^\]]+\]\(([^)]+)\)", cell.strip())
     if match is None:
         raise ValueError(f"索引单元格不是单一 Markdown 链接: {cell}")
@@ -63,6 +65,7 @@ def read_topic_index(
     relative_path: str,
     workflow_id: str,
     expected_headers: list[str] | None = None,
+    allowed_text_values: dict[str, set[str]] | None = None,
 ) -> list[TopicRelation]:
     """读取一个主题索引，返回按展示顺序排列的关系。"""
 
@@ -97,8 +100,9 @@ def read_topic_index(
         except ValueError as exc:
             raise ValueError(f"{relative_path} 展示顺序必须是整数: {cells[0]}") from exc
 
+        allowed_values = allowed_text_values or {}
         link_cells = {
-            header: _link_path(cells[index])
+            header: _link_path(cells[index], allowed_values.get(header))
             for index, header in enumerate(headers[3:], start=3)
         }
         plan_path = link_cells.get("验收计划")
@@ -108,6 +112,11 @@ def read_topic_index(
         if plan_match is None:
             raise ValueError(f"{relative_path} 验收计划链接必须指向主题的 *_plan.md 文件")
         topic = plan_match.group(1)
+        displayed_topic = cells[1].strip()
+        if displayed_topic != topic:
+            raise ValueError(
+                f"{relative_path} 显示的验收主题“{displayed_topic}”与验收计划链接“{topic}”不一致"
+            )
         relations.append(
             TopicRelation(
                 order=order,

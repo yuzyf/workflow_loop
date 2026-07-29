@@ -511,6 +511,16 @@ def test_status_refreshes_acceptance_plan_artifact_paths_without_stage_order_cha
 
 
 def test_acceptance_plan_confirmation_records_topics_and_project_history(tmp_path):
+    """Workflow-Test
+    主题：验收计划按用户需求生成可判断完成条件
+    测试项：TC-01 主题确认后才登记验收主题
+    验收条件：AC-01 验收主题在生成主题文档前已经完整确认
+    测试方式：自动化测试
+    测试层级：命令测试
+    测试目标：用户确认验收计划后，当前主题才写入工作流状态和项目主题历史
+    测试入口：tests/test_commands.py::test_acceptance_plan_confirmation_records_topics_and_project_history
+    代码入口：workflow gate acceptance_plan --confirmed 调用 src/workflow_loop/cli.py 的 cmd_gate()
+    """
     _advance_to_spike(tmp_path)
     _run(["gate", "spike", "--skip"], str(tmp_path))
     with open(os.path.join(str(tmp_path), ".workflow_loop", "state.json")) as f:
@@ -593,9 +603,9 @@ def test_test_plan_gate_runs_and_records_unified_test_entry(tmp_path):
 
 ## 1. 验收条件覆盖
 
-| 验收条件链接 | 测试项 | 验证方向 | 预期观察结果 | 证据要求 |
-|---|---|---|---|---|
-| [AC-01：上传完成](../acceptance/上传文件_plan.md#ac-01) | <a id="tc-01"></a>[TC-01 验证上传完成](#tc-01) | 检查上传流程 | 观察到上传完成 | 保留执行证据 |
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
+|---|---|---|---|---|---|---|
+| [AC-01：上传完成](../acceptance/上传文件_plan.md#ac-01) | <a id="tc-01"></a>[TC-01 验证上传完成](#tc-01) | 无 | 自动化测试 | 检查上传流程 | 观察到上传完成 | 保留执行证据 |
 
 ## 2. 针对性回归范围
 
@@ -693,6 +703,218 @@ def test_entering_spike_records_product_and_code_design_baseline(tmp_path):
         "spec/feature_example.md",
         "spec/product.md",
     ]
+
+
+def test_impl_discuss_done_requires_loading_impl_materials_first(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "impl"
+    state["stages"]["impl"]["status"] = "in_progress"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, _ = _run(["gate", "impl", "--discuss-done"], str(tmp_path))
+
+    assert code == 0
+    assert "还没有通过 workflow discuss 加载实施阶段的全部材料" in out
+    assert "先调 `workflow discuss`" in out
+
+
+def test_test_code_discuss_loads_workflow_and_code_development_standards(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "test_code"
+    state["stages"]["test_code"]["status"] = "in_progress"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, _ = _run(["gate", "test_code", "--discuss-done"], str(tmp_path))
+    assert code == 0
+    assert "还没有通过 workflow discuss 加载测试代码阶段的流程规范和代码开发规范" in out
+
+    code, out, err = _run(["discuss"], str(tmp_path))
+    assert code == 0, f"discuss failed: {out} {err}"
+    assert "【流程规范】" in out
+    assert "# 测试代码阶段工作规范" in out
+    assert "【代码开发规范: Standardized_Repository/qa/test_code_implementation.md】" in out
+    assert "# 测试代码开发规范" in out
+
+    code, out, err = _run(["gate", "test_code", "--discuss-done"], str(tmp_path))
+    assert code == 0, f"test_code discuss gate failed: {out} {err}"
+    assert "test_code 讨论完毕" in out
+
+
+def test_impl_discuss_done_accepts_legacy_material_load_record_for_current_workflow(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "impl"
+    state["stages"]["impl"]["status"] = "in_progress"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    journal_path = tmp_path / ".workflow_loop" / "journal.jsonl"
+    legacy_entry = {
+        "ts": state["started_at"],
+        "action": "提示词加载",
+        "actor": "workflow.py",
+        "stage": "impl",
+        "prompt_doc": "Template_Repository/impl/impl.md",
+        "standard_doc": "Standardized_Repository/impl/impl.md",
+        "additional_standard_docs": [
+            "Standardized_Repository/impl/code_implementation.md"
+        ],
+    }
+    with journal_path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(legacy_entry) + "\n")
+
+    code, out, _ = _run(["gate", "impl", "--discuss-done"], str(tmp_path))
+
+    assert code == 0
+    assert "还没有通过 workflow discuss 加载实施阶段的全部材料" not in out
+    assert "当前工作流还没有确认验收主题" in out
+
+
+def test_impl_rebaseline_requires_materials_and_records_current_code(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "impl"
+    state["stages"]["impl"]["status"] = "in_progress"
+    state["stages"]["impl"]["code_baseline_hash"] = "old-baseline"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, _ = _run(["gate", "impl", "--rebaseline"], str(tmp_path))
+    assert code == 0
+    assert "必须先通过 workflow discuss" in out
+
+    _run(["discuss"], str(tmp_path))
+    code, out, err = _run(["gate", "impl", "--rebaseline"], str(tmp_path))
+    assert code == 0, f"rebaseline failed: {out} {err}"
+    assert "实施前代码基线已重设" in out
+
+    updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated_state["stages"]["impl"]["code_baseline_hash"] != "old-baseline"
+    journal = [
+        json.loads(line)
+        for line in (tmp_path / ".workflow_loop" / "journal.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert any(
+        entry.get("action") == "实施代码基线重设"
+        and entry.get("workflow_id") == updated_state["workflow_id"]
+        for entry in journal
+    )
+
+
+def test_impl_accept_existing_code_records_hash_and_allows_unchanged_code(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "impl"
+    state["stages"]["impl"]["status"] = "in_progress"
+    state["stages"]["impl"]["gate"]["discussion_complete"] = True
+    state["stages"]["impl"]["code_baseline_hash"] = "old-baseline"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    # 该测试只验证状态命令分支；完整实施文档由已有门禁测试覆盖。
+    journal_path = tmp_path / ".workflow_loop" / "journal.jsonl"
+    journal_path.write_text("", encoding="utf-8")
+
+    code, out, _ = _run(["gate", "impl", "--accept-existing-code"], str(tmp_path))
+
+    assert code == 0
+    assert "既有代码确认失败" in out
+
+
+def test_test_prepare_requires_current_test_execution_materials(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "test_execution"
+    state["stages"]["test_execution"]["status"] = "in_progress"
+    state["stages"]["test_execution"]["discussion_material_hash"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, err = _run(
+        [
+            "test",
+            "prepare",
+            "--topic",
+            "上传文件",
+            "--tc",
+            "TC-01",
+            "--",
+            "pytest",
+        ],
+        str(tmp_path),
+    )
+
+    assert code == 0, err
+    assert "还没有通过 workflow discuss 加载当前测试执行模板和规范" in out
+
+
+def test_workflow_return_clears_only_affected_topic_results_and_regression_state(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    workflow_id = json.loads(
+        (tmp_path / ".workflow_loop" / "state.json").read_text(encoding="utf-8")
+    )["workflow_id"]
+    topic = "上传文件"
+    _write_valid_acceptance_documents(tmp_path, workflow_id, [topic])
+    qa_result = tmp_path / "qa" / f"{topic}_result.md"
+    acceptance_result = tmp_path / "acceptance" / f"{topic}_result.md"
+    qa_result.parent.mkdir(exist_ok=True)
+    qa_result.write_text("old test result", encoding="utf-8")
+    acceptance_result.write_text("old acceptance result", encoding="utf-8")
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "topic_acceptance"
+    state["topics"] = [topic]
+    state["stages"]["topic_acceptance"]["status"] = "in_progress"
+    state["stages"]["test_execution"]["test_tasks"] = {
+        topic: {"TC-01": {"status": "passed", "current_record": {"status": "passed", "exit_code": 0}}}
+    }
+    state["verification"]["test_result_hash"] = "old-test-result"
+    state["verification"]["acceptance_result_hash"] = "old-acceptance-result"
+    state["verification"]["regression_test_result_hash"] = "old-regression"
+    state["regression_test"] = {"status": "passed", "exit_code": 0}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, err = _run(
+        [
+            "return",
+            "--to",
+            "test_code",
+            "--topic",
+            topic,
+            "--reason",
+            "测试代码错误，需要重写后重新执行",
+        ],
+        str(tmp_path),
+    )
+
+    assert code == 0, err
+    assert "工作流已退回" in out
+    updated = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated["current_stage"] == "test_code"
+    assert updated["stages"]["test_execution"]["test_tasks"] == {}
+    assert updated["regression_test"]["status"] == "not_run"
+    assert updated["verification"]["acceptance_result_hash"] is None
+    assert updated["verification"]["regression_test_result_hash"] is None
+    assert not qa_result.exists()
+    assert not acceptance_result.exists()
 
 
 def test_spike_discuss_prints_real_uncertainty_rules(tmp_path):

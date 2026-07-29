@@ -6,7 +6,9 @@ from .stages import (
     ImplStage,
     AcceptancePlanStage,
     TestPlanStage,
-    TopicExecutionStage,
+    TestCodeStage,
+    TestExecutionStage,
+    TopicAcceptanceStage,
     RegressionTestStage,
     OverallAcceptanceStage,
     UpdateCodeDesignStage,
@@ -18,10 +20,10 @@ from .stages.base import StageStrategy
 
 # from_scratch（从零做）的完整 stage 路径
 # 顺序固定：先产品设计与功能拆分、后初步架构（先定做什么，再定怎么搭）
-# 然后验证技术不确定性 → 验收计划 → 测试计划 → 实施/记录 → 主题测试/验收
+# 然后验证技术不确定性 → 验收计划 → 测试计划 → 实施/记录 → 写测试代码 → 执行测试 → 主题验收
 # → 最终全量回归 → 整体验收 → 详细架构收尾
-# 共享后半截：acceptance_plan → test_plan → impl → topic_execution
-# → regression_test → overall_acceptance → update_code_design
+# 共享后半截：acceptance_plan → test_plan → impl → test_code → test_execution
+# → topic_acceptance → regression_test → overall_acceptance → update_code_design
 FROM_SCRATCH_PATH = [
     # 产品设计阶段：产出 spec/product.md + spec/feature_*.md
     SpecStage,
@@ -36,8 +38,12 @@ FROM_SCRATCH_PATH = [
     TestPlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
-    # 按主题分别测试和验收；独立主题不互相等待
-    TopicExecutionStage,
+    # 按验收计划编写测试代码；本阶段不执行测试、不产出测试结果
+    TestCodeStage,
+    # 执行测试代码并记录主题测试结果
+    TestExecutionStage,
+    # 测试通过后，按主题验收计划核对用户结果
+    TopicAcceptanceStage,
     # 全部主题完成后，对合并代码执行最终全量回归
     RegressionTestStage,
     # 最终全量回归通过后，确认整个需求是否完成
@@ -64,8 +70,10 @@ PRODUCT_CHANGE_BASE = [
     TestPlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
-    # 按主题分别测试和验收
-    TopicExecutionStage,
+    # 先编写测试代码，再执行测试，再按主题验收
+    TestCodeStage,
+    TestExecutionStage,
+    TopicAcceptanceStage,
     # 最终全量回归
     RegressionTestStage,
     # 整体验收
@@ -89,8 +97,10 @@ BUGFIX_BASE = [
     TestPlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
-    # 按主题分别测试和验收
-    TopicExecutionStage,
+    # 先编写测试代码，再执行测试，再按主题验收
+    TestCodeStage,
+    TestExecutionStage,
+    TopicAcceptanceStage,
     # 最终全量回归
     RegressionTestStage,
     # 整体验收

@@ -7,23 +7,34 @@ from ..artifact_validation import (
     changed_stage_paths,
     validate_acceptance_plan_documents,
     validate_downstream_traceability,
-    validate_final_regression_result,
+    validate_final_regression_state,
     validate_inherited_topic_index,
     validate_overall_acceptance_prerequisites,
     validate_project_design_init_evidence,
     validate_reproduce_documents,
     validate_test_plan_documents,
-    validate_topic_execution_results,
+    validate_test_execution_results,
+    validate_topic_acceptance_results,
 )
 from ..spike_validation import validate_spike_stage
+from .. import test_execution as test_execution_mod
 from ..state import load_state
+from ..test_mapping import (
+    automated_test_items,
+    automated_topics,
+    validate_workflow_test_markers,
+)
 from ..topic import (
     candidate_topics,
     current_workflow_topics,
     list_acceptance_plan_topics,
     missing_topic_files,
 )
-from ..verification import compute_code_snapshot_hash
+from ..verification import (
+    compute_code_snapshot_hash,
+    compute_non_test_code_snapshot_hash,
+    compute_test_code_snapshot_hash,
+)
 from .base import StageStrategy, clean_spike_tmp
 
 
@@ -350,6 +361,9 @@ class ImplStage(StageStrategy):
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/impl/impl.md"
 
+    def additional_standard_doc_paths(self) -> list[str]:
+        return ["Standardized_Repository/impl/code_implementation.md"]
+
     def _validate_topic_documents(
         self,
         project_root: str,
@@ -447,6 +461,28 @@ class ImplStage(StageStrategy):
         normalized = re.sub(r"[\s`*_-]", "", content)
         return normalized not in {"暂无", "无"}
 
+    def validate_implementation_records(
+        self,
+        project_root: str,
+        workflow_state,
+    ) -> tuple[bool, str, list[str]]:
+        """只校验实施文档和追踪关系，不判断代码是否变化。"""
+        valid, detail, topics = self._validate_topic_documents(
+            project_root,
+            workflow_state,
+            require_execution_record=True,
+        )
+        if not valid:
+            return (False, detail, topics)
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            workflow_state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail, topics)
+        return (True, "实施文档和需求交付追踪关系完整", topics)
+
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
         # 第一道门确认的是全部实施前计划；此时不允许代码快照先发生变化。
         valid, detail, _ = self._validate_topic_documents(
@@ -460,7 +496,7 @@ class ImplStage(StageStrategy):
         stage_state = workflow_state.stages.get(self.name())
         if stage_state is None or stage_state.code_baseline_hash is None:
             return (False, "缺少进入 impl 时的代码基线，不能确认计划前没有修改代码")
-        current_hash = compute_code_snapshot_hash(project_root)
+        current_hash = compute_non_test_code_snapshot_hash(project_root)
         if current_hash != stage_state.code_baseline_hash:
             return (False, "实施计划确认前代码已经变化，不能通过 impl 的第一道门")
         return (True, "全部验收主题的实施前计划已就绪，代码尚未修改")
@@ -471,18 +507,18 @@ class ImplStage(StageStrategy):
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
-        valid, detail, topics = self._validate_topic_documents(
-            project_root,
-            state,
-            require_execution_record=True,
-        )
+        valid, detail, topics = self.validate_implementation_records(project_root, state)
         if not valid:
             return (False, detail)
 
         stage_state = state.stages.get(self.name())
         if stage_state is None or stage_state.code_baseline_hash is None:
             return (False, "缺少进入 impl 时的代码基线，不能确认实施代码变化")
-        current_hash = compute_code_snapshot_hash(project_root)
+        current_hash = compute_non_test_code_snapshot_hash(project_root)
+        if stage_state.existing_code_accepted_hash is not None:
+            if current_hash != stage_state.existing_code_accepted_hash:
+                return (False, "用户确认既有代码后代码又发生变化，不能通过实施门禁")
+            return (True, f"{len(topics)} 个验收主题的实施计划和实施记录完整，既有代码未发生变化")
         if current_hash == stage_state.code_baseline_hash:
             return (False, "实施代码没有相对计划确认时的代码基线发生变化")
 
@@ -503,8 +539,8 @@ class ImplStage(StageStrategy):
         )
 
 
-# 旧版独立测试 stage，保留用于读取历史状态；新顶层路径在 topic_execution 内执行主题测试。
-class TestStage(StageStrategy):
+# 旧测试阶段实现只保留给旧状态迁移参考；正式路径使用 TestExecutionStage。
+class _LegacyTestStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "test"
@@ -537,7 +573,7 @@ class TestStage(StageStrategy):
         # 最终全量回归有独立文件，不得冒充主题测试结果。
         result_files = [
             f for f in os.listdir(qa_dir)
-            if f.endswith("_result.md") and f != "final_regression_result.md"
+            if f.endswith("_result.md")
         ]
         # 没有任何 *_result.md → 判失败
         if not result_files:
@@ -554,8 +590,8 @@ class TestStage(StageStrategy):
         return "测试执行阶段：按照 qa/<topic>_plan.md 执行全部必要测试并记录证据，产出 qa/<topic>_result.md"
 
 
-# 旧版独立验收 stage，保留用于读取历史状态；新顶层路径在 topic_execution 内执行主题验收。
-class AcceptanceStage(StageStrategy):
+# 旧验收阶段实现只保留给旧状态迁移参考；正式路径使用 TopicAcceptanceStage。
+class _LegacyAcceptanceStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "acceptance"
@@ -604,8 +640,8 @@ class AcceptanceStage(StageStrategy):
         return "主题验收阶段：每个主题测试通过后，按照 acceptance/<topic>_plan.md 执行该主题验收，产出 acceptance/<topic>_result.md"
 
 
-class TopicExecutionStage(StageStrategy):
-    """统筹各主题分别实施、测试和验收；不强制所有主题走同一步。"""
+class _DeprecatedTopicExecutionStage(StageStrategy):
+    """旧状态兼容实现；不加入任何正式阶段路径。"""
 
     def name(self) -> str:
         return "topic_execution"
@@ -620,7 +656,7 @@ class TopicExecutionStage(StageStrategy):
         return None
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/execution/topic_execution.md"
+        return None
 
     def additional_doc_paths(self) -> list[tuple[str, str]]:
         return [
@@ -680,6 +716,216 @@ class TopicExecutionStage(StageStrategy):
         )
 
 
+def _test_code_paths(project_root: str) -> list[str]:
+    """找出项目中现有的测试代码路径，供 test_code 阶段建立变更基线。"""
+    code_suffixes = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".swift", ".ets"}
+    paths: list[str] = []
+    for root, dirs, files in os.walk(project_root):
+        dirs[:] = [
+            directory
+            for directory in dirs
+            if directory not in {".git", ".workflow_loop", "__pycache__", ".venv", "node_modules"}
+        ]
+        for filename in files:
+            relative_path = os.path.relpath(os.path.join(root, filename), project_root)
+            parts = relative_path.replace(os.sep, "/").split("/")
+            lowered = filename.lower()
+            if os.path.splitext(filename)[1].lower() not in code_suffixes:
+                continue
+            if (
+                "tests" in parts
+                or "test" in parts
+                or lowered.startswith("test_")
+                or lowered.endswith(("_test.py", ".test.js", ".test.ts", ".spec.js", ".spec.ts"))
+            ):
+                paths.append(relative_path)
+    return sorted(paths)
+
+
+# 测试代码编写阶段：调查真实代码并写测试代码；只做静态检查，不运行测试命令。
+class TestCodeStage(StageStrategy):
+    def name(self) -> str:
+        return "test_code"
+
+    def artifact_paths(self) -> list[str]:
+        # 不同语言和框架的测试目录不同；具体测试文件由真实代码调查决定。
+        return []
+
+    def role_doc_path(self) -> str | None:
+        return None
+
+    def prompt_doc_path(self) -> str | None:
+        return None
+
+    def standard_doc_path(self) -> str | None:
+        return "Standardized_Repository/qa/test_code.md"
+
+    def additional_standard_doc_paths(self) -> list[str]:
+        return ["Standardized_Repository/qa/test_code_implementation.md"]
+
+    def change_tracked_paths(self, project_root: str) -> list[str]:
+        return _test_code_paths(project_root)
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        stage_state = state.stages.get(self.name())
+        if stage_state is None or stage_state.test_code_baseline_hash is None:
+            return (False, "缺少进入 test_code 时的测试代码基线")
+        if stage_state.non_test_code_baseline_hash is None:
+            return (False, "缺少进入 test_code 时的产品代码基线，请重新完成 test_code 讨论门禁")
+        if compute_non_test_code_snapshot_hash(project_root) != stage_state.non_test_code_baseline_hash:
+            return (False, "test_code 阶段不能修改产品代码；产品代码变化应返回 impl")
+        topics = current_workflow_topics(project_root)
+        if not topics:
+            return (False, "当前工作流还没有确认验收主题")
+        try:
+            automated_items = automated_test_items(project_root, topics)
+        except ValueError as exc:
+            return (False, str(exc))
+        if (
+            automated_items
+            and compute_test_code_snapshot_hash(project_root)
+            == stage_state.test_code_baseline_hash
+        ):
+            return (False, "存在自动化测试项，但测试代码没有相对 test_code 开始时发生变化")
+        marker_ok, marker_detail = validate_workflow_test_markers(project_root, topics)
+        if not marker_ok:
+            return (False, marker_detail)
+        state_ok, state_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not state_ok:
+            return (False, state_detail)
+        if not automated_items:
+            return (True, f"{len(topics)} 个验收主题都没有自动化测试项，无需新增测试代码")
+        return (
+            True,
+            f"测试代码已覆盖 {len(automated_items)} 个自动化测试项；{marker_detail}",
+        )
+
+    def instruction(self) -> str:
+        return (
+            "测试代码阶段：先读取验收计划、测试计划、实施记录和真实代码，和用户确认每个测试项的代码落点；"
+            "再编写带 Workflow-Test 标识的测试代码。只允许静态检查、语法检查、类型检查和 lint，"
+            "不运行任何测试命令，不写 qa/<topic>_result.md，也不写主题验收结果"
+        )
+
+
+# 测试执行阶段：运行已写好的测试代码，并留下主题测试结果。
+class TestExecutionStage(StageStrategy):
+    def name(self) -> str:
+        return "test_execution"
+
+    def artifact_paths(self) -> list[str]:
+        return ["qa/"]
+
+    def role_doc_path(self) -> str | None:
+        return None
+
+    def prompt_doc_path(self) -> str | None:
+        return "Template_Repository/qa/test.md"
+
+    def standard_doc_path(self) -> str | None:
+        return "Standardized_Repository/qa/test.md"
+
+    def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
+        """第一道门只确认测试任务已经登记，不在这里执行测试。"""
+        return test_execution_mod.validate_prepared_tasks(project_root, workflow_state)
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        topics = current_workflow_topics(project_root)
+        if not topics:
+            return (False, "当前工作流还没有确认验收主题")
+        if state.verification.test_code_hash is None:
+            return (False, "缺少 test_code 确认后的测试代码哈希，不能执行正式测试")
+        if compute_test_code_snapshot_hash(project_root) != state.verification.test_code_hash:
+            return (False, "test_code 确认后测试代码或测试配置发生变化，必须返回 test_code")
+        try:
+            test_topics = automated_topics(project_root, topics)
+        except ValueError as exc:
+            return (False, str(exc))
+        missing = missing_topic_files(project_root, "qa", "_result.md", test_topics)
+        if missing:
+            return (False, f"缺少主题测试结果: {missing}；先执行测试并记录正式结果")
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
+        return validate_test_execution_results(project_root, state.workflow_id, topics)
+
+    def instruction(self) -> str:
+        return (
+            "测试执行阶段：先和用户逐项确认测试入口、前置测试项、真实命令、运行环境和超时时间；"
+            "确认后用 workflow test prepare 登记，再用 workflow test run 执行。"
+            "执行失败不生成正式 qa/<topic>_result.md，先定位问题并按规则返回对应阶段。"
+        )
+
+
+# 主题验收阶段：测试结果通过后，按验收条件核对用户结果。
+class TopicAcceptanceStage(StageStrategy):
+    def name(self) -> str:
+        return "topic_acceptance"
+
+    def artifact_paths(self) -> list[str]:
+        return ["acceptance/"]
+
+    def role_doc_path(self) -> str | None:
+        return None
+
+    def prompt_doc_path(self) -> str | None:
+        return "Template_Repository/acceptance/acceptance_result.md"
+
+    def standard_doc_path(self) -> str | None:
+        return "Standardized_Repository/acceptance/acceptance.md"
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        if state is None:
+            return (False, "找不到当前工作流状态")
+        topics = current_workflow_topics(project_root)
+        if not topics:
+            return (False, "当前工作流还没有确认验收主题")
+        test_ok, test_detail = validate_test_execution_results(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not test_ok:
+            return (False, f"主题测试未全部通过，不能开始主题验收: {test_detail}")
+        missing = missing_topic_files(project_root, "acceptance", "_result.md", topics)
+        if missing:
+            return (False, f"缺少主题验收结果: {missing}")
+        trace_ok, trace_detail = validate_downstream_traceability(
+            project_root,
+            state.workflow_id,
+            topics,
+        )
+        if not trace_ok:
+            return (False, trace_detail)
+        return validate_topic_acceptance_results(project_root, state.workflow_id, topics)
+
+    def instruction(self) -> str:
+        return (
+            "主题验收阶段：先确认对应主题的测试结果已经通过，再按 acceptance/<topic>_plan.md 逐条核对用户结果；"
+            "用户确认后产出 acceptance/<topic>_result.md，本阶段不修改验收条件"
+        )
+
+
+# 兼容旧代码导入；正式路径只使用 test_execution 和 topic_acceptance。
+TestStage = TestExecutionStage
+AcceptanceStage = TopicAcceptanceStage
+
+
 class RegressionTestStage(StageStrategy):
     """全部主题完成后，对合并后的完整代码执行最终全量回归。"""
 
@@ -687,13 +933,13 @@ class RegressionTestStage(StageStrategy):
         return "regression_test"
 
     def artifact_paths(self) -> list[str]:
-        return ["qa/final_regression_result.md"]
+        return []
 
     def role_doc_path(self) -> str | None:
         return None
 
     def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/qa/final_regression.md"
+        return None
 
     def standard_doc_path(self) -> str | None:
         return None
@@ -710,13 +956,12 @@ class RegressionTestStage(StageStrategy):
         )
         if not trace_ok:
             return (False, trace_detail)
-        return validate_final_regression_result(project_root, state.workflow_id)
+        return validate_final_regression_state(project_root, state.workflow_id)
 
     def instruction(self) -> str:
         return (
-            "最终全量回归阶段：全部主题完成后，对全部已合并代码运行全量回归；"
-            "产出 qa/final_regression_result.md，并明确写当前工作流编号和“回归状态：通过”。"
-            "未通过时门禁拒绝进入整体验收。"
+            "最终全量回归阶段：全部主题完成后，程序自动执行项目配置的统一测试入口；"
+            "退出码为 0 才算回归通过，状态写入 state.json、journal 和 traceability.md。"
         )
 
 

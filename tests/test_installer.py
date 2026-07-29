@@ -55,7 +55,9 @@ def test_install_project_copies_templates(tmp_path):
     assert os.path.exists(os.path.join(template_dir, "qa", "test_plan.md"))
     # 验证 qa/test.md 模板存在
     assert os.path.exists(os.path.join(template_dir, "qa", "test.md"))
-    assert os.path.exists(os.path.join(template_dir, "qa", "final_regression.md"))
+    # test_code 直接产出代码，没有 Markdown 产物模板。
+    assert not os.path.exists(os.path.join(template_dir, "qa", "test_code.md"))
+    assert not os.path.exists(os.path.join(template_dir, "qa", "final_regression.md"))
     assert not os.path.exists(os.path.join(template_dir, "acceptance", "overall_acceptance.md"))
     assert not os.path.exists(os.path.join(template_dir, "execution", "topic_execution.md"))
     # 验证 impl/impl.md 模板存在
@@ -186,6 +188,10 @@ def test_install_project_separates_acceptance_templates_and_code_gated_final_sta
     assert not os.path.exists(os.path.join(
         standardized_dir, "acceptance", "overall_acceptance.md",
     ))
+    assert os.path.exists(os.path.join(standardized_dir, "qa", "test_code.md"))
+    assert os.path.exists(os.path.join(
+        standardized_dir, "qa", "test_code_implementation.md",
+    ))
 
 
 def test_install_project_separates_acceptance_document_template_and_work_standard(tmp_path):
@@ -219,21 +225,28 @@ def test_install_project_separates_acceptance_document_template_and_work_standar
     ))
 
 
-def test_install_project_marks_undiscussed_stage_materials_as_pending(tmp_path):
+def test_install_project_installs_confirmed_test_execution_materials(tmp_path):
     install_project(str(tmp_path))
     workflow_dir = os.path.join(str(tmp_path), ".workflow_loop")
-    pending_paths = [
-        ("Template_Repository", "qa", "test.md"),
-        ("Template_Repository", "qa", "final_regression.md"),
-        ("Standardized_Repository", "qa", "test.md"),
-    ]
+    template_path = os.path.join(
+        workflow_dir, "Template_Repository", "qa", "test.md",
+    )
+    standard_path = os.path.join(
+        workflow_dir, "Standardized_Repository", "qa", "test.md",
+    )
+    with open(template_path) as f:
+        template = f.read()
+    with open(standard_path) as f:
+        standard = f.read()
 
-    for parts in pending_paths:
-        path = os.path.join(workflow_dir, *parts)
-        with open(path) as f:
-            content = f.read()
-        assert "待讨论" in content
-        assert "尚未与用户讨论" in content
+    assert "# 主题测试结果文档模板" in template
+    assert "自动化测试结果：通过" in template
+    assert "人工验收状态" in template
+    assert "# 主题测试执行阶段工作规范" in standard
+    assert "workflow test prepare" in standard
+    assert "workflow test run" in standard
+    assert "待讨论" not in template
+    assert "待讨论" not in standard
 
     # impl 是当前流程的正式模板，不能再被当成“尚未讨论”的占位文件。
     for parts in [

@@ -16,6 +16,7 @@ def test_create_project(tmp_path):
     # 验证 project_design_initialized 默认 False（未做过 project_design_init）
     assert project.project_design_initialized is False
     assert project.topic_history == []
+    assert project.test_parallelism == 2
     # 验证 installed_at 非空（写入时间戳）
     assert project.installed_at != ""
     # 拼出 project.json 的预期路径

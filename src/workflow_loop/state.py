@@ -22,6 +22,40 @@ class GateState:
     user_confirmed: bool = False
 
 
+@dataclass
+class TestExecutionRecord:
+    """一个测试项本次成功执行后的机器记录。
+
+    这里只保存程序判断“这次是否真的执行过”的事实，不保存完整终端输出。
+    可读的测试结论和证据由 qa/<topic>_result.md 记录。
+    """
+
+    test_entries: list[str] = field(default_factory=list)
+    command: list[str] = field(default_factory=list)
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_seconds: float | None = None
+    exit_code: int | None = None
+    status: str = "passed"
+    environment: dict[str, str] = field(default_factory=dict)
+    code_snapshot_hash: str | None = None
+    test_code_hash: str | None = None
+
+
+@dataclass
+class TestTaskState:
+    """测试执行前登记的一个测试项任务。"""
+
+    test_entries: list[str] = field(default_factory=list)
+    command: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    timeout_seconds: int = 600
+    status: str = "pending"
+    prepared_at: str | None = None
+    last_error: str | None = None
+    current_record: TestExecutionRecord | None = None
+
+
 # 单个 stage 的完整状态
 # 嵌套在 WorkflowState.stages 字典里，key 是 stage 名（如 "spec" / "impl"）
 @dataclass
@@ -38,6 +72,17 @@ class StageState:
     artifact_baseline_hashes: dict[str, str | None] = field(default_factory=dict)
     # impl 阶段进入时的代码快照哈希；用于阻止实施计划确认前修改代码
     code_baseline_hash: str | None = None
+    # test_code 阶段进入时的测试代码快照哈希；用于确认本阶段确实新增或修改了测试代码
+    test_code_baseline_hash: str | None = None
+    # test_code 阶段进入时的非测试代码快照哈希；用于阻止测试阶段偷偷修改产品代码
+    non_test_code_baseline_hash: str | None = None
+    # 用户确认代码在实施计划确认前已经存在时，保存被确认的代码快照哈希
+    existing_code_accepted_hash: str | None = None
+    # workflow discuss 读取的全局规范、阶段模板和补充规范的组合哈希。
+    # 材料变化后，旧的讨论确认自动失效，必须重新阅读后再过门禁。
+    discussion_material_hash: str | None = None
+    # test_execution 阶段的任务登记：第一层 key 是主题，第二层 key 是 TC 编号。
+    test_tasks: dict[str, dict[str, TestTaskState]] = field(default_factory=dict)
     # 该 stage 的 3 道闸状态，嵌套 dataclass
     gate: GateState = field(default_factory=GateState)
 
@@ -58,7 +103,7 @@ class ArchitectureState:
 @dataclass
 class VerificationState:
     # 实施代码 + impl/ 下全部实施记录的 SHA256 哈希
-    # 在 gate topic_execution --confirmed 时记录；进入最终全量回归和整体验收前检查
+    # 在 gate impl --confirmed 时记录；测试代码或测试结果变化不会改写它
     impl_hash: str | None = None
     # qa/<topic>_plan.md 内容的 SHA256 哈希
     # 在 gate test_plan --confirmed 时记录；变化时使主题执行、最终全量回归和整体验收失效
@@ -66,11 +111,17 @@ class VerificationState:
     # acceptance/index.md 和 acceptance/<topic>_plan.md 内容的 SHA256 哈希
     # 在 gate acceptance_plan --confirmed 时记录；变化时退回测试计划和后续阶段
     acceptance_plan_hash: str | None = None
+    # test_code 确认后的测试代码、测试配置和统一测试入口哈希
+    # 在 gate test_code --confirmed 时记录；变化时退回 test_code
+    test_code_hash: str | None = None
     # qa/<topic>_result.md 内容的 SHA256 哈希
-    # 在 gate topic_execution --confirmed 时记录；变化时使最终全量回归和整体验收失效
+    # 在 gate test_execution --confirmed 时记录；变化时使主题验收及后续阶段失效
     test_result_hash: str | None = None
-    # qa/final_regression_result.md 内容的 SHA256 哈希
-    # 在 gate regression_test --confirmed 时记录；变化时清零 overall_acceptance
+    # acceptance/<topic>_result.md 内容的 SHA256 哈希
+    # 在 gate topic_acceptance --confirmed 时记录；变化时使最终回归及后续阶段失效
+    acceptance_result_hash: str | None = None
+    # 最终回归执行状态的 SHA256 哈希
+    # 在 gate regression_test --confirmed 时记录；代码或状态变化时清零后续验收
     regression_test_result_hash: str | None = None
 
 
@@ -92,6 +143,26 @@ class TestBaselineState:
     # 执行时对应的代码快照哈希，用于判断是否可以复用结果
     code_snapshot_hash: str | None = None
     # 只保存输出末尾，避免 state.json 无限增大
+    output_tail: str = ""
+
+
+# 最终全量回归状态；由 regression_test 阶段自动执行项目统一测试入口写入。
+@dataclass
+class RegressionTestState:
+    # 项目配置中的统一测试入口
+    entry: str | None = None
+    # 实际执行的命令文本
+    command: str | None = None
+    # 开始和结束时间（ISO 8601 UTC）
+    started_at: str | None = None
+    finished_at: str | None = None
+    # not_run / passed / failed / unavailable
+    status: str = "not_run"
+    # 测试进程退出码；无法启动或超时时为空
+    exit_code: int | None = None
+    # 执行时对应的完整代码快照哈希
+    code_snapshot_hash: str | None = None
+    # 只保存输出末尾，完整输出由测试入口自己负责
     output_tail: str = ""
 
 
@@ -150,6 +221,8 @@ class WorkflowState:
     verification: VerificationState = field(default_factory=VerificationState)
     # 修改前全量测试基线，见 TestBaselineState
     test_baseline: TestBaselineState = field(default_factory=TestBaselineState)
+    # 最终全量回归状态，见 RegressionTestState
+    regression_test: RegressionTestState = field(default_factory=RegressionTestState)
     # 穿刺进入时的产品设计和代码设计基线
     spike_baseline: SpikeBaselineState = field(default_factory=SpikeBaselineState)
     # 自由扩展口子（hooks 等后面用，第一版为空）
@@ -169,6 +242,36 @@ def now_iso() -> str:
 # asdict 会递归把 dataclass 转成 dict，包括嵌套的 StageState 和 GateState
 def state_to_dict(state: WorkflowState) -> dict:
     return asdict(state)
+
+
+def _test_execution_record_from_dict(data: dict | None) -> TestExecutionRecord | None:
+    if not isinstance(data, dict):
+        return None
+    return TestExecutionRecord(
+        test_entries=data.get("test_entries", []),
+        command=data.get("command", []),
+        started_at=data.get("started_at"),
+        finished_at=data.get("finished_at"),
+        duration_seconds=data.get("duration_seconds"),
+        exit_code=data.get("exit_code"),
+        status=data.get("status", "passed"),
+        environment=data.get("environment", {}),
+        code_snapshot_hash=data.get("code_snapshot_hash"),
+        test_code_hash=data.get("test_code_hash"),
+    )
+
+
+def _test_task_from_dict(data: dict) -> TestTaskState:
+    return TestTaskState(
+        test_entries=data.get("test_entries", []),
+        command=data.get("command", []),
+        dependencies=data.get("dependencies", []),
+        timeout_seconds=data.get("timeout_seconds", 600),
+        status=data.get("status", "pending"),
+        prepared_at=data.get("prepared_at"),
+        last_error=data.get("last_error"),
+        current_record=_test_execution_record_from_dict(data.get("current_record")),
+    )
 
 
 # 从 dict 反序列化成 WorkflowState dataclass
@@ -193,6 +296,17 @@ def state_from_dict(data: dict) -> WorkflowState:
             artifact_baseline_captured_at=stage_data.get("artifact_baseline_captured_at"),
             artifact_baseline_hashes=stage_data.get("artifact_baseline_hashes", {}),
             code_baseline_hash=stage_data.get("code_baseline_hash"),
+            test_code_baseline_hash=stage_data.get("test_code_baseline_hash"),
+            non_test_code_baseline_hash=stage_data.get("non_test_code_baseline_hash"),
+            existing_code_accepted_hash=stage_data.get("existing_code_accepted_hash"),
+            discussion_material_hash=stage_data.get("discussion_material_hash"),
+            test_tasks={
+                topic: {
+                    test_id: _test_task_from_dict(task_data)
+                    for test_id, task_data in topic_tasks.items()
+                }
+                for topic, topic_tasks in stage_data.get("test_tasks", {}).items()
+            },
             gate=gate,
         )
     # 读 architecture 字段（架构门禁标记）
@@ -201,6 +315,8 @@ def state_from_dict(data: dict) -> WorkflowState:
     verification_data = data.get("verification", {})
     # 读 test_baseline 字段；旧 state.json 没有时按未执行处理
     test_baseline_data = data.get("test_baseline", {})
+    # 读 regression_test 字段；旧 state.json 没有时按未执行处理
+    regression_test_data = data.get("regression_test", {})
     # 读 spike_baseline 字段；旧 state.json 没有时按未记录处理
     spike_baseline_data = data.get("spike_baseline", {})
     # 兼容旧版单主题 state.json：没有 topics 时把 topic 转成单元素列表。
@@ -232,7 +348,9 @@ def state_from_dict(data: dict) -> WorkflowState:
             impl_hash=verification_data.get("impl_hash"),
             test_plan_hash=verification_data.get("test_plan_hash"),
             acceptance_plan_hash=verification_data.get("acceptance_plan_hash"),
+            test_code_hash=verification_data.get("test_code_hash"),
             test_result_hash=verification_data.get("test_result_hash"),
+            acceptance_result_hash=verification_data.get("acceptance_result_hash"),
             regression_test_result_hash=verification_data.get("regression_test_result_hash"),
         ),
         test_baseline=TestBaselineState(
@@ -244,6 +362,16 @@ def state_from_dict(data: dict) -> WorkflowState:
             exit_code=test_baseline_data.get("exit_code"),
             code_snapshot_hash=test_baseline_data.get("code_snapshot_hash"),
             output_tail=test_baseline_data.get("output_tail", ""),
+        ),
+        regression_test=RegressionTestState(
+            entry=regression_test_data.get("entry"),
+            command=regression_test_data.get("command"),
+            started_at=regression_test_data.get("started_at"),
+            finished_at=regression_test_data.get("finished_at"),
+            status=regression_test_data.get("status", "not_run"),
+            exit_code=regression_test_data.get("exit_code"),
+            code_snapshot_hash=regression_test_data.get("code_snapshot_hash"),
+            output_tail=regression_test_data.get("output_tail", ""),
         ),
         spike_baseline=SpikeBaselineState(
             captured_at=spike_baseline_data.get("captured_at"),

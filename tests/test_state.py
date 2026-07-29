@@ -3,7 +3,10 @@ import os
 
 from workflow_loop.state import (
     WorkflowState, StageState, GateState, ArchitectureState, VerificationState, SpikeBaselineState,
-    state_to_dict, state_from_dict, load_state, save_state, is_active_run, now_iso,
+    TestExecutionRecord as ExecutionRecord,
+    TestTaskState as ExecutionTask,
+    state_to_dict, state_from_dict, load_state, save_state,
+    is_active_run, now_iso,
 )
 
 
@@ -27,12 +30,35 @@ def test_state_round_trip(tmp_path):
                 gate=GateState(discussion_complete=True, code_validated=False, user_confirmed=False),
             ),
             "code_design": StageState(status="pending", artifact_paths=["spec/architecture_code_design.md"]),
+            "test_execution": StageState(
+                discussion_material_hash="materials-123",
+                test_tasks={
+                    "上传文件": {
+                        "TC-01": ExecutionTask(
+                            test_entries=["tests/test_upload.py::test_upload"],
+                            command=["pytest", "tests/test_upload.py::test_upload"],
+                            dependencies=[],
+                            timeout_seconds=30,
+                            status="passed",
+                            current_record=ExecutionRecord(
+                                test_entries=["tests/test_upload.py::test_upload"],
+                                command=["pytest", "tests/test_upload.py::test_upload"],
+                                exit_code=0,
+                                status="passed",
+                                code_snapshot_hash="code-123",
+                                test_code_hash="test-123",
+                            ),
+                        )
+                    }
+                },
+            ),
         },
         architecture=ArchitectureState(preliminary_done=False, detailed_done=False),
         verification=VerificationState(
             impl_hash=None,
             test_plan_hash=None,
             acceptance_plan_hash=None,
+            test_code_hash="test-code-123",
             test_result_hash=None,
             regression_test_result_hash="regression123",
         ),
@@ -67,12 +93,19 @@ def test_state_round_trip(tmp_path):
     assert loaded.stages["spec"].gate.discussion_complete is True
     assert loaded.stages["spec"].artifact_baseline_captured_at == "2026-07-20T03:47:30+00:00"
     assert loaded.stages["spec"].artifact_baseline_hashes == {"spec/product.md": None}
+    assert loaded.stages["spec"].existing_code_accepted_hash is None
+    test_task = loaded.stages["test_execution"].test_tasks["上传文件"]["TC-01"]
+    assert loaded.stages["test_execution"].discussion_material_hash == "materials-123"
+    assert test_task.command == ["pytest", "tests/test_upload.py::test_upload"]
+    assert test_task.current_record is not None
+    assert test_task.current_record.code_snapshot_hash == "code-123"
     # 验证嵌套 gate.code_validated 往返一致
     assert loaded.stages["spec"].gate.code_validated is False
     # 验证 architecture.preliminary_done 往返一致
     assert loaded.architecture.preliminary_done is False
     # 验证 verification.impl_hash 往返一致（None 不会被改成空字符串）
     assert loaded.verification.impl_hash is None
+    assert loaded.verification.test_code_hash == "test-code-123"
     assert loaded.verification.regression_test_result_hash == "regression123"
     # 验证穿刺设计基线往返一致
     assert loaded.spike_baseline.product_design_hash == "product123"
@@ -151,6 +184,7 @@ def test_full_schema_fields(tmp_path):
             impl_hash="abc123",
             test_plan_hash="def456",
             acceptance_plan_hash=None,
+            test_code_hash="test-code-789",
             test_result_hash=None,
             regression_test_result_hash="regression789",
         ),
@@ -191,6 +225,8 @@ def test_full_schema_fields(tmp_path):
     # 验证阶段产物基线字段存在，旧阶段未记录时使用空值
     assert data["stages"]["reproduce"]["artifact_baseline_captured_at"] is None
     assert data["stages"]["reproduce"]["artifact_baseline_hashes"] == {}
+    assert data["stages"]["reproduce"]["discussion_material_hash"] is None
+    assert data["stages"]["reproduce"]["test_tasks"] == {}
     # 验证 architecture.preliminary_done 子字段存在
     assert "preliminary_done" in data["architecture"]
     # 验证 architecture.detailed_done 子字段存在
@@ -199,6 +235,7 @@ def test_full_schema_fields(tmp_path):
     assert "impl_hash" in data["verification"]
     # 验证 verification.impl_hash 的值正确落盘
     assert data["verification"]["impl_hash"] == "abc123"
+    assert data["verification"]["test_code_hash"] == "test-code-789"
     assert data["verification"]["regression_test_result_hash"] == "regression789"
     # 验证穿刺基线字段正确落盘
     assert data["spike_baseline"]["product_design_hash"] == "product123"

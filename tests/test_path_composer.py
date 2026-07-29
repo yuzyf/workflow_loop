@@ -12,10 +12,10 @@ def test_from_scratch_path(tmp_path):
     stages = build_stage_path("from_scratch", str(tmp_path))
     # 提取 stage 名字列表
     names = [s.name() for s in stages]
-    # 验证阶段顺序：先验收计划、再测试计划、再实施计划，最后全量回归和整体验收
+    # 验证阶段顺序：先实施，再写测试代码、执行测试、主题验收，最后全量回归和整体验收
     assert names == [
         "spec", "code_design", "spike", "acceptance_plan",
-        "test_plan", "impl", "topic_execution",
+        "test_plan", "impl", "test_code", "test_execution", "topic_acceptance",
         "regression_test", "overall_acceptance", "update_code_design",
     ]
 
@@ -38,8 +38,8 @@ def test_product_change_with_uninitialized(tmp_path):
     assert names[-1] == "update_code_design"
     # 验证不包含 code_design（被 revise_code_design 替代）
     assert "code_design" not in names
-    # 验证总 stage 数为 11
-    assert len(names) == 11
+    # 验证总 stage 数为 13
+    assert len(names) == 13
 
 
 # 测试 product_change 意图在 project_design 已初始化时跳过 project_design_init
@@ -56,8 +56,8 @@ def test_product_change_with_initialized(tmp_path):
     assert "project_design_init" not in names
     # 验证仍包含 revise_code_design
     assert "revise_code_design" in names
-    # 验证总 stage 数为 10（比未初始化少 1 个）
-    assert len(names) == 10
+    # 验证总 stage 数为 12（比未初始化少 1 个）
+    assert len(names) == 12
 
 
 # 测试 bugfix 意图在 project_design 未初始化时的 stage 路径（含 project_design_init 前置）
@@ -77,8 +77,8 @@ def test_bugfix_with_uninitialized(tmp_path):
     assert names[3:6] == ["acceptance_plan", "test_plan", "impl"]
     # 验证末段 stage 是 update_code_design
     assert names[-1] == "update_code_design"
-    # 验证总 stage 数为 10
-    assert len(names) == 10
+    # 验证总 stage 数为 12
+    assert len(names) == 12
 
 
 # 测试 bugfix 意图在 project_design 已初始化时跳过 project_design_init
@@ -98,8 +98,8 @@ def test_bugfix_with_initialized(tmp_path):
     # 验证第 2 个 stage 是 spike，之后先验收计划、再测试计划、再修复实施计划
     assert names[1] == "spike"
     assert names[2:5] == ["acceptance_plan", "test_plan", "impl"]
-    # 验证总 stage 数为 9
-    assert len(names) == 9
+    # 验证总 stage 数为 11
+    assert len(names) == 11
 
 
 # 测试传入未知 intent 时抛 ValueError（防止拼写错误静默通过）

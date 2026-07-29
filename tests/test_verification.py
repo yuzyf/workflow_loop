@@ -1,10 +1,21 @@
 import os
 
-from workflow_loop.project import create_project, register_topics
-from workflow_loop.state import WorkflowState, StageState, GateState, save_state
+from workflow_loop.project import create_project, load_project, register_topics, save_project
+from workflow_loop.state import (
+    WorkflowState,
+    StageState,
+    GateState,
+    RegressionTestState,
+    TestExecutionRecord as ExecutionRecord,
+    TestTaskState as ExecutionTask,
+    save_state,
+)
 from workflow_loop.verification import (
     compute_file_hash, compute_impl_hash, compute_test_plan_hash,
     compute_acceptance_plan_hash, compute_test_result_hash,
+    compute_acceptance_result_hash,
+    compute_code_snapshot_hash, compute_regression_test_result_hash,
+    compute_non_test_code_snapshot_hash, compute_test_code_snapshot_hash,
     compute_product_design_hash, compute_code_design_hash,
     get_linked_product_design_paths, check_invalidation, clear_stage_gates,
 )
@@ -13,7 +24,8 @@ from workflow_loop.verification import (
 # 测试辅助函数：构造一个已经进入后半段、带验证哈希的 WorkflowState
 def _make_state(project_root, impl_hash=None, test_plan_hash=None, acceptance_plan_hash=None, test_result_hash=None):
     stage_path = [
-        "acceptance_plan", "test_plan", "impl", "topic_execution",
+        "acceptance_plan", "test_plan", "impl", "test_code",
+        "test_execution", "topic_acceptance",
         "regression_test", "overall_acceptance", "update_code_design",
     ]
     state = WorkflowState(
@@ -121,6 +133,147 @@ def test_compute_impl_hash_includes_code_snapshot(tmp_path):
     assert h1 != h3
 
 
+def test_compute_impl_hash_ignores_test_code_changes(tmp_path):
+    impl_dir = os.path.join(str(tmp_path), "impl")
+    tests_dir = os.path.join(str(tmp_path), "tests")
+    os.makedirs(impl_dir)
+    os.makedirs(tests_dir)
+    with open(os.path.join(impl_dir, "test_topic.md"), "w") as stream:
+        stream.write("impl record")
+    with open(os.path.join(tests_dir, "test_topic.py"), "w") as stream:
+        stream.write("def test_one(): pass")
+
+    before = compute_impl_hash(str(tmp_path), "test_topic")
+    with open(os.path.join(tests_dir, "test_topic.py"), "w") as stream:
+        stream.write("def test_one(): assert True")
+
+    assert compute_impl_hash(str(tmp_path), "test_topic") == before
+
+
+def test_structured_pyproject_changes_are_split_between_test_and_product_hashes(tmp_path):
+    create_project(str(tmp_path))
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """[project]
+name = "demo"
+version = "0.1.0"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+""",
+        encoding="utf-8",
+    )
+    test_before = compute_test_code_snapshot_hash(str(tmp_path))
+    product_before = compute_non_test_code_snapshot_hash(str(tmp_path))
+
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
+            'testpaths = ["tests"]',
+            'testpaths = ["tests", "integration"]',
+        ),
+        encoding="utf-8",
+    )
+
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != test_before
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == product_before
+
+    test_after = compute_test_code_snapshot_hash(str(tmp_path))
+    product_after = compute_non_test_code_snapshot_hash(str(tmp_path))
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
+            'version = "0.1.0"',
+            'version = "0.2.0"',
+        ),
+        encoding="utf-8",
+    )
+
+    assert compute_test_code_snapshot_hash(str(tmp_path)) == test_after
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) != product_after
+
+
+def test_test_entry_command_and_script_are_part_of_test_code_hash(tmp_path):
+    create_project(str(tmp_path))
+    script = tmp_path / "scripts" / "test_all.sh"
+    script.parent.mkdir()
+    script.write_text("#!/usr/bin/env bash\necho one\n", encoding="utf-8")
+    project = load_project(str(tmp_path))
+    assert project is not None
+    project.test_entry = "bash scripts/test_all.sh"
+    save_project(str(tmp_path), project)
+
+    before = compute_test_code_snapshot_hash(str(tmp_path))
+    product_before = compute_non_test_code_snapshot_hash(str(tmp_path))
+    script.write_text("#!/usr/bin/env bash\necho two\n", encoding="utf-8")
+
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != before
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == product_before
+
+
+def test_common_cross_language_test_filenames_are_part_of_test_hash(tmp_path):
+    create_project(str(tmp_path))
+    paths = [
+        tmp_path / "src" / "parser_test.go",
+        tmp_path / "lib" / "parser_spec.rb",
+        tmp_path / "ui" / "button.test.tsx",
+    ]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("test v1\n", encoding="utf-8")
+
+    test_before = compute_test_code_snapshot_hash(str(tmp_path))
+    product_before = compute_non_test_code_snapshot_hash(str(tmp_path))
+    paths[0].write_text("test v2\n", encoding="utf-8")
+
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != test_before
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == product_before
+
+
+def test_cpp_product_test_and_qmake_files_are_classified_separately(tmp_path):
+    create_project(str(tmp_path))
+    product_file = tmp_path / "src" / "uploader.cpp"
+    test_file = tmp_path / "src" / "uploader_test.cpp"
+    project_file = tmp_path / "workflow_loop.pro"
+    product_file.parent.mkdir(parents=True)
+    product_file.write_text("int upload() { return 1; }\n", encoding="utf-8")
+    test_file.write_text("void testUpload() {}\n", encoding="utf-8")
+    project_file.write_text("SOURCES += src/uploader.cpp\n", encoding="utf-8")
+
+    test_before = compute_test_code_snapshot_hash(str(tmp_path))
+    product_before = compute_non_test_code_snapshot_hash(str(tmp_path))
+    test_file.write_text("void testUpload() { verify(); }\n", encoding="utf-8")
+
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != test_before
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == product_before
+
+    test_after = compute_test_code_snapshot_hash(str(tmp_path))
+    product_after = compute_non_test_code_snapshot_hash(str(tmp_path))
+    product_file.write_text("int upload() { return 2; }\n", encoding="utf-8")
+    project_file.write_text("SOURCES += src/uploader.cpp\nDEFINES += V2\n", encoding="utf-8")
+
+    assert compute_test_code_snapshot_hash(str(tmp_path)) == test_after
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) != product_after
+
+
+def test_confirmed_test_code_change_returns_to_test_code(tmp_path):
+    create_project(str(tmp_path))
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    test_file = tests_dir / "test_demo.py"
+    test_file.write_text("def test_demo():\n    assert True\n", encoding="utf-8")
+    state = _make_state(str(tmp_path))
+    state.verification.test_code_hash = compute_test_code_snapshot_hash(str(tmp_path))
+    test_file.write_text("def test_demo():\n    assert 1 == 1\n", encoding="utf-8")
+
+    invalidations = check_invalidation(state, str(tmp_path))
+
+    assert invalidations == [("test_code", "test_code 及全部后续阶段")]
+    assert state.current_stage == "test_code"
+    assert state.verification.test_code_hash is None
+
+
 # 测试 check_invalidation 在无变化时返回空列表（impl 哈希一致）
 def test_check_invalidation_no_change(tmp_path):
     # 创建 impl 目录
@@ -139,7 +292,7 @@ def test_check_invalidation_no_change(tmp_path):
     assert invalidations == []
 
 
-# 测试实施内容变化时退回 topic_execution（主题执行）
+# 测试实施内容变化时退回 impl（实施阶段）
 def test_check_invalidation_impl_changed(tmp_path):
     # 创建 impl 目录
     impl_dir = os.path.join(str(tmp_path), "impl")
@@ -151,6 +304,26 @@ def test_check_invalidation_impl_changed(tmp_path):
     impl_hash = compute_impl_hash(str(tmp_path), "test_topic")
     # 构造 state，绑定 impl_hash
     state = _make_state(str(tmp_path), impl_hash=impl_hash)
+    state.stages["test_execution"].test_tasks = {
+        "test_topic": {
+            "TC-01": ExecutionTask(
+                status="passed",
+                current_record=ExecutionRecord(
+                    status="passed",
+                    exit_code=0,
+                    code_snapshot_hash="old-code",
+                    test_code_hash="old-test-code",
+                ),
+            )
+        }
+    }
+    state.regression_test = RegressionTestState(status="passed", exit_code=0)
+    qa_result = tmp_path / "qa" / "test_topic_result.md"
+    acceptance_result = tmp_path / "acceptance" / "test_topic_result.md"
+    qa_result.parent.mkdir(exist_ok=True)
+    acceptance_result.parent.mkdir(exist_ok=True)
+    qa_result.write_text("old test result", encoding="utf-8")
+    acceptance_result.write_text("old acceptance result", encoding="utf-8")
     # 修改 impl 记录内容（触发 invalidation）
     with open(os.path.join(impl_dir, "test_topic.md"), "w") as f:
         f.write("changed")
@@ -161,12 +334,70 @@ def test_check_invalidation_impl_changed(tmp_path):
     # 验证实施变化会让主题测试、主题验收、最终回归和整体验收失效
     assert invalidations[0] == (
         "impl",
-        "topic_execution 及全部后续阶段",
+        "impl 及全部后续阶段",
     )
-    assert state.current_stage == "topic_execution"
-    assert state.stages["topic_execution"].status == "in_progress"
+    assert state.current_stage == "impl"
+    assert state.stages["impl"].status == "in_progress"
     assert state.stages["regression_test"].gate.code_validated is False
     assert state.verification.impl_hash is None
+    assert state.stages["test_execution"].test_tasks == {}
+    assert not qa_result.exists()
+    assert not acceptance_result.exists()
+    assert state.regression_test.status == "not_run"
+
+
+def test_acceptance_result_change_returns_to_regression_test(tmp_path):
+    acceptance_dir = os.path.join(str(tmp_path), "acceptance")
+    os.makedirs(acceptance_dir)
+    result_path = os.path.join(acceptance_dir, "test_topic_result.md")
+    with open(result_path, "w") as stream:
+        stream.write("original")
+    state = _make_state(str(tmp_path))
+    state.verification.acceptance_result_hash = compute_acceptance_result_hash(
+        str(tmp_path),
+        "test_topic",
+    )
+    with open(result_path, "w") as stream:
+        stream.write("changed")
+
+    invalidations = check_invalidation(state, str(tmp_path))
+
+    assert invalidations == [
+        ("topic_acceptance", "regression_test、overall_acceptance 和 update_code_design")
+    ]
+    assert state.current_stage == "regression_test"
+
+
+def test_regression_code_change_returns_to_regression_test(tmp_path):
+    code_path = tmp_path / "app.py"
+    code_path.write_text("VERSION = 1\n", encoding="utf-8")
+
+    state = _make_state(str(tmp_path))
+    state.regression_test = RegressionTestState(
+        entry="scripts/test_all.sh",
+        command="scripts/test_all.sh",
+        started_at="2026-07-20T00:00:00+00:00",
+        finished_at="2026-07-20T00:01:00+00:00",
+        status="passed",
+        exit_code=0,
+        code_snapshot_hash=compute_code_snapshot_hash(str(tmp_path)),
+        output_tail="134 passed",
+    )
+    save_state(str(tmp_path), state)
+    state.verification.regression_test_result_hash = compute_regression_test_result_hash(
+        str(tmp_path)
+    )
+    save_state(str(tmp_path), state)
+
+    code_path.write_text("VERSION = 2\n", encoding="utf-8")
+
+    invalidations = check_invalidation(state, str(tmp_path))
+
+    assert invalidations == [
+        ("regression_test", "regression_test、overall_acceptance 和 update_code_design")
+    ]
+    assert state.current_stage == "regression_test"
+    assert state.verification.regression_test_result_hash is None
 
 
 # 测试验收计划变化时退回 acceptance_plan（验收计划）
@@ -181,6 +412,10 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     ap_hash = compute_acceptance_plan_hash(str(tmp_path), "test_topic")
     # 构造 state，绑定 acceptance_plan_hash
     state = _make_state(str(tmp_path), acceptance_plan_hash=ap_hash)
+    state.stages["test_plan"].artifact_produced_at = "before"
+    state.stages["test_plan"].artifact_baseline_captured_at = "before"
+    state.stages["test_plan"].artifact_baseline_hashes = {"qa/index.md": "old"}
+    state.stages["impl"].code_baseline_hash = "old-code-baseline"
     # 修改 acceptance plan 内容（触发 invalidation）
     with open(os.path.join(acc_dir, "test_topic_plan.md"), "w") as f:
         f.write("changed")
@@ -197,6 +432,10 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     assert state.stages["acceptance_plan"].status == "in_progress"
     assert state.stages["test_plan"].gate.code_validated is False
     assert state.verification.acceptance_plan_hash is None
+    assert state.stages["test_plan"].artifact_produced_at is None
+    assert state.stages["test_plan"].artifact_baseline_captured_at is None
+    assert state.stages["test_plan"].artifact_baseline_hashes == {}
+    assert state.stages["impl"].code_baseline_hash is None
 
 
 def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):

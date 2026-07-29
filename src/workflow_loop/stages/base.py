@@ -8,7 +8,7 @@ SPIKE_TMP_DIR = os.path.join(".workflow_loop", "spike_tmp")
 
 
 # Stage 策略基类（ABC）
-# 每个 stage = 一个工作流环节（如 spec、acceptance_plan、topic_execution）
+# 每个 stage = 一个工作流环节（如 spec、acceptance_plan、test_code）
 # 知道：自己叫什么、期望产出什么文件、加载哪些阶段材料、怎么校验产出、推进时做啥
 # 加新 stage = 加一个子类，在 path_composer.py 的路径列表里插入
 class StageStrategy(ABC):
@@ -69,8 +69,13 @@ class StageStrategy(ABC):
         return []
 
     # 附加阶段材料路径列表（discuss 命令额外加载）
-    # 默认空列表；project_design_init 和 topic_execution 按需加载共享材料。
+    # 默认空列表；project_design_init 和特定阶段按需加载共享材料。
     def additional_doc_paths(self) -> list[tuple[str, str]]:
+        return []
+
+    # 附加阶段规范路径（只有规范，没有对应产物模板时使用）。
+    # 例如 impl 阶段在实施计划之外，还要加载代码开发规范。
+    def additional_standard_doc_paths(self) -> list[str]:
         return []
 
     # 该 stage 的指令文本，打印给 AI 看

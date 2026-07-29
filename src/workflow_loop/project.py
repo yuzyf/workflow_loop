@@ -13,6 +13,7 @@ PROJECT_FILE = os.path.join(".workflow_loop", "project.json")
 INSTALLER_VERSION = "0.1.0"
 # 项目没有单独配置测试入口时使用的默认脚本
 DEFAULT_TEST_ENTRY = "scripts/test_all.sh"
+DEFAULT_TEST_PARALLELISM = 2
 
 
 # 项目级持久状态（跨 Run 不被覆盖）
@@ -34,6 +35,8 @@ class ProjectState:
     topic_history: list[str] = field(default_factory=list)
     # 项目统一全量测试入口；可以是脚本路径或不带 shell 运算符的命令文本
     test_entry: str = DEFAULT_TEST_ENTRY
+    # 主题测试执行阶段最多同时运行多少个独立主题；同一主题内仍按测试项依赖顺序执行。
+    test_parallelism: int = DEFAULT_TEST_PARALLELISM
 
 
 # 生成 ISO 8601 UTC 时间戳（内部用，不对外暴露）
@@ -63,6 +66,7 @@ def load_project(project_root: str) -> ProjectState | None:
         project_design_initialized=data.get("project_design_initialized", False),
         topic_history=data.get("topic_history", []),
         test_entry=data.get("test_entry", DEFAULT_TEST_ENTRY),
+        test_parallelism=max(1, int(data.get("test_parallelism", DEFAULT_TEST_PARALLELISM))),
     )
 
 

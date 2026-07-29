@@ -1,9 +1,17 @@
+import configparser
+import copy
 import hashlib
+import json
 import os
 import re
+import shlex
+import tomllib
 
-from .state import WorkflowState, StageState, GateState
+from .project import load_project
+from .state import RegressionTestState, WorkflowState, StageState, GateState, load_state
+from .test_mapping import automated_topics
 from .topic import candidate_topics
+from . import traceability as traceability_mod
 
 
 # product.md 功能清单中的本地 Markdown 链接
@@ -11,6 +19,11 @@ from .topic import candidate_topics
 PRODUCT_FEATURE_LINK_RE = re.compile(
     r"\[[^\]]+\]\((?:\./)?(feature_[a-z0-9_]+\.md)(?:#[^)]+)?\)"
 )
+
+
+def hash_text(content: str) -> str:
+    """计算 UTF-8 文本的 SHA256，供阶段材料和状态内容绑定使用。"""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 # 计算单个文件的 SHA256 哈希
@@ -86,43 +99,314 @@ def compute_code_design_hash(project_root: str) -> str | None:
     return compute_file_hash(project_root, os.path.join("spec", "architecture_code_design.md"))
 
 
-# 计算项目代码快照的哈希（impl_hash 和修改前测试基线的一部分）
-# 只读取代码、测试、脚本和项目构建配置，不把 state/journal/Markdown 文档算进去
-# 这样记录测试结果和追加日志不会误使测试基线失效
-def compute_code_snapshot_hash(project_root: str) -> str:
-    code_suffixes = (
-        ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
-        ".kt", ".swift", ".ets", ".sh", ".bash", ".zsh",
+# 代码文件后缀；文档、状态和日志不属于代码快照。
+CODE_SUFFIXES = {
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
+    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte",
+    ".go", ".rs", ".java", ".kt", ".kts", ".swift", ".ets",
+    ".rb", ".php", ".cs", ".fs", ".fsx", ".m", ".mm", ".qml",
+    ".sh", ".bash", ".zsh",
+}
+CONFIG_NAMES = {
+    "pyproject.toml", "package.json", "package-lock.json", "yarn.lock",
+    "pnpm-lock.yaml", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
+    "CMakeLists.txt", "CMakePresets.json", "Makefile", "justfile",
+    "setup.py", "setup.cfg", "requirements.txt",
+    "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle",
+    "settings.gradle.kts", "Gemfile", "Gemfile.lock", "composer.json",
+    "composer.lock",
+}
+CONFIG_SUFFIXES = {".pro", ".pri", ".cmake"}
+EXCLUDED_CODE_DIRS = {
+    ".git", ".workflow_loop", "__pycache__", ".venv", "node_modules",
+    ".pytest_cache", "dist", "build",
+}
+
+
+STANDALONE_TEST_CONFIG_NAMES = {
+    "pytest.ini", "tox.ini", ".coveragerc", "conftest.py",
+    "requirements-test.txt", "requirements-dev.txt", "dev-requirements.txt",
+}
+TEST_CONFIG_PREFIXES = (
+    "jest.config.", "vitest.config.", "playwright.config.", "cypress.config.",
+    "karma.conf.",
+)
+
+
+def _is_test_path(relative_path: str) -> bool:
+    """判断相对路径是否属于测试代码。"""
+    parts = [part.lower() for part in relative_path.replace(os.sep, "/").split("/")]
+    filename = parts[-1].lower()
+    stem = os.path.splitext(filename)[0]
+    test_directories = {
+        "tests", "test", "__tests__", "testdata", "test_data",
+        "integration_tests", "e2e",
+    }
+    return (
+        any(part in test_directories for part in parts[:-1])
+        or filename.startswith(("test_", "tst_"))
+        or stem.endswith(("_test", "_spec", ".test", ".spec"))
     )
-    config_names = {
-        "pyproject.toml", "package.json", "package-lock.json", "yarn.lock",
-        "pnpm-lock.yaml", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
-        "CMakeLists.txt", "Makefile", "justfile",
+
+
+def _stable_payload(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _split_pyproject_config(full_path: str) -> tuple[str, str]:
+    """把 pyproject.toml 的测试专用配置和产品配置分开。"""
+    with open(full_path, "rb") as stream:
+        data = tomllib.load(stream)
+    product_data = copy.deepcopy(data)
+    test_data: dict = {}
+
+    tool_data = data.get("tool", {})
+    selected_tools = {
+        key: value
+        for key, value in tool_data.items()
+        if key in {"pytest", "coverage", "tox"}
     }
-    excluded_dirs = {
-        ".git", ".workflow_loop", "__pycache__", ".venv", "node_modules",
-        ".pytest_cache", "dist", "build",
+    if selected_tools:
+        test_data["tool"] = selected_tools
+        product_tool = product_data.get("tool", {})
+        for key in selected_tools:
+            product_tool.pop(key, None)
+        if not product_tool:
+            product_data.pop("tool", None)
+
+    optional_dependencies = data.get("project", {}).get("optional-dependencies", {})
+    selected_dependencies = {
+        key: value
+        for key, value in optional_dependencies.items()
+        if key.lower() in {"dev", "test", "tests"}
     }
-    file_digests = []
+    if selected_dependencies:
+        test_data.setdefault("project", {})["optional-dependencies"] = selected_dependencies
+        product_optional = (
+            product_data.get("project", {}).get("optional-dependencies", {})
+        )
+        for key in selected_dependencies:
+            product_optional.pop(key, None)
+        if not product_optional:
+            product_data.get("project", {}).pop("optional-dependencies", None)
+
+    return _stable_payload(test_data), _stable_payload(product_data)
+
+
+def _split_package_json_config(full_path: str) -> tuple[str, str]:
+    """把 package.json 中的测试脚本、测试工具配置和测试依赖分开。"""
+    with open(full_path, "r", encoding="utf-8") as stream:
+        data = json.load(stream)
+    product_data = copy.deepcopy(data)
+    test_data: dict = {}
+
+    scripts = data.get("scripts", {})
+    selected_scripts = {
+        key: value
+        for key, value in scripts.items()
+        if key == "test" or key.startswith("test:")
+    }
+    if selected_scripts:
+        test_data["scripts"] = selected_scripts
+        product_scripts = product_data.get("scripts", {})
+        for key in selected_scripts:
+            product_scripts.pop(key, None)
+        if not product_scripts:
+            product_data.pop("scripts", None)
+
+    for key in ("jest", "vitest", "playwright", "cypress"):
+        if key in data:
+            test_data[key] = data[key]
+            product_data.pop(key, None)
+
+    dev_dependencies = data.get("devDependencies", {})
+    selected_dev_dependencies = {
+        key: value
+        for key, value in dev_dependencies.items()
+        if any(
+            token in key.lower()
+            for token in (
+                "test", "jest", "vitest", "mocha", "chai", "sinon", "ava", "tap",
+                "playwright", "cypress", "testing-library", "nyc", "coverage",
+            )
+        )
+    }
+    if selected_dev_dependencies:
+        test_data["devDependencies"] = selected_dev_dependencies
+        product_dev_dependencies = product_data.get("devDependencies", {})
+        for key in selected_dev_dependencies:
+            product_dev_dependencies.pop(key, None)
+        if not product_dev_dependencies:
+            product_data.pop("devDependencies", None)
+
+    return _stable_payload(test_data), _stable_payload(product_data)
+
+
+def _split_setup_cfg(full_path: str) -> tuple[str, str]:
+    parser = configparser.ConfigParser()
+    parser.read(full_path, encoding="utf-8")
+    test_sections = {
+        section: dict(parser[section])
+        for section in parser.sections()
+        if section.startswith(("tool:pytest", "coverage:", "tox:"))
+    }
+    product_sections = {
+        section: dict(parser[section])
+        for section in parser.sections()
+        if section not in test_sections
+    }
+    return _stable_payload(test_sections), _stable_payload(product_sections)
+
+
+def _project_test_entry(project_root: str) -> tuple[str, str | None]:
+    project = load_project(project_root)
+    entry = project.test_entry.strip() if project is not None else ""
+    try:
+        command_parts = shlex.split(entry)
+    except ValueError:
+        command_parts = []
+    entry_path = next(
+        (
+            part
+            for part in command_parts
+            if not part.startswith("-")
+            and (
+                "/" in part
+                or part.endswith((".sh", ".bash", ".zsh", ".py", ".js", ".ts"))
+            )
+        ),
+        None,
+    )
+    if entry_path is not None:
+        entry_path = os.path.normpath(entry_path)
+        if os.path.isabs(entry_path):
+            try:
+                relative_entry = os.path.relpath(entry_path, project_root)
+            except ValueError:
+                relative_entry = entry_path
+            if relative_entry != ".." and not relative_entry.startswith(f"..{os.sep}"):
+                entry_path = relative_entry
+    return entry, entry_path
+
+
+def _is_standalone_test_config(relative_path: str, test_entry_path: str | None) -> bool:
+    normalized = relative_path.replace(os.sep, "/")
+    filename = os.path.basename(normalized).lower()
+    return (
+        normalized == test_entry_path
+        or filename in STANDALONE_TEST_CONFIG_NAMES
+        or filename.startswith(TEST_CONFIG_PREFIXES)
+    )
+
+
+def _snapshot_parts(project_root: str) -> tuple[list[str], list[str]]:
+    """返回测试部分和产品部分的稳定哈希输入。"""
+    test_parts: list[str] = []
+    product_parts: list[str] = []
+    test_entry, test_entry_path = _project_test_entry(project_root)
+    test_parts.append(f".workflow_loop/project.json#test_entry:{hashlib.sha256(test_entry.encode('utf-8')).hexdigest()}")
+
     for root, dirs, files in os.walk(project_root):
-        dirs[:] = [directory for directory in dirs if directory not in excluded_dirs]
+        dirs[:] = [directory for directory in dirs if directory not in EXCLUDED_CODE_DIRS]
         for filename in files:
             relative_path = os.path.relpath(os.path.join(root, filename), project_root)
-            if not filename.endswith(code_suffixes) and filename not in config_names:
+            is_test_path = _is_test_path(relative_path)
+            is_test_config = _is_standalone_test_config(relative_path, test_entry_path)
+            suffix = os.path.splitext(filename)[1].lower()
+            is_project_config = filename in CONFIG_NAMES or suffix in CONFIG_SUFFIXES
+            if (
+                not is_test_path
+                and not is_test_config
+                and suffix not in CODE_SUFFIXES
+                and not is_project_config
+            ):
                 continue
             full_path = os.path.join(project_root, relative_path)
             try:
                 with open(full_path, "rb") as stream:
-                    content_hash = hashlib.sha256(stream.read()).hexdigest()
+                    raw_content = stream.read()
             except OSError:
                 continue
-            file_digests.append(f"{relative_path}:{content_hash}")
-    return hashlib.sha256("\n".join(sorted(file_digests)).encode("utf-8")).hexdigest()
+            raw_hash = hashlib.sha256(raw_content).hexdigest()
+
+            if relative_path == "pyproject.toml":
+                try:
+                    test_payload, product_payload = _split_pyproject_config(full_path)
+                except (OSError, tomllib.TOMLDecodeError):
+                    test_parts.append(f"{relative_path}#test-fallback:{raw_hash}")
+                    product_parts.append(f"{relative_path}#product-fallback:{raw_hash}")
+                else:
+                    test_parts.append(
+                        f"{relative_path}#test:{hashlib.sha256(test_payload.encode('utf-8')).hexdigest()}"
+                    )
+                    product_parts.append(
+                        f"{relative_path}#product:{hashlib.sha256(product_payload.encode('utf-8')).hexdigest()}"
+                    )
+                continue
+            if relative_path == "package.json":
+                try:
+                    test_payload, product_payload = _split_package_json_config(full_path)
+                except (OSError, json.JSONDecodeError):
+                    test_parts.append(f"{relative_path}#test-fallback:{raw_hash}")
+                    product_parts.append(f"{relative_path}#product-fallback:{raw_hash}")
+                else:
+                    test_parts.append(
+                        f"{relative_path}#test:{hashlib.sha256(test_payload.encode('utf-8')).hexdigest()}"
+                    )
+                    product_parts.append(
+                        f"{relative_path}#product:{hashlib.sha256(product_payload.encode('utf-8')).hexdigest()}"
+                    )
+                continue
+            if relative_path == "setup.cfg":
+                try:
+                    test_payload, product_payload = _split_setup_cfg(full_path)
+                except (OSError, configparser.Error):
+                    test_parts.append(f"{relative_path}#test-fallback:{raw_hash}")
+                    product_parts.append(f"{relative_path}#product-fallback:{raw_hash}")
+                else:
+                    test_parts.append(
+                        f"{relative_path}#test:{hashlib.sha256(test_payload.encode('utf-8')).hexdigest()}"
+                    )
+                    product_parts.append(
+                        f"{relative_path}#product:{hashlib.sha256(product_payload.encode('utf-8')).hexdigest()}"
+                    )
+                continue
+
+            target = test_parts if is_test_path or is_test_config else product_parts
+            target.append(f"{relative_path}:{raw_hash}")
+    return sorted(test_parts), sorted(product_parts)
 
 
-# 计算实施阶段和主题执行阶段使用的实施综合哈希（impl_hash）
-# 包含两部分：impl/ 下全部实施记录内容哈希 + 代码快照哈希
-# 在 gate impl --confirmed 时首次绑定，主题执行阶段继续使用；进入最终全量回归和整体验收前检查
+def _compute_code_snapshot_hash(project_root: str, *, test_only: bool | None) -> str:
+    """按范围计算代码快照：全部、仅测试或排除测试。"""
+    test_parts, product_parts = _snapshot_parts(project_root)
+    if test_only is True:
+        parts = test_parts
+    elif test_only is False:
+        parts = product_parts
+    else:
+        parts = [*test_parts, *product_parts]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+# 计算项目全部代码的快照哈希（impl_hash 和全量测试基线使用）
+def compute_code_snapshot_hash(project_root: str) -> str:
+    return _compute_code_snapshot_hash(project_root, test_only=None)
+
+
+# 计算测试代码快照哈希（test_code 阶段确认是否真的写了测试代码）
+def compute_test_code_snapshot_hash(project_root: str) -> str:
+    return _compute_code_snapshot_hash(project_root, test_only=True)
+
+
+# 计算排除测试代码后的产品代码快照哈希（阻止 test_code 阶段修改产品代码）
+def compute_non_test_code_snapshot_hash(project_root: str) -> str:
+    return _compute_code_snapshot_hash(project_root, test_only=False)
+
+
+# 计算实施阶段使用的实施综合哈希（impl_hash）
+# 包含两部分：impl/ 下全部实施记录内容哈希 + 非测试代码快照哈希
+# test_code 阶段后续修改测试代码，不应让已经确认的实施结果失效。
 def compute_impl_hash(project_root: str, topics: str | list[str] | None = None) -> str:
     # 收集哈希的各部分
     parts = []
@@ -136,8 +420,8 @@ def compute_impl_hash(project_root: str, topics: str | list[str] | None = None) 
         ]
         if impl_paths:
             parts.append(f"impl_docs:{compute_document_set_hash(project_root, impl_paths)}")
-    # 加入代码快照哈希（git status / 文件 mtime+size）
-    parts.append(f"code_snapshot:{compute_code_snapshot_hash(project_root)}")
+    # 只加入非测试代码快照，测试代码由 test_code 阶段单独校验。
+    parts.append(f"code_snapshot:{compute_non_test_code_snapshot_hash(project_root)}")
     # 合并所有部分算最终 SHA256
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
@@ -167,17 +451,36 @@ def compute_acceptance_plan_hash(project_root: str, topics: str | list[str] | No
 
 
 # 计算测试结果文件 qa/<topic>_result.md 的 SHA256
-# 在 gate topic_execution --confirmed 时记录；变化时使最终全量回归和整体验收失效
+# 在 gate test_execution --confirmed 时记录；变化时使主题验收及后续阶段失效
 def compute_test_result_hash(project_root: str, topics: str | list[str] | None) -> str | None:
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
-    paths = [os.path.join("qa", f"{topic}_result.md") for topic in topic_list]
+    paths = [
+        os.path.join("qa", f"{topic}_result.md")
+        for topic in automated_topics(project_root, topic_list)
+    ]
+    if not paths:
+        return hashlib.sha256(b"<no-automated-test-results>").hexdigest()
+    return compute_document_set_hash(project_root, paths)
+
+
+# 计算主题验收结果文件 acceptance/<topic>_result.md 的 SHA256
+# 在 gate topic_acceptance --confirmed 时记录；变化时使最终回归及后续阶段失效
+def compute_acceptance_result_hash(project_root: str, topics: str | list[str] | None) -> str | None:
+    topic_list = normalize_topics(topics)
+    if not topic_list:
+        return None
+    paths = [os.path.join("acceptance", f"{topic}_result.md") for topic in topic_list]
     return compute_document_set_hash(project_root, paths)
 
 
 def compute_regression_test_result_hash(project_root: str) -> str | None:
-    return compute_file_hash(project_root, os.path.join("qa", "final_regression_result.md"))
+    state = load_state(project_root)
+    if state is None:
+        return None
+    payload = json.dumps(state.regression_test.__dict__, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # 清零单个 stage 的所有门禁状态（3 道闸全清，状态回 pending）
@@ -187,6 +490,14 @@ def clear_stage_gates(stage: StageState) -> None:
     stage.gate = GateState()
     # stage 状态回到 pending（需要重新走 7 步模式）
     stage.status = "pending"
+    # 下游失效后，旧产物基线和 impl 代码基线也不能继续复用。
+    stage.artifact_produced_at = None
+    stage.artifact_baseline_captured_at = None
+    stage.artifact_baseline_hashes = {}
+    stage.code_baseline_hash = None
+    stage.test_code_baseline_hash = None
+    stage.non_test_code_baseline_hash = None
+    stage.existing_code_accepted_hash = None
 
 
 def reset_stages_and_move_current(state: WorkflowState, stage_names: list[str]) -> None:
@@ -204,6 +515,23 @@ def reset_stages_and_move_current(state: WorkflowState, stage_names: list[str]) 
     earliest = min(affected, key=lambda stage_name: order.get(stage_name, len(order)))
     state.current_stage = earliest
     state.stages[earliest].status = "in_progress"
+
+
+def _invalidate_test_execution_outputs(
+    project_root: str,
+    state: WorkflowState,
+    topics: list[str],
+) -> None:
+    """上游内容变化时，清掉不能继续使用的主题测试状态和结果文件。"""
+    stage_state = state.stages.get("test_execution")
+    if stage_state is not None:
+        stage_state.test_tasks = {}
+    for topic in topics:
+        for directory in ("qa", "acceptance"):
+            result_path = os.path.join(project_root, directory, f"{topic}_result.md")
+            if os.path.isfile(result_path):
+                os.remove(result_path)
+    state.regression_test = RegressionTestState()
 
 
 # 检查 Verification Invalidation：上游内容是否变化，变化则清零下游
@@ -224,9 +552,9 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
                     "acceptance_plan",
                     "test_plan",
                     "impl",
-                    "topic_execution",
-                    "test",
-                    "acceptance",
+                    "test_code",
+                    "test_execution",
+                    "topic_acceptance",
                     "regression_test",
                     "overall_acceptance",
                     "update_code_design",
@@ -235,8 +563,17 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
             state.verification.acceptance_plan_hash = None
             state.verification.test_plan_hash = None
             state.verification.impl_hash = None
+            state.verification.test_code_hash = None
             state.verification.test_result_hash = None
+            state.verification.acceptance_result_hash = None
             state.verification.regression_test_result_hash = None
+            traceability_mod.reset_after_upstream_invalidation(
+                project_root,
+                state.workflow_id,
+                topics,
+                "acceptance_plan",
+            )
+            _invalidate_test_execution_outputs(project_root, state, topics)
             invalidations.append(("acceptance_plan", "acceptance_plan 及全部后续阶段"))
             return invalidations
 
@@ -249,9 +586,9 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
                 [
                     "test_plan",
                     "impl",
-                    "topic_execution",
-                    "test",
-                    "acceptance",
+                    "test_code",
+                    "test_execution",
+                    "topic_acceptance",
                     "regression_test",
                     "overall_acceptance",
                     "update_code_design",
@@ -259,55 +596,108 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
             )
             state.verification.test_plan_hash = None
             state.verification.impl_hash = None
+            state.verification.test_code_hash = None
             state.verification.test_result_hash = None
+            state.verification.acceptance_result_hash = None
             state.verification.regression_test_result_hash = None
+            traceability_mod.reset_after_upstream_invalidation(
+                project_root,
+                state.workflow_id,
+                topics,
+                "test_plan",
+            )
+            _invalidate_test_execution_outputs(project_root, state, topics)
             invalidations.append(("test_plan", "test_plan 及全部后续阶段"))
             return invalidations
 
-    # 实施代码或实施记录变化后，从主题执行重新开始。
+    # 实施代码或实施记录变化后，必须返回实施阶段重新确认。
     if state.verification.impl_hash is not None:
         current_impl = compute_impl_hash(project_root, topics)
         if current_impl != state.verification.impl_hash:
             reset_stages_and_move_current(
                 state,
                 [
-                    "topic_execution",
-                    "test",
-                    "acceptance",
+                    "impl",
+                    "test_code",
+                    "test_execution",
+                    "topic_acceptance",
                     "regression_test",
                     "overall_acceptance",
                     "update_code_design",
                 ],
             )
             state.verification.impl_hash = None
+            state.verification.test_code_hash = None
             state.verification.test_result_hash = None
+            state.verification.acceptance_result_hash = None
             state.verification.regression_test_result_hash = None
-            invalidations.append(("impl", "topic_execution 及全部后续阶段"))
+            _invalidate_test_execution_outputs(project_root, state, topics)
+            invalidations.append(("impl", "impl 及全部后续阶段"))
             return invalidations
 
-    # 某个主题的测试结果变化后，从主题执行重新确认。
+    # 已确认测试代码或测试配置变化后，返回测试代码阶段。
+    if state.verification.test_code_hash is not None:
+        current_test_code = compute_test_code_snapshot_hash(project_root)
+        if current_test_code != state.verification.test_code_hash:
+            reset_stages_and_move_current(
+                state,
+                [
+                    "test_code",
+                    "test_execution",
+                    "topic_acceptance",
+                    "regression_test",
+                    "overall_acceptance",
+                    "update_code_design",
+                ],
+            )
+            state.verification.test_code_hash = None
+            state.verification.test_result_hash = None
+            state.verification.acceptance_result_hash = None
+            state.verification.regression_test_result_hash = None
+            _invalidate_test_execution_outputs(project_root, state, topics)
+            invalidations.append(("test_code", "test_code 及全部后续阶段"))
+            return invalidations
+
+    # 某个主题的测试结果变化后，从主题验收重新确认。
     if state.verification.test_result_hash is not None:
         current_test_result = compute_test_result_hash(project_root, topics)
         if current_test_result != state.verification.test_result_hash:
             reset_stages_and_move_current(
                 state,
                 [
-                    "topic_execution",
-                    "acceptance",
+                    "topic_acceptance",
                     "regression_test",
                     "overall_acceptance",
                     "update_code_design",
                 ],
             )
             state.verification.test_result_hash = None
+            state.verification.acceptance_result_hash = None
             state.verification.regression_test_result_hash = None
-            invalidations.append(("test", "topic_execution 及全部后续阶段"))
+            invalidations.append(("test_execution", "topic_acceptance 及全部后续阶段"))
             return invalidations
 
-    # 最终全量回归结果变化后，从最终全量回归重新开始。
+    # 某个主题的验收结果变化后，从最终全量回归重新确认。
+    if state.verification.acceptance_result_hash is not None:
+        current_acceptance_result = compute_acceptance_result_hash(project_root, topics)
+        if current_acceptance_result != state.verification.acceptance_result_hash:
+            reset_stages_and_move_current(
+                state,
+                ["regression_test", "overall_acceptance", "update_code_design"],
+            )
+            state.verification.acceptance_result_hash = None
+            state.verification.regression_test_result_hash = None
+            invalidations.append(("topic_acceptance", "regression_test、overall_acceptance 和 update_code_design"))
+            return invalidations
+
+    # 最终全量回归结果或代码变化后，从最终全量回归重新开始。
+    # 回归结果现在保存在 state.json，不再通过结果 Markdown 文件判断。
     if state.verification.regression_test_result_hash is not None:
         current_regression = compute_regression_test_result_hash(project_root)
-        if current_regression != state.verification.regression_test_result_hash:
+        regression_code_changed = (
+            state.regression_test.code_snapshot_hash != compute_code_snapshot_hash(project_root)
+        )
+        if current_regression != state.verification.regression_test_result_hash or regression_code_changed:
             reset_stages_and_move_current(
                 state,
                 ["regression_test", "overall_acceptance", "update_code_design"],

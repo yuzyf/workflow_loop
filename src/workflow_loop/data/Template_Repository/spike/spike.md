@@ -37,7 +37,7 @@
 - 是否阻塞后续：是 | 否
 - 产品设计影响：需要修改 | 无需修改
 - 代码设计影响：需要修改 | 无需修改
-- 后续处理阶段：无 | acceptance_plan | test_plan | impl | topic_execution | regression_test | overall_acceptance | update_code_design
+- 后续处理阶段：无 | acceptance_plan | test_plan | impl | test_code | test_execution | topic_acceptance | regression_test | overall_acceptance | update_code_design
 ```
 
 每个穿刺项重复一段。最终清单中不能保留“待验证”，清单内容必须和对应结论文档一致。
@@ -105,7 +105,7 @@
 - 代码设计影响：需要修改 | 无需修改
 - 代码设计更新位置：<无，或 spec/architecture_code_design.md 的具体章节>
 - 剩余风险：<无，或当前仍然存在的具体风险>
-- 后续处理阶段：无 | acceptance_plan | test_plan | impl | topic_execution | regression_test | overall_acceptance | update_code_design
+- 后续处理阶段：无 | acceptance_plan | test_plan | impl | test_code | test_execution | topic_acceptance | regression_test | overall_acceptance | update_code_design
 - 后续需要检查什么：<无，或到后续阶段必须检查的具体内容>
 ```
 

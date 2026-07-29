@@ -1,6 +1,6 @@
 from workflow_loop.cli import validate_stage_output
 from workflow_loop.state import WorkflowState, load_state, save_state
-from workflow_loop.test_runner import ensure_test_baseline
+from workflow_loop.test_runner import ensure_test_baseline, run_final_regression
 
 
 def _state():
@@ -102,6 +102,30 @@ def test_test_baseline_round_trips_through_state_json(tmp_path):
     assert loaded.test_baseline.entry == "scripts/test_all.sh"
     assert loaded.test_baseline.status == "passed"
     assert loaded.test_baseline.exit_code == 0
+
+
+def test_final_regression_runs_unified_entry_without_reusing_baseline(tmp_path):
+    _write_entry(tmp_path, "echo 'all tests passed'")
+    state = _state()
+
+    passed, detail = run_final_regression(str(tmp_path), state)
+
+    assert passed is True
+    assert "最终全量测试通过" in detail
+    assert state.regression_test.status == "passed"
+    assert state.regression_test.exit_code == 0
+
+
+def test_final_regression_failure_is_saved_in_state(tmp_path):
+    _write_entry(tmp_path, "echo 'unit test failed' >&2\nexit 7")
+    state = _state()
+
+    passed, detail = run_final_regression(str(tmp_path), state)
+
+    assert passed is False
+    assert state.regression_test.status == "failed"
+    assert state.regression_test.exit_code == 7
+    assert "unit test failed" in detail
 
 
 def test_validate_stage_output_runs_baseline_for_test_plan(tmp_path):

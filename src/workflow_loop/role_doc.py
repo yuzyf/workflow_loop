@@ -17,7 +17,7 @@ DOC_OVERVIEW = """═══ 文档概览 ═══
 【qa/】测试
   - <topic>_plan.md：测试计划
   - <topic>_result.md：测试执行结果
-  - final_regression_result.md：全部主题完成后的最终全量回归结果
+  - state.json / journal.jsonl：记录最终全量回归的命令、退出码、状态和输出摘要
   - index.md：测试索引表
 
 【acceptance/】验收
@@ -85,23 +85,24 @@ ROLE_DOC_MAP = {
         "role": "实施执行者",
         "description": "先根据验收计划和测试计划为全部主题确认实施前计划，再修改真实代码，并在 impl/<topic>.md 中记录实际实施结果。",
     },
-    # 测试执行阶段：按计划执行测试并记录证据
-    "test": {
+    # 测试代码阶段：调查真实代码并写测试代码
+    "test_code": {
+        "role": "测试代码编写者",
+        "description": "先读取验收计划、测试计划、实施记录和真实代码，确认每个测试项的代码落点，再编写自动化测试代码。可以运行局部测试作为开发反馈，但不产出正式测试结果。",
+    },
+    # 测试执行阶段：运行测试代码并记录结果
+    "test_execution": {
         "role": "测试执行者",
-        "description": "按照 qa/<topic>_plan.md 执行全部必要测试并记录证据。产出 qa/<topic>_result.md。",
+        "description": "运行 test_code 阶段已经写好的测试代码，按照 qa/<topic>_plan.md 记录真实测试结果和证据，产出 qa/<topic>_result.md。",
     },
-    # 最终验收执行阶段：必须由用户确认，AI 不得代验收
-    "acceptance": {
+    # 主题验收阶段：测试通过后核对用户结果
+    "topic_acceptance": {
         "role": "主题验收执行者",
-        "description": "某个主题测试通过后，按照 acceptance/<topic>_plan.md 执行该主题验收。产出 acceptance/<topic>_result.md。",
-    },
-    "topic_execution": {
-        "role": "按主题执行协调者",
-        "description": "在实施完成后，按主题推进正式测试和主题验收。独立主题可以分别推进；全部主题完成后进入最终全量回归。",
+        "description": "确认对应主题的测试结果通过后，按照 acceptance/<topic>_plan.md 逐条核对用户结果，产出 acceptance/<topic>_result.md。",
     },
     "regression_test": {
         "role": "最终回归测试执行者",
-        "description": "全部主题完成后，对全部已合并代码执行最终全量回归。产出 qa/final_regression_result.md；只有代码门禁确认“回归状态：通过”后才能继续。",
+        "description": "全部主题完成后，执行项目配置的统一测试入口。退出码为 0 才算回归通过；状态写入 state.json、journal 和需求交付追踪表。",
     },
     "overall_acceptance": {
         "role": "整体验收执行者",

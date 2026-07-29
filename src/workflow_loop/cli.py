@@ -2,6 +2,7 @@ import argparse
 import os
 import shutil
 import sys
+from datetime import datetime
 
 from . import state as state_mod
 from . import journal as journal_mod
@@ -13,7 +14,13 @@ from . import bug_record as bug_record_mod
 from . import traceability as traceability_mod
 from . import topic as topic_mod
 from . import test_runner as test_runner_mod
-from .verification import compute_code_snapshot_hash
+from . import test_execution as test_execution_mod
+from . import test_mapping as test_mapping_mod
+from .verification import (
+    compute_code_snapshot_hash,
+    compute_non_test_code_snapshot_hash,
+    compute_test_code_snapshot_hash,
+)
 from .path_composer import build_stage_path, INTENT_CHOICES
 from .stages import ProjectDesignInitStage
 from .stages.base import StageStrategy, clean_spike_tmp
@@ -101,6 +108,34 @@ def load_doc_content(project_root: str, rel_path: str | None) -> str:
     # 读文件内容
     with open(full_path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+def compute_stage_material_hash(project_root: str, stage: StageStrategy) -> str:
+    """计算当前阶段 AI 实际需要阅读的全部材料哈希。"""
+    material_paths: list[str] = [GLOBAL_WRITING_STANDARD_PATH]
+    if stage.prompt_doc_path():
+        material_paths.append(stage.prompt_doc_path())
+    if stage.standard_doc_path():
+        material_paths.append(stage.standard_doc_path())
+    material_paths.append(f"__role__/{stage.name()}")
+    for prompt_path, standard_path in stage.additional_doc_paths():
+        material_paths.extend([prompt_path, standard_path])
+    material_paths.extend(stage.additional_standard_doc_paths())
+
+    parts: list[str] = []
+    for relative_path in sorted(set(material_paths)):
+        if relative_path.startswith("__role__/"):
+            role = role_doc_mod.get_role_doc(stage.name()) or {}
+            content = f"{role.get('role', '')}\n{role.get('description', '')}"
+        else:
+            full_path = os.path.join(project_root, WORKFLOW_LOOP_DIRNAME, relative_path)
+            if not os.path.isfile(full_path):
+                content = f"<missing:{relative_path}>"
+            else:
+                with open(full_path, "r", encoding="utf-8") as stream:
+                    content = stream.read()
+        parts.append(f"{relative_path}\n{content}")
+    return verification_mod.hash_text("\n\n".join(parts))
 
 
 # 记录进入穿刺阶段时的产品设计和代码设计内容哈希
@@ -498,6 +533,26 @@ def cmd_discuss(args) -> None:
         print(f"错误：找不到 stage '{wf_state.current_stage}' 的策略实现")
         sys.exit(1)
 
+    material_hash = compute_stage_material_hash(project_root, stage)
+    stage_state = wf_state.stages[stage.name()]
+    if (
+        stage_state.discussion_material_hash is not None
+        and stage_state.discussion_material_hash != material_hash
+    ):
+        verification_mod.clear_stage_gates(stage_state)
+        stage_state.status = "in_progress"
+        journal_mod.append_entry(
+            project_root,
+            "阶段材料变化导致讨论失效",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            stage=stage.name(),
+            previous_material_hash=stage_state.discussion_material_hash,
+            current_material_hash=material_hash,
+        )
+    stage_state.discussion_material_hash = material_hash
+    state_mod.save_state(project_root, wf_state)
+
     # 加载全局写作规范（所有 stage 共用）
     global_writing_content = load_doc_content(project_root, GLOBAL_WRITING_STANDARD_PATH)
     prompt_path = stage.prompt_doc_path()
@@ -538,6 +593,11 @@ def cmd_discuss(args) -> None:
         print(f"\n【附加流程规范: {extra_standard_path}】")
         print(load_doc_content(project_root, extra_standard_path))
 
+    # 打印只有规范、没有对应产物模板的附加规则。
+    for extra_standard_path in stage.additional_standard_doc_paths():
+        print(f"\n【代码开发规范: {extra_standard_path}】")
+        print(load_doc_content(project_root, extra_standard_path))
+
     # 打印指令
     print(f"\n【指令】")
     print(stage.instruction())
@@ -547,9 +607,12 @@ def cmd_discuss(args) -> None:
 
     # 写 journal：提示词加载
     journal_mod.append_entry(project_root, "提示词加载", "workflow.py",
+                            workflow_id=wf_state.workflow_id,
                             stage=stage.name(), prompt_doc=stage.prompt_doc_path(),
                             standard_doc=stage.standard_doc_path(),
-                            global_writing_standard=GLOBAL_WRITING_STANDARD_PATH)
+                            additional_standard_docs=stage.additional_standard_doc_paths(),
+                            global_writing_standard=GLOBAL_WRITING_STANDARD_PATH,
+                            material_hash=material_hash)
     # 写 journal：角色文档加载
     journal_mod.append_entry(project_root, "角色文档加载", "workflow.py",
                             stage=stage.name())
@@ -559,6 +622,60 @@ def cmd_discuss(args) -> None:
         f"用这个提示词和用户讨论。讨论完用户说'完毕'后，"
         f"调 `workflow gate {stage.name()} --discuss-done`"
     )
+
+
+def _has_loaded_stage_materials(
+    project_root: str,
+    workflow_state: state_mod.WorkflowState,
+    stage,
+) -> bool:
+    """确认当前工作流已经通过 workflow discuss 加载当前阶段全部材料。"""
+
+    def belongs_to_current_workflow(entry: dict) -> bool:
+        # 新日志直接使用 workflow_id 区分不同工作流。
+        entry_workflow_id = entry.get("workflow_id")
+        if entry_workflow_id is not None:
+            return entry_workflow_id == workflow_state.workflow_id
+
+        # 兼容新增 workflow_id 之前写入的旧日志：
+        # 没有 workflow_id 时，只接受当前工作流启动之后的记录，避免误用更早 Run 的记录。
+        entry_ts = entry.get("ts")
+        if not entry_ts or not workflow_state.started_at:
+            return False
+        try:
+            return datetime.fromisoformat(entry_ts) >= datetime.fromisoformat(workflow_state.started_at)
+        except ValueError:
+            return False
+
+    required_standard_docs = set(stage.additional_standard_doc_paths())
+    current_material_hash = compute_stage_material_hash(project_root, stage)
+    saved_material_hash = workflow_state.stages.get(
+        stage.name(),
+        state_mod.StageState(),
+    ).discussion_material_hash
+    if saved_material_hash is not None and saved_material_hash != current_material_hash:
+        return False
+    for entry in reversed(journal_mod.read_all(project_root)):
+        if entry.get("action") != "提示词加载":
+            continue
+        if not belongs_to_current_workflow(entry):
+            continue
+        if entry.get("stage") != stage.name():
+            continue
+        if entry.get("prompt_doc") != stage.prompt_doc_path():
+            continue
+        if entry.get("standard_doc") != stage.standard_doc_path():
+            continue
+        loaded_standard_docs = set(entry.get("additional_standard_docs", []))
+        if (
+            required_standard_docs.issubset(loaded_standard_docs)
+            and (
+                entry.get("material_hash") == current_material_hash
+                or saved_material_hash is None
+            )
+        ):
+            return True
+    return False
 
 
 def apply_stage_completion_updates(
@@ -571,7 +688,8 @@ def apply_stage_completion_updates(
     if stage_name in {
         "test_plan",
         "impl",
-        "topic_execution",
+        "test_execution",
+        "topic_acceptance",
         "regression_test",
         "overall_acceptance",
         "update_code_design",
@@ -596,7 +714,7 @@ def apply_stage_completion_updates(
     if wf_state.intent != "bugfix":
         return updates
 
-    if stage_name == "topic_execution":
+    if stage_name == "topic_acceptance":
         detail = bug_record_mod.record_topic_acceptance_pass(
             project_root,
             wf_state.workflow_id,
@@ -630,6 +748,20 @@ def validate_stage_output(
 ) -> tuple[bool, str]:
     """执行阶段产物校验；test_plan 额外执行修改前全量测试基线。"""
 
+    if stage_name == "regression_test":
+        passed, details = test_runner_mod.run_final_regression(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "最终全量回归",
+            "workflow.py",
+            stage=stage_name,
+            passed=passed,
+            **test_runner_mod.regression_journal_fields(wf_state),
+        )
+        state_mod.save_state(project_root, wf_state)
+        if not passed:
+            return False, details
+
     passed, details = stage.code_validate(project_root)
     if stage_name != "test_plan" or not passed:
         return passed, details
@@ -649,6 +781,294 @@ def validate_stage_output(
     if not baseline_result.passed:
         return False, f"{details}；{baseline_result.detail}"
     return True, f"{details}；{baseline_result.detail}"
+
+
+def _load_active_workflow_for_command(project_root: str) -> state_mod.WorkflowState:
+    workflow_state = state_mod.load_state(project_root)
+    if workflow_state is None:
+        print("错误：还没启动工作流")
+        sys.exit(1)
+    if workflow_state.run_status != "active":
+        print(f"错误：Run 已 {workflow_state.run_status}，不能执行当前命令")
+        sys.exit(1)
+    return workflow_state
+
+
+def _test_execution_inputs_are_current(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> bool:
+    """测试登记和执行前先确认实施结果、计划和测试代码没有失效。"""
+    invalidations = verification_mod.check_invalidation(wf_state, project_root)
+    if invalidations:
+        state_mod.save_state(project_root, wf_state)
+        for from_stage, to_stages in invalidations:
+            journal_mod.append_entry(
+                project_root,
+                "验证失效",
+                "workflow.py",
+                from_stage=from_stage,
+                to_stage=to_stages,
+                reason="测试登记或执行前发现上游内容变化",
+            )
+        print("═══ 测试执行前置内容已失效 ═══")
+        for from_stage, to_stages in invalidations:
+            print(f"{from_stage} 变化，已退回 {to_stages}")
+        print_next_step(current_stage_next_instruction(wf_state))
+        return False
+    if wf_state.verification.test_code_hash is None:
+        print("错误：缺少 test_code 确认后的测试代码哈希")
+        print_next_step("先完成 test_code 阶段并通过用户确认")
+        return False
+    return True
+
+
+def _test_execution_materials_are_loaded(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> bool:
+    """测试登记和执行只接受本次 workflow discuss 加载的当前材料。"""
+    stage = get_stage_strategy(
+        "test_execution",
+        wf_state,
+        build_stage_path(wf_state.intent, project_root),
+    )
+    if stage is None:
+        return False
+    stage_state = wf_state.stages.get("test_execution")
+    return (
+        stage_state is not None
+        and stage_state.discussion_material_hash == compute_stage_material_hash(project_root, stage)
+    )
+
+
+def cmd_test_prepare(args) -> None:
+    """登记一个测试项的真实 argv 命令，不执行命令。"""
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("错误：找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    wf_state = _load_active_workflow_for_command(project_root)
+    if wf_state.current_stage != "test_execution":
+        print(f"错误：当前 stage 是 {wf_state.current_stage}，不能登记主题测试命令")
+        print_next_step(current_stage_next_instruction(wf_state))
+        return
+    if not _test_execution_materials_are_loaded(project_root, wf_state):
+        print("错误：还没有通过 workflow discuss 加载当前测试执行模板和规范")
+        print_next_step("先调 `workflow discuss`，阅读当前测试执行模板和规范")
+        return
+    if not _test_execution_inputs_are_current(project_root, wf_state):
+        return
+
+    command = list(args.command_argv or [])
+    if command and command[0] == "--":
+        command = command[1:]
+    try:
+        task = test_execution_mod.prepare_task(
+            project_root,
+            wf_state,
+            args.topic,
+            args.tc,
+            command,
+            args.timeout,
+        )
+    except ValueError as exc:
+        print("═══ 测试命令登记失败 ═══")
+        print(f"详情: {exc}")
+        print_next_step("补齐测试计划、测试入口或安全命令后重新调 `workflow test prepare`")
+        return
+
+    journal_mod.append_entry(
+        project_root,
+        "测试项任务登记",
+        "user",
+        workflow_id=wf_state.workflow_id,
+        topic=args.topic,
+        test_id=args.tc,
+        test_entries=task.test_entries,
+        command=task.command,
+        dependencies=task.dependencies,
+        timeout_seconds=task.timeout_seconds,
+    )
+    state_mod.save_state(project_root, wf_state)
+    print("═══ 测试项任务已登记 ═══")
+    print(f"主题: {args.topic}")
+    print(f"测试项: {args.tc}")
+    print(f"测试入口: {', '.join(task.test_entries)}")
+    print(f"执行命令: {' '.join(task.command)}")
+    print(f"前置测试项: {', '.join(task.dependencies) if task.dependencies else '无'}")
+    print(f"超时: {task.timeout_seconds} 秒")
+    missing = test_execution_mod.missing_prepared_tasks(project_root, wf_state)
+    if missing:
+        print_next_step(f"继续登记剩余测试项: {missing}")
+    else:
+        print_next_step("确认所有测试项和命令后，调 `workflow gate test_execution --discuss-done`")
+
+
+def cmd_test_run(args) -> None:
+    """执行已经登记的主题测试任务。"""
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("错误：找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    wf_state = _load_active_workflow_for_command(project_root)
+    if wf_state.current_stage != "test_execution":
+        print(f"错误：当前 stage 是 {wf_state.current_stage}，不能执行主题测试")
+        print_next_step(current_stage_next_instruction(wf_state))
+        return
+    if not _test_execution_materials_are_loaded(project_root, wf_state):
+        print("错误：当前测试执行材料没有加载，或加载后内容已经变化")
+        print_next_step("先调 `workflow discuss`，重新阅读当前测试执行模板和规范")
+        return
+    if not _test_execution_inputs_are_current(project_root, wf_state):
+        return
+    stage_state = wf_state.stages.get("test_execution")
+    if stage_state is None or not stage_state.gate.discussion_complete:
+        print("错误：测试执行任务还没有经过讨论确认")
+        print_next_step("先登记全部测试项，再调 `workflow gate test_execution --discuss-done`")
+        return
+    try:
+        attempts = test_execution_mod.run_prepared_tasks(
+            project_root,
+            wf_state,
+            args.parallel,
+        )
+    except ValueError as exc:
+        print("═══ 测试执行未开始 ═══")
+        print(f"详情: {exc}")
+        print_next_step("补齐测试任务登记后重新调 `workflow test run`")
+        return
+
+    print("═══ 主题测试执行完成 ═══")
+    print(test_execution_mod.summarize_attempts(attempts))
+    for attempt in attempts:
+        print(f"- {attempt.topic} / {attempt.test_id}: {attempt.status}")
+        if attempt.status != "passed":
+            if attempt.error:
+                print(f"  原因: {attempt.error}")
+            if attempt.output_tail:
+                print("  输出摘要:")
+                print(attempt.output_tail)
+    failed = [attempt for attempt in attempts if attempt.status != "passed"]
+    if failed:
+        print_next_step("先判断问题属于 impl、test_code、test_plan、acceptance_plan、spec 或临时环境，再调 `workflow return --to ...`")
+    else:
+        automated_topics = test_mapping_mod.automated_topics(project_root, wf_state.topics)
+        if automated_topics:
+            print_next_step("根据当前成功记录补齐或复核各主题 qa/<topic>_result.md，再调 `workflow gate test_execution`")
+        else:
+            print_next_step("当前没有自动化测试结果文件需要生成，直接调 `workflow gate test_execution`")
+
+
+def _stage_index_map(wf_state: state_mod.WorkflowState) -> dict[str, int]:
+    return {stage_name: index for index, stage_name in enumerate(wf_state.stage_path)}
+
+
+def _clear_topic_test_state(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    topics: list[str],
+) -> None:
+    stage_state = wf_state.stages.get("test_execution")
+    if stage_state is not None:
+        for topic in topics:
+            for task in stage_state.test_tasks.get(topic, {}).values():
+                task.status = "pending"
+                task.current_record = None
+                task.last_error = None
+            if topic in stage_state.test_tasks:
+                del stage_state.test_tasks[topic]
+    for topic in topics:
+        result_path = os.path.join(project_root, "qa", f"{topic}_result.md")
+        if os.path.exists(result_path):
+            os.remove(result_path)
+        acceptance_path = os.path.join(project_root, "acceptance", f"{topic}_result.md")
+        if os.path.exists(acceptance_path):
+            os.remove(acceptance_path)
+
+
+def cmd_return(args) -> None:
+    """用户确认后把当前工作流退回指定阶段，并清理受影响主题的当前状态。"""
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("错误：找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    wf_state = _load_active_workflow_for_command(project_root)
+    stage_indexes = _stage_index_map(wf_state)
+    if args.to not in stage_indexes:
+        print(f"错误：目标阶段不在当前工作流路径中: {args.to}")
+        return
+    if wf_state.current_stage not in stage_indexes or stage_indexes[args.to] >= stage_indexes[wf_state.current_stage]:
+        print(f"错误：只能退回当前阶段之前的阶段，当前是 {wf_state.current_stage}")
+        return
+    if not args.reason.strip():
+        print("错误：必须说明为什么退回")
+        return
+
+    affected_topics = list(dict.fromkeys(args.topic or []))
+    if args.all_topics:
+        affected_topics = list(wf_state.topics)
+    if not affected_topics:
+        affected_topics = list(wf_state.topics)
+    unknown = sorted(set(affected_topics) - set(wf_state.topics))
+    if unknown:
+        print(f"错误：受影响主题不属于当前工作流: {unknown}")
+        return
+
+    previous_stage = wf_state.current_stage
+    downstream_names = wf_state.stage_path[stage_indexes[args.to] :]
+    for stage_name in downstream_names:
+        stage_state = wf_state.stages[stage_name]
+        verification_mod.clear_stage_gates(stage_state)
+        stage_state.status = "pending"
+    wf_state.current_stage = args.to
+    wf_state.stages[args.to].status = "in_progress"
+
+    if stage_indexes[args.to] <= stage_indexes.get("test_execution", len(wf_state.stage_path)):
+        _clear_topic_test_state(project_root, wf_state, affected_topics)
+        wf_state.verification.test_result_hash = None
+        wf_state.verification.acceptance_result_hash = None
+        wf_state.verification.regression_test_result_hash = None
+        wf_state.regression_test = state_mod.RegressionTestState()
+    if stage_indexes[args.to] <= stage_indexes.get("test_code", len(wf_state.stage_path)):
+        wf_state.verification.test_code_hash = None
+    if stage_indexes[args.to] <= stage_indexes.get("test_plan", len(wf_state.stage_path)):
+        wf_state.verification.test_plan_hash = None
+    if stage_indexes[args.to] <= stage_indexes.get("acceptance_plan", len(wf_state.stage_path)):
+        wf_state.verification.acceptance_plan_hash = None
+    if stage_indexes[args.to] <= stage_indexes.get("impl", len(wf_state.stage_path)):
+        wf_state.verification.impl_hash = None
+
+    try:
+        trace_detail = traceability_mod.reset_topics_for_return(
+            project_root,
+            wf_state.workflow_id,
+            affected_topics,
+            args.to,
+        )
+    except ValueError as exc:
+        print("═══ 工作流退回失败 ═══")
+        print(f"详情: {exc}")
+        return
+
+    journal_mod.append_entry(
+        project_root,
+        "流程退回",
+        "user",
+        workflow_id=wf_state.workflow_id,
+        from_stage=previous_stage,
+        to_stage=args.to,
+        topics=affected_topics,
+        reason=args.reason.strip(),
+        traceability=trace_detail,
+    )
+    state_mod.save_state(project_root, wf_state)
+    print("═══ 工作流已退回 ═══")
+    print(f"目标阶段: {args.to}")
+    print(f"受影响主题: {', '.join(affected_topics)}")
+    print(f"原因: {args.reason.strip()}")
+    print(trace_detail)
+    print_next_step(f"调 `workflow discuss` 重新加载 {args.to} 阶段材料")
 
 
 # gate 命令：3 道闸的总入口 + spike --skip
@@ -685,6 +1105,13 @@ def cmd_gate(args) -> None:
     if stage_name != wf_state.current_stage:
         print(f"错误：当前 stage 是 {wf_state.current_stage}，不能操作 {stage_name} 的门禁")
         print_next_step(current_stage_next_instruction(wf_state))
+        sys.exit(1)
+
+    # --rebaseline 是实施阶段的显式基线确认，不得和其它门禁动作合用。
+    if (args.rebaseline or args.accept_existing_code) and (
+        args.skip or args.discuss_done or args.confirmed
+    ):
+        print("错误：--rebaseline 和 --accept-existing-code 不能和其它 gate 参数同时使用")
         sys.exit(1)
 
     # ── 特殊：--skip（仅 spike）──
@@ -735,17 +1162,137 @@ def cmd_gate(args) -> None:
         print(f"错误：找不到 stage '{stage_name}' 的策略实现")
         sys.exit(1)
 
+    current_material_hash = compute_stage_material_hash(project_root, stage)
+    if (
+        gate.discussion_complete
+        and (
+            (
+                stage_state.discussion_material_hash is not None
+                and stage_state.discussion_material_hash != current_material_hash
+            )
+            or (
+                stage_name == "test_execution"
+                and stage_state.discussion_material_hash is None
+            )
+        )
+    ):
+        previous_material_hash = stage_state.discussion_material_hash
+        verification_mod.clear_stage_gates(stage_state)
+        stage_state.discussion_material_hash = None
+        stage_state.status = "in_progress"
+        journal_mod.append_entry(
+            project_root,
+            "阶段材料变化导致讨论失效",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            stage=stage_name,
+            previous_material_hash=previous_material_hash,
+            current_material_hash=current_material_hash,
+        )
+        state_mod.save_state(project_root, wf_state)
+        if not args.discuss_done:
+            print(f"═══ {stage_name} 讨论材料已变化 ═══")
+            print("旧的讨论确认已经失效，必须重新阅读当前材料")
+            print_next_step("先调 `workflow discuss`，阅读更新后的阶段材料")
+            return
+
+    # ── --accept-existing-code：用户确认已有代码就是本次实施结果 ──
+    if args.accept_existing_code:
+        if stage_name != "impl":
+            print("错误：--accept-existing-code 只适用于 impl stage")
+            sys.exit(1)
+        if not gate.discussion_complete:
+            print("错误：必须先通过 `workflow gate impl --discuss-done`，才能确认已有代码")
+            print_next_step("先完成实施计划讨论，再调 `workflow gate impl --discuss-done`")
+            return
+        valid, detail, _ = stage.validate_implementation_records(project_root, wf_state)
+        if not valid:
+            print("═══ impl 既有代码确认失败 ═══")
+            print(f"详情: {detail}")
+            print_next_step("补齐实施后记录和追踪表后再调 `workflow gate impl --accept-existing-code`")
+            return
+
+        current_hash = compute_non_test_code_snapshot_hash(project_root)
+        previous_hash = stage_state.existing_code_accepted_hash
+        stage_state.code_baseline_hash = current_hash
+        stage_state.existing_code_accepted_hash = current_hash
+        journal_mod.append_entry(
+            project_root,
+            "既有实施代码确认",
+            "user",
+            workflow_id=wf_state.workflow_id,
+            stage=stage_name,
+            previous_existing_code_hash=previous_hash,
+            code_snapshot_hash=current_hash,
+            reason="用户确认当前代码已经是本次需求的实施结果",
+        )
+        state_mod.save_state(project_root, wf_state)
+        print("═══ impl 既有实施代码已确认 ═══")
+        print(f"已确认代码快照: {current_hash}")
+        print_next_step("调 `workflow gate impl` 做实施代码校验")
+        return
+
+    # ── --rebaseline：用户确认当前代码作为新的实施前基线 ──
+    if args.rebaseline:
+        if stage_name != "impl":
+            print("错误：--rebaseline 只适用于 impl stage")
+            sys.exit(1)
+        if gate.discussion_complete:
+            print("错误：impl 的讨论已经完成，不能再重设实施前代码基线")
+            print_next_step("按当前 impl 门禁继续，或作废当前 Run 后重新启动工作流")
+            sys.exit(1)
+        if not _has_loaded_stage_materials(project_root, wf_state, stage):
+            print("错误：重设基线前必须先通过 workflow discuss 加载实施阶段的全部材料")
+            print_next_step("先调 `workflow discuss`，阅读实施计划模板、实施流程规范和代码开发规范")
+            return
+
+        previous_hash = stage_state.code_baseline_hash
+        current_hash = compute_non_test_code_snapshot_hash(project_root)
+        stage_state.code_baseline_hash = current_hash
+        stage_state.existing_code_accepted_hash = None
+        journal_mod.append_entry(
+            project_root,
+            "实施代码基线重设",
+            "user",
+            workflow_id=wf_state.workflow_id,
+            stage=stage_name,
+            reason="用户确认当前代码为实施计划确认前的现状基线",
+            previous_code_snapshot_hash=previous_hash,
+            code_snapshot_hash=current_hash,
+        )
+        state_mod.save_state(project_root, wf_state)
+        print(f"═══ {stage_name} 实施前代码基线已重设 ═══")
+        print(f"当前代码基线: {current_hash}")
+        print_next_step("确认实施前计划没有继续修改代码后，调 `workflow gate impl --discuss-done`")
+        return
+
     # ── 第 1 道闸：--discuss-done ──
     if args.discuss_done:
         # 兼容旧状态：第一道门前处理产物路径迁移，并标记缺失的入场基线
         if stage_name == "spike" and ensure_spike_baseline(project_root, wf_state):
             state_mod.save_state(project_root, wf_state)
-        if stage_name == "impl" and not gate.discussion_complete:
+        if (
+            stage_name in {"impl", "test_code", "test_execution"}
+            and not gate.discussion_complete
+            and not _has_loaded_stage_materials(project_root, wf_state, stage)
+        ):
+            print(f"═══ {stage_name} 讨论完成校验失败 ═══")
+            if stage_name == "impl":
+                print("详情：还没有通过 workflow discuss 加载实施阶段的全部材料")
+                print_next_step("先调 `workflow discuss`，阅读实施计划模板、实施流程规范和代码开发规范")
+            elif stage_name == "test_code":
+                print("详情：还没有通过 workflow discuss 加载测试代码阶段的流程规范和代码开发规范")
+                print_next_step("先调 `workflow discuss`，阅读测试代码流程规范和测试代码开发规范")
+            else:
+                print(f"详情：还没有通过 workflow discuss 加载 {stage_name} 阶段的当前材料")
+                print_next_step(f"先调 `workflow discuss`，阅读 {stage_name} 阶段模板和规范")
+            return
+        if not gate.discussion_complete:
             valid, detail = stage.discussion_validate(project_root, wf_state)
             if not valid:
                 print(f"═══ {stage_name} 讨论完成校验失败 ═══")
                 print(f"详情: {detail}")
-                print_next_step(f"补齐实施前计划后重新调 `workflow gate {stage_name} --discuss-done`")
+                print_next_step(f"补齐讨论阶段要求后重新调 `workflow gate {stage_name} --discuss-done`")
                 return
         # 已经标记过了 → 提示
         if gate.discussion_complete:
@@ -753,10 +1300,26 @@ def cmd_gate(args) -> None:
         else:
             # 标记讨论完毕
             gate.discussion_complete = True
+            stage_state.discussion_material_hash = current_material_hash
             # 写 journal：门禁讨论完毕
             journal_mod.append_entry(project_root, "门禁讨论完毕", "user",
                                     stage=stage_name, passed=True)
         # 讨论结束后、开始写文件前记录基线。重复调用不会覆盖原基线。
+        if stage_name == "test_code" and stage_state.test_code_baseline_hash is None:
+            stage_state.test_code_baseline_hash = verification_mod.compute_test_code_snapshot_hash(
+                project_root,
+            )
+            stage_state.non_test_code_baseline_hash = verification_mod.compute_non_test_code_snapshot_hash(
+                project_root,
+            )
+            journal_mod.append_entry(
+                project_root,
+                "测试代码基线",
+                "workflow.py",
+                stage=stage_name,
+                test_code_snapshot_hash=stage_state.test_code_baseline_hash,
+                non_test_code_snapshot_hash=stage_state.non_test_code_baseline_hash,
+            )
         ensure_stage_artifact_baseline(project_root, wf_state, stage)
         # 保存 gate 和基线
         state_mod.save_state(project_root, wf_state)
@@ -1028,32 +1591,50 @@ def cmd_gate(args) -> None:
         )
 
     # ── 记录 verification hash（验证绑定哈希）──
-    # topic_execution（主题执行）完成后记录实施代码、实施记录和主题测试结果哈希。
-    if stage_name in ("impl", "topic_execution"):
+    # impl 完成后绑定实施代码和实施记录；后续测试阶段只绑定自己的结果。
+    if stage_name == "impl":
         wf_state.verification.impl_hash = verification_mod.compute_impl_hash(project_root, wf_state.topics)
-        # 执行结果变化后，最终全量回归和整体验收必须重做。
-        for sn in ["test", "acceptance", "regression_test", "overall_acceptance"]:
+        # 实施代码变化后，测试代码、测试执行、主题验收和后续阶段必须重做。
+        for sn in ["test_code", "test_execution", "topic_acceptance", "regression_test", "overall_acceptance"]:
             if sn in wf_state.stages:
                 verification_mod.clear_stage_gates(wf_state.stages[sn])
-        if stage_name == "topic_execution":
-            wf_state.verification.test_result_hash = verification_mod.compute_test_result_hash(
-                project_root,
-                wf_state.topics,
-            )
+        wf_state.verification.test_result_hash = None
+        wf_state.verification.acceptance_result_hash = None
+        wf_state.verification.test_code_hash = None
     # test_plan stage → 记录 test_plan_hash
     elif stage_name == "test_plan":
         wf_state.verification.test_plan_hash = verification_mod.compute_test_plan_hash(project_root, wf_state.topics)
+        wf_state.verification.test_code_hash = None
+        wf_state.verification.test_result_hash = None
+        wf_state.verification.acceptance_result_hash = None
     # acceptance_plan stage → 记录 acceptance_plan_hash，退 test_plan 待检查
     elif stage_name == "acceptance_plan":
         wf_state.verification.acceptance_plan_hash = verification_mod.compute_acceptance_plan_hash(project_root, wf_state.topics)
+        wf_state.verification.test_code_hash = None
+        wf_state.verification.test_result_hash = None
+        wf_state.verification.acceptance_result_hash = None
         # acceptance_plan 变了 → test_plan 需要重新检查
         if "test_plan" in wf_state.stages:
             wf_state.stages["test_plan"].gate.code_validated = False
             wf_state.stages["test_plan"].gate.user_confirmed = False
             wf_state.stages["test_plan"].status = "pending"
-    # test stage → 记录 test_result_hash
-    elif stage_name == "test":
+    # test_code stage → 冻结确认后的测试代码、测试配置和统一测试入口。
+    elif stage_name == "test_code":
+        wf_state.verification.test_code_hash = verification_mod.compute_test_code_snapshot_hash(
+            project_root
+        )
+        wf_state.verification.test_result_hash = None
+        wf_state.verification.acceptance_result_hash = None
+    # test_execution stage → 记录 test_result_hash
+    elif stage_name == "test_execution":
         wf_state.verification.test_result_hash = verification_mod.compute_test_result_hash(project_root, wf_state.topics)
+        wf_state.verification.acceptance_result_hash = None
+    # topic_acceptance stage → 记录 acceptance_result_hash
+    elif stage_name == "topic_acceptance":
+        wf_state.verification.acceptance_result_hash = verification_mod.compute_acceptance_result_hash(
+            project_root,
+            wf_state.topics,
+        )
     elif stage_name == "regression_test":
         wf_state.verification.regression_test_result_hash = (
             verification_mod.compute_regression_test_result_hash(project_root)
@@ -1101,7 +1682,7 @@ def cmd_gate(args) -> None:
         if next_stage == "spike":
             ensure_spike_baseline(project_root, wf_state, capture_if_missing=True)
         if next_stage == "impl":
-            wf_state.stages[next_stage].code_baseline_hash = compute_code_snapshot_hash(project_root)
+            wf_state.stages[next_stage].code_baseline_hash = compute_non_test_code_snapshot_hash(project_root)
             journal_mod.append_entry(
                 project_root,
                 "实施代码基线",
@@ -1298,6 +1879,31 @@ def main() -> None:
     # discuss 命令（无参数，读 state.current_stage）
     subparsers.add_parser("discuss", help="加载当前 stage 提示词")
 
+    # test 命令：测试执行阶段先登记真实命令，再正式执行。
+    test_parser = subparsers.add_parser("test", help="登记或执行主题测试")
+    test_subparsers = test_parser.add_subparsers(dest="test_action", required=True)
+    test_prepare_parser = test_subparsers.add_parser("prepare", help="登记一个测试项的真实命令")
+    test_prepare_parser.add_argument("--topic", required=True, help="验收主题名称")
+    test_prepare_parser.add_argument("--tc", required=True, help="测试项编号，例如 TC-01")
+    test_prepare_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=test_execution_mod.DEFAULT_TIMEOUT_SECONDS,
+        help="单个测试项超时秒数，默认 600",
+    )
+    test_prepare_parser.add_argument(
+        "command_argv",
+        nargs=argparse.REMAINDER,
+        help="在 -- 后写实际测试命令及参数",
+    )
+    test_run_parser = test_subparsers.add_parser("run", help="执行尚无当前成功记录的已登记主题测试")
+    test_run_parser.add_argument(
+        "--parallel",
+        type=int,
+        default=None,
+        help="最多并行执行的独立主题数；默认读取 project.json 的 test_parallelism",
+    )
+
     # gate 命令
     gate_parser = subparsers.add_parser("gate", help="过门禁")
     # stage 名（位置参数）
@@ -1311,12 +1917,38 @@ def main() -> None:
     # --skip：跳过 stage（仅 spike）
     gate_parser.add_argument("--skip", action="store_true",
                              help="跳过 stage（仅 spike）")
+    # --rebaseline：用户确认当前代码作为 impl 的新实施前基线
+    gate_parser.add_argument("--rebaseline", action="store_true",
+                             help="重设 impl 实施前代码基线（仅用户确认后使用）")
+    # --accept-existing-code：用户确认代码在计划确认前已经是本次实施结果
+    gate_parser.add_argument("--accept-existing-code", action="store_true",
+                             help="确认当前已有代码就是本次实施结果（仅 impl）")
     # status 命令（旧状态可能先迁移阶段路径）
     subparsers.add_parser("status", help="打印状态摘要")
     # done 命令
     subparsers.add_parser("done", help="标记完成")
     # abort 命令
     subparsers.add_parser("abort", help="作废当前 Run")
+
+    # return 命令：测试失败或发现上游问题时，由用户确认后退回对应阶段。
+    return_parser = subparsers.add_parser("return", help="退回当前阶段之前的指定阶段")
+    return_parser.add_argument(
+        "--to",
+        required=True,
+        choices=("spec", "acceptance_plan", "test_plan", "impl", "test_code"),
+        help="退回目标阶段",
+    )
+    return_parser.add_argument(
+        "--topic",
+        action="append",
+        help="受影响主题；可重复填写。未填写时默认当前全部主题",
+    )
+    return_parser.add_argument(
+        "--all-topics",
+        action="store_true",
+        help="明确标记当前全部主题都受影响",
+    )
+    return_parser.add_argument("--reason", required=True, help="退回原因")
 
     # install-project 命令（由 install.sh 调用）
     subparsers.add_parser("install-project", help="安装当前项目（由 install.sh 调用）")
@@ -1334,6 +1966,11 @@ def main() -> None:
         cmd_start(args)
     elif args.command == "discuss":
         cmd_discuss(args)
+    elif args.command == "test":
+        if args.test_action == "prepare":
+            cmd_test_prepare(args)
+        else:
+            cmd_test_run(args)
     elif args.command == "gate":
         cmd_gate(args)
     elif args.command == "status":
@@ -1342,6 +1979,8 @@ def main() -> None:
         cmd_done(args)
     elif args.command == "abort":
         cmd_abort(args)
+    elif args.command == "return":
+        cmd_return(args)
     elif args.command == "install-project":
         cmd_install_project(args)
     else:
