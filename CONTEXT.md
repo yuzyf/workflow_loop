@@ -140,7 +140,7 @@ _Avoid_: 可长期缺失的架构说明, 仅口头架构
 **Architecture Doc Phases** (架构文档双阶段):
 同一份架构文档的两种完成度，不是两个无关文件：
 1. **初步架构**（前期设计）：路径前段产出或补齐，服务计划与实施前的共同理解。从零做时顺序固定为**先产品设计与功能拆分、后初步架构**（先定做什么，再定怎么搭）；首次接入已有代码项目时由 `project_design_init` 与产品、功能基线一起从代码反推建立。
-2. **详细架构**（代码通过最终全量回归和整体验收后）：`overall_acceptance` 之后强制更新/写全，反映最终被验证和接受的真实结构
+2. **详细架构**（代码通过最终全量回归和整体验收后）：`overall_acceptance` 之后强制进入最终设计同步，核对产品总说明、功能文档、架构设计和真实代码；架构有变化时更新架构与功能到代码的映射，架构没有变化时也要写本轮核对结论。发现用户可见功能变化返回 `spec`，发现代码未实现返回 `impl`。
 Stage 命名：从零做的前段初步架构为 `code_design`；存量项目首次初始化为 `project_design_init`；改产品设计期为 `revise_code_design`；**所有意图** 在 `overall_acceptance` 后一律进入 `update_code_design`。废弃 `generate_code_design`。
 _Avoid_: 只在 impl 后才第一次写架构, 未测试验收就写最终详细架构, 有初步无详细收尾, 有详细却声称前期不需要图
 
@@ -1075,8 +1075,8 @@ _Avoid_: 为整体验收重复生成汇总文档, 把最终全量回归等同于
 _Avoid_: 只清门禁但 current_stage 仍停在后面导致无法重做, 上游变化后沿用旧哈希, 失效后仍提示操作原阶段, 把重新确认说成重新开发, 为了门禁制造无意义修改, 测试结果失效后直接进入主题验收, 在主题状态尚未设计前声称能精确判断受影响主题
 
 **Update Code Design Stage** (`update_code_design`):
-所有工作意图在 `regression_test` 通过且 `overall_acceptance` 经用户确认之后进入详细架构收尾 Stage。写入/更新同一文件 `spec/architecture_code_design.md`，用户确认后置 `architecture.detailed_done`。从零做、改产品、修 bug 末环同名；不再使用 `generate_code_design`。
-_Avoid_: generate_code_design 作为从零做末环, 三种意图末环不同名, 因文件已存在而跳过本 stage, 未通过测试验收就写最终架构
+所有工作意图在 `regression_test` 通过且 `overall_acceptance` 经用户确认之后进入最终设计同步 Stage。这个阶段更新的是设计文档，不修改生产代码；它核对产品总说明、功能文档、架构设计和真实代码，并把每个功能到真实代码的映射写入 `spec/architecture_code_design.md`。只改变架构的情况在本阶段完成；发现用户可见功能、规则、边界、使用过程或异常变化时返回 `spec`；发现代码未实现已确认要求时返回 `impl`。用户确认后置 `architecture.detailed_done`。从零做、改产品、修 bug 末环同名；不再使用 `generate_code_design`。
+_Avoid_: generate_code_design 作为从零做末环, 三种意图末环不同名, 因文件已存在而跳过本 stage, 未通过测试验收就写最终架构, 把功能变化伪装成架构变化, 把代码现状反写成产品规则
 
 **Installer Agent Contract Write** (安装时写入代理契约):
 项目目录确认正确且当前项目尚未安装后，安装脚本把最小代理契约直接写入 **`AGENTS.md`**：文件不存在则新建，文件存在则整份覆盖。契约包含 workflow 入口、stdout 跟随规则和核心表达要求。这里不再提供契约冲突选择、不自动合并、不生成备份。项目已有完整安装标记时按重复安装规则直接退出，不改现有契约。

@@ -21,7 +21,7 @@ from .stages.base import StageStrategy
 # from_scratch（从零做）的完整 stage 路径
 # 顺序固定：先产品设计与功能拆分、后初步架构（先定做什么，再定怎么搭）
 # 然后验证技术不确定性 → 验收计划 → 测试计划 → 实施/记录 → 写测试代码 → 执行测试 → 主题验收
-# → 最终全量回归 → 整体验收 → 详细架构收尾
+# → 最终全量回归 → 整体验收 → 最终设计同步
 # 共享后半截：acceptance_plan → test_plan → impl → test_code → test_execution
 # → topic_acceptance → regression_test → overall_acceptance → update_code_design
 FROM_SCRATCH_PATH = [
@@ -48,7 +48,7 @@ FROM_SCRATCH_PATH = [
     RegressionTestStage,
     # 最终全量回归通过后，确认整个需求是否完成
     OverallAcceptanceStage,
-    # 详细架构收尾：更新 spec/architecture_code_design.md 反映最终真实结构
+    # 最终设计同步：更新 spec/architecture_code_design.md 反映产品、架构和真实代码映射
     # 所有意图末环同名，强制不可跳过
     UpdateCodeDesignStage,
 ]
@@ -78,14 +78,14 @@ PRODUCT_CHANGE_BASE = [
     RegressionTestStage,
     # 整体验收
     OverallAcceptanceStage,
-    # 详细架构收尾（强制）
+    # 最终设计同步（强制）
     UpdateCodeDesignStage,
 ]
 
 # bugfix（修 bug）的基础 stage 路径（不含 project_design_init 前置）
 # 和 from_scratch 的差异：没有 spec/code_design，先 reproduce，再经过可选 spike；
 # 在共享后半截中使用 impl 制定并执行修复实施计划
-# 末段 update_code_design 即使无结构变化也必须走，在门禁中显式确认"无结构变化"
+# 末段 update_code_design 即使无架构变化也必须走，在门禁中显式确认"架构未变化"
 BUGFIX_BASE = [
     # 复现阶段：复现 bug + 根因分析，并确定一份缺陷记录对应的验收主题
     ReproduceStage,
@@ -105,7 +105,7 @@ BUGFIX_BASE = [
     RegressionTestStage,
     # 整体验收
     OverallAcceptanceStage,
-    # 详细架构收尾（强制，无结构变化也要显式确认）
+    # 最终设计同步（强制，无架构变化也要显式确认）
     UpdateCodeDesignStage,
 ]
 

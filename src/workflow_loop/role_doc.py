@@ -65,10 +65,10 @@ ROLE_DOC_MAP = {
         "role": "架构文档修订者",
         "description": "改产品路径上，按变更后的产品设计修改 spec/architecture_code_design.md。",
     },
-    # 末段详细架构收尾：反映最终被验证和接受的真实结构
+    # 末段最终设计同步：核对产品、功能、架构和真实代码映射
     "update_code_design": {
-        "role": "架构文档更新者（详细）",
-        "description": "最终全量回归和整体验收通过后，更新/写全 spec/architecture_code_design.md，反映最终真实结构。",
+        "role": "最终设计同步者",
+        "description": "最终全量回归和整体验收通过后，核对产品设计、功能文档、架构设计和真实代码；架构有变化时更新架构与功能到代码的映射，发现功能变化返回 spec，发现代码未实现返回 impl。",
     },
     # 验收计划制定阶段
     "acceptance_plan": {

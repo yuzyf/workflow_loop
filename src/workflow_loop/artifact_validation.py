@@ -1,3 +1,4 @@
+import glob
 import os
 import re
 import shlex
@@ -32,6 +33,17 @@ TEST_PLAN_SECTIONS = [
     "3. 测试条件要求",
     "4. 未决测试条件",
     "5. 上下游文档",
+]
+ARCHITECTURE_DOCUMENT_SECTIONS = [
+    "1. 文档说明",
+    "2. 产品概览",
+    "3. 产品设计如何决定代码架构",
+    "4. 代码架构分层",
+    "5. 架构关键节点",
+    "6. 各产品功能的代码设计",
+    "7. 多个功能共同使用的代码",
+    "8. 产品设计与代码实现的差异",
+    "9. 最终同步结论",
 ]
 CODE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".java", ".kt", ".kts",
@@ -131,6 +143,43 @@ def _is_safe_topic_name(value: str | None) -> bool:
     return normalized not in {".", ".."} and os.path.basename(normalized) == normalized
 
 
+def _existing_code_paths_in_text(project_root: str, content: str) -> list[str]:
+    """从 Markdown 代码标识和链接中找出项目内真实存在的代码文件。"""
+    candidates = set(re.findall(r"`([^`\n]+)`", content))
+    candidates.update(re.findall(r"\[[^\]]+\]\(([^)]+)\)", content))
+    project_root_abs = os.path.abspath(project_root)
+    existing: list[str] = []
+    for raw_candidate in candidates:
+        candidate = raw_candidate.strip().split("#", 1)[0]
+        candidate = re.sub(r":\d+$", "", candidate)
+        if candidate.startswith(("./", "../")):
+            relative_path = os.path.normpath(os.path.join("spec", candidate))
+        else:
+            relative_path = os.path.normpath(candidate)
+        if os.path.isabs(relative_path):
+            continue
+        suffix = os.path.splitext(relative_path)[1].lower()
+        if suffix not in CODE_SUFFIXES:
+            continue
+        full_path = os.path.abspath(os.path.join(project_root_abs, relative_path))
+        if os.path.commonpath([project_root_abs, full_path]) != project_root_abs:
+            continue
+        if os.path.isfile(full_path):
+            existing.append(relative_path)
+    return sorted(set(existing))
+
+
+def _architecture_feature_sections(content: str) -> list[str]:
+    """拆出“各产品功能的代码设计”中的每个 6.x 功能段。"""
+    feature_content = _section(content, "6. 各产品功能的代码设计") or ""
+    matches = list(re.finditer(r"^###\s+6\.\d+\s+.+$", feature_content, re.MULTILINE))
+    sections: list[str] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(feature_content)
+        sections.append(feature_content[match.start() : end].strip())
+    return sections
+
+
 def changed_stage_paths(
     project_root: str,
     stage_name: str,
@@ -224,6 +273,84 @@ def validate_project_design_init_evidence(
         return (False, "必须写清产品文档与代码设计文档怎样根据调查结果完成校准")
 
     return (True, f"项目设计初始化调查证据有效，已核对代码文件: {checked_code_paths}")
+
+
+def validate_final_code_design_document(
+    project_root: str,
+    workflow_id: str,
+) -> tuple[bool, str]:
+    """校验最终架构文档已经完成产品、功能、架构和代码映射。"""
+    relative_path = os.path.join("spec", "architecture_code_design.md")
+    full_path = os.path.join(project_root, relative_path)
+    if not os.path.isfile(full_path):
+        return False, f"{relative_path} 不存在"
+
+    content = _read_text(project_root, relative_path)
+    product_path = os.path.join(project_root, "spec", "product.md")
+    if not os.path.isfile(product_path):
+        return False, "spec/product.md 不存在，无法核对最终产品设计"
+    missing_sections = [
+        heading
+        for heading in ARCHITECTURE_DOCUMENT_SECTIONS
+        if _section(content, heading) is None
+    ]
+    if missing_sections:
+        return False, f"{relative_path} 缺少章节: {missing_sections}"
+
+    feature_paths = sorted(
+        os.path.relpath(path, project_root)
+        for path in glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
+    )
+    if not feature_paths:
+        return False, "spec/ 下没有 feature_*.md，无法建立功能到代码映射"
+
+    feature_sections = _architecture_feature_sections(content)
+    if not feature_sections:
+        return False, "最终架构文档没有按产品功能编写 6.x 功能代码设计"
+
+    for feature_path in feature_paths:
+        feature_name = os.path.basename(feature_path)
+        matching_sections = [section for section in feature_sections if feature_name in section]
+        if len(matching_sections) != 1:
+            return False, f"最终架构文档没有映射功能文档: {feature_path}"
+        mapped_code_paths = [
+            path
+            for path in _existing_code_paths_in_text(project_root, matching_sections[0])
+            if not path.startswith(f"tests{os.sep}")
+        ]
+        if not mapped_code_paths:
+            return False, f"最终架构文档没有给功能文档映射真实代码文件: {feature_path}"
+
+    feature_code_section = _section(content, "6. 各产品功能的代码设计") or ""
+    if "代码位置" not in feature_code_section:
+        return False, "最终架构文档的功能代码设计缺少“代码位置”"
+    if "验证位置" not in feature_code_section:
+        return False, "最终架构文档的功能代码设计缺少“验证位置”"
+
+    sync_section = _section(content, "9. 最终同步结论") or ""
+    expected_fields = {
+        "工作流编号": workflow_id,
+        "产品设计核对": "一致",
+        "功能文档核对": "一致",
+        "代码实现核对": "一致",
+        "功能到代码映射": "完整",
+        "未处理差异": "暂无",
+    }
+    for label, expected in expected_fields.items():
+        actual = _field(sync_section, label)
+        if actual != expected:
+            return False, f"最终同步结论的“{label}”必须是“{expected}”，当前是“{actual or '缺少'}”"
+
+    sync_type = _field(sync_section, "本次同步类型")
+    if sync_type not in {"架构变化", "架构未变化"}:
+        return False, "最终同步结论的“本次同步类型”只能写“架构变化”或“架构未变化”"
+    if not _has_real_text(_field(sync_section, "核对依据")):
+        return False, "最终同步结论必须写清可以复核的核对依据"
+
+    return (
+        True,
+        f"最终设计同步有效：已核对 {len(feature_paths)} 个功能，并完成真实代码映射",
+    )
 
 
 def validate_reproduce_documents(

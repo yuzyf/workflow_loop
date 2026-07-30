@@ -7,6 +7,7 @@ from ..artifact_validation import (
     changed_stage_paths,
     validate_acceptance_plan_documents,
     validate_downstream_traceability,
+    validate_final_code_design_document,
     validate_final_regression_state,
     validate_inherited_topic_index,
     validate_overall_acceptance_prerequisites,
@@ -1060,8 +1061,7 @@ class OverallAcceptanceStage(StageStrategy):
         )
 
 
-# 详细架构收尾 stage：写入/更新 spec/architecture_code_design.md
-# 反映最终被验证和接受的真实结构，让架构文档和实际代码对齐
+# 最终设计同步 stage：核对产品、功能、架构和真实代码，并更新最终架构文档
 class UpdateCodeDesignStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
@@ -1088,13 +1088,31 @@ class UpdateCodeDesignStage(StageStrategy):
         architecture_path = os.path.join(project_root, "spec", "architecture_code_design.md")
         if not os.path.isfile(architecture_path):
             return (False, "spec/architecture_code_design.md 不存在")
-        changed_ok, changed_detail, _ = changed_stage_paths(
+        changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
             self.name(),
             self.change_tracked_paths(project_root),
         )
         if not changed_ok:
             return (False, changed_detail)
+        changed_product_docs = [
+            path
+            for path in changed_paths
+            if path == os.path.join("spec", "product.md")
+            or path.startswith(os.path.join("spec", "feature_"))
+        ]
+        if changed_product_docs:
+            return (
+                False,
+                "产品总说明或功能文档在 update_code_design 阶段发生变化："
+                f"{changed_product_docs}；功能变化必须返回 spec，不能在最终设计同步阶段直接修改",
+            )
+        if os.path.join("spec", "architecture_code_design.md") not in changed_paths:
+            return (
+                False,
+                "最终设计同步没有更新 spec/architecture_code_design.md；"
+                "即使架构没有变化，也要写入本轮核对结论和真实代码映射",
+            )
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
@@ -1106,14 +1124,33 @@ class UpdateCodeDesignStage(StageStrategy):
         )
         if not trace_ok:
             return (False, trace_detail)
-        return (True, "最终代码设计文档已在本阶段更新，追踪表已准备好记录最终代码设计")
+        document_ok, document_detail = validate_final_code_design_document(
+            project_root,
+            state.workflow_id,
+        )
+        if not document_ok:
+            return (False, document_detail)
+        return (True, f"{document_detail}；追踪表已准备好记录最终代码设计")
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
-        return [os.path.join("spec", "architecture_code_design.md")]
+        feature_paths = [
+            os.path.relpath(path, project_root)
+            for path in glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
+        ]
+        return [
+            os.path.join("spec", "architecture_code_design.md"),
+            os.path.join("spec", "product.md"),
+            *feature_paths,
+        ]
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "详细架构收尾：写入/更新 spec/architecture_code_design.md，反映最终被验证和接受的真实结构"
+        return (
+            "最终设计同步：核对产品设计、功能文档、架构设计和真实代码；"
+            "架构有变化时更新架构和功能到代码的映射，架构无变化时记录核对结论；"
+            "发现功能变化返回 spec，发现代码未实现返回 impl；确认无未处理差异后，"
+            "写入/更新 spec/architecture_code_design.md"
+        )
 
 
 # 项目设计架构初始化 stage：根据现有代码及可运行行为一次建立设计文档

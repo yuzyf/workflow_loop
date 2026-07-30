@@ -599,11 +599,9 @@ def set_recovery_context(
 
 
 def clear_completed_material_recovery(state: WorkflowState) -> bool:
-    """阶段重新确认完成后，清除已经解决的模板/规范变更提示。"""
+    """引发恢复的阶段重新确认完成后，清除当前提示，历史留在 Journal。"""
     recovery = state.recovery
     if not recovery.source_stage or not recovery.reason:
-        return False
-    if "流程模板或规范" not in recovery.reason:
         return False
     source_state = state.stages.get(recovery.source_stage)
     if source_state is None or source_state.status != "done":

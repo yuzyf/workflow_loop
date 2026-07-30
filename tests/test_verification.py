@@ -475,7 +475,7 @@ def test_completed_material_recovery_reason_is_cleared_after_source_stage(tmp_pa
     assert state.recovery.reason is None
 
 
-def test_content_invalidation_recovery_reason_is_not_cleared_after_source_stage(tmp_path):
+def test_content_invalidation_recovery_reason_is_cleared_after_source_stage(tmp_path):
     state = _make_state(str(tmp_path))
     state.current_stage = "impl"
     state.stages["test_plan"].status = "done"
@@ -483,8 +483,9 @@ def test_content_invalidation_recovery_reason_is_not_cleared_after_source_stage(
     state.recovery.reason = "测试项、测试方式或测试范围已经改变，后续实施和测试必须重新核对"
     state.recovery.affected_stages = ["test_plan", "impl", "test_code"]
 
-    assert clear_completed_material_recovery(state) is False
-    assert state.recovery.source_stage == "test_plan"
+    assert clear_completed_material_recovery(state) is True
+    assert state.recovery.source_stage is None
+    assert state.recovery.reason is None
 
 
 def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):

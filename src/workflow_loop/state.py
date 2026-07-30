@@ -116,8 +116,8 @@ class StageState:
 class ArchitectureState:
     # 初步架构完成：前段架构 stage（code_design/revise_code_design/project_design_init）--confirmed 后置 true
     preliminary_done: bool = False
-    # 详细架构完成：末段 update_code_design --confirmed 后置 true
-    # 文件存在只是必要条件，不得因已存在而自动跳过详细架构收尾
+    # 最终设计同步完成：末段 update_code_design --confirmed 后置 true
+    # 文件存在只是必要条件，不得因已存在而自动跳过最终设计同步
     detailed_done: bool = False
 
 

@@ -55,7 +55,7 @@ STAGE_LABELS = {
     "topic_acceptance": "主题验收",
     "regression_test": "最终全量回归",
     "overall_acceptance": "整体验收",
-    "update_code_design": "详细代码设计收尾",
+    "update_code_design": "最终产品、架构与代码设计同步",
 }
 
 
@@ -166,6 +166,15 @@ def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
     if wf_state.recovery.source_stage:
         return False
 
+    journal_entries = journal_mod.read_all(project_root)
+    handled_recovery_ids = {
+        entry.get("recovery_created_at")
+        for entry in journal_entries
+        if entry.get("action") == "恢复提示已处理"
+        and entry.get("recovery_created_at")
+        and entry.get("workflow_id") in (None, wf_state.workflow_id)
+    }
+
     first_affected_stage = {
         "acceptance_plan": "acceptance_plan",
         "test_plan": "test_plan",
@@ -189,7 +198,10 @@ def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
     if current_index is None:
         return False
 
-    for entry in reversed(journal_mod.read_all(project_root)):
+    for entry in reversed(journal_entries):
+        entry_workflow_id = entry.get("workflow_id")
+        if entry_workflow_id not in (None, wf_state.workflow_id):
+            continue
         action = entry.get("action")
         if action == "验证失效":
             source_stage = entry.get("from_stage")
@@ -203,10 +215,18 @@ def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
             reason = entry.get("reason") or "用户确认退回"
         else:
             continue
+        recovery_created_at = entry.get("recovery_created_at")
+        if recovery_created_at and recovery_created_at in handled_recovery_ids:
+            continue
         if not source_stage or target_stage not in stage_indexes:
             continue
         target_index = stage_indexes[target_stage]
         if current_index < target_index:
+            continue
+        # 兼容没有 recovery_created_at 的旧 Journal：源阶段已经完成时，
+        # 说明这条历史原因已经处理过，不再重新恢复为当前提示。
+        source_state = wf_state.stages.get(source_stage)
+        if not recovery_created_at and source_state is not None and source_state.status == "done":
             continue
         affected_stages = wf_state.stage_path[target_index:]
         if wf_state.current_stage not in affected_stages:
@@ -222,7 +242,7 @@ def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
 
 
 def clear_completed_material_recovery(project_root: str, wf_state) -> bool:
-    """清除已经完成的模板/规范复核提示，并保留 Journal 历史。"""
+    """清除已经完成的恢复提示，并保留带关联标识的 Journal 历史。"""
     recovery = wf_state.recovery
     if not verification_mod.clear_completed_material_recovery(wf_state):
         return False
@@ -233,6 +253,7 @@ def clear_completed_material_recovery(project_root: str, wf_state) -> bool:
         workflow_id=wf_state.workflow_id,
         source_stage=recovery.source_stage,
         reason=recovery.reason,
+        recovery_created_at=recovery.created_at,
     )
     state_mod.save_state(project_root, wf_state)
     return True
@@ -747,6 +768,7 @@ def cmd_discuss(args) -> None:
             stage=stage.name(),
             previous_material_hash=stage_state.discussion_material_hash,
             current_material_hash=material_hash,
+            recovery_created_at=wf_state.recovery.created_at,
         )
     stage_state.discussion_material_hash = material_hash
     automated_acceptance_records = []
@@ -978,10 +1000,12 @@ def validate_stage_output(
     wf_state: state_mod.WorkflowState,
     stage_name: str,
     stage: StageStrategy,
+    *,
+    execute_regression: bool = True,
 ) -> tuple[bool, str]:
-    """执行阶段产物校验；test_plan 额外执行修改前全量测试基线。"""
+    """执行阶段产物校验；最终回归可由调用方控制是否实际执行。"""
 
-    if stage_name == "regression_test":
+    if stage_name == "regression_test" and execute_regression:
         passed, details = test_runner_mod.run_final_regression(project_root, wf_state)
         journal_mod.append_entry(
             project_root,
@@ -1016,6 +1040,16 @@ def validate_stage_output(
     return True, f"{details}；{baseline_result.detail}"
 
 
+def regression_failure_next_step() -> str:
+    """回归失败时，告诉用户先归因再退回，避免无条件重复执行同一命令。"""
+    return (
+        "最终全量回归未通过，先查看 state.json/journal.jsonl 的命令、退出码和输出摘要，"
+        "判断失败属于产品代码、测试代码、测试计划还是临时环境；"
+        "确定原因后调 `workflow return --to <阶段> --reason \"具体原因\"` 返回对应阶段，"
+        "不要直接重复调当前 regression_test 门禁"
+    )
+
+
 def _load_active_workflow_for_command(project_root: str) -> state_mod.WorkflowState:
     workflow_state = state_mod.load_state(project_root)
     if workflow_state is None:
@@ -1045,9 +1079,11 @@ def _test_execution_inputs_are_current(
                 project_root,
                 "验证失效",
                 "workflow.py",
+                workflow_id=wf_state.workflow_id,
                 from_stage=from_stage,
                 to_stage=to_stages,
                 reason=wf_state.recovery.reason or "测试登记或执行前发现上游内容变化",
+                recovery_created_at=wf_state.recovery.created_at,
             )
         print("═══ 测试执行前置内容已失效 ═══")
         for from_stage, to_stages in invalidations:
@@ -1395,6 +1431,7 @@ def cmd_return(args) -> None:
         topics=affected_topics,
         reason=args.reason.strip(),
         traceability=trace_detail,
+        recovery_created_at=wf_state.recovery.created_at,
     )
     state_mod.save_state(project_root, wf_state)
     print("═══ 工作流已退回 ═══")
@@ -1853,9 +1890,16 @@ def cmd_gate(args) -> None:
             state_mod.save_state(project_root, wf_state)
             # 写 journal：验证失效
             for from_stage, to_stages in invalidations:
-                journal_mod.append_entry(project_root, "验证失效", "workflow.py",
-                                        from_stage=from_stage, to_stage=to_stages,
-                                        reason=wf_state.recovery.reason or "上游内容已变化")
+                journal_mod.append_entry(
+                    project_root,
+                    "验证失效",
+                    "workflow.py",
+                    workflow_id=wf_state.workflow_id,
+                    from_stage=from_stage,
+                    to_stage=to_stages,
+                    reason=wf_state.recovery.reason or "上游内容已变化",
+                    recovery_created_at=wf_state.recovery.created_at,
+                )
             # 打印失效信息
             print(f"═══ 验证失效 ═══")
             for from_stage, to_stages in invalidations:
@@ -1944,7 +1988,9 @@ def cmd_gate(args) -> None:
                 "--accept-existing-code" in details
                 or "--accept-existing-test-code" in details
             )
-            if recovery_instruction(wf_state) and recovery_command_needed:
+            if stage_name == "regression_test":
+                print_next_step(regression_failure_next_step())
+            elif recovery_instruction(wf_state) and recovery_command_needed:
                 print_next_step(current_stage_next_instruction(wf_state))
             elif recovery_instruction(wf_state):
                 print_next_step(
@@ -1992,9 +2038,11 @@ def cmd_gate(args) -> None:
                 project_root,
                 "验证失效",
                 "workflow.py",
+                workflow_id=wf_state.workflow_id,
                 from_stage=from_stage,
                 to_stage=to_stages,
                 reason=wf_state.recovery.reason or "用户确认前发现上游内容已变化",
+                recovery_created_at=wf_state.recovery.created_at,
             )
         print("═══ 用户确认前校验失败 ═══")
         for from_stage, to_stages in invalidations:
@@ -2008,6 +2056,7 @@ def cmd_gate(args) -> None:
         wf_state,
         stage_name,
         stage,
+        execute_regression=False,
     )
     journal_mod.append_entry(
         project_root,
@@ -2023,7 +2072,10 @@ def cmd_gate(args) -> None:
         state_mod.save_state(project_root, wf_state)
         print(f"═══ {stage_name} 用户确认前校验失败 ═══")
         print(f"详情: {details}")
-        print_next_step(f"修正文档后重新调 `workflow gate {stage_name}`")
+        if stage_name == "regression_test":
+            print_next_step(regression_failure_next_step())
+        else:
+            print_next_step(f"修正文档后重新调 `workflow gate {stage_name}`")
         return
 
     # 修 bug 在 reproduce（缺陷复现）确认时确定并登记验收主题。

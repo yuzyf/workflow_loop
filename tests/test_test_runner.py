@@ -1,3 +1,4 @@
+from workflow_loop import cli as cli_mod
 from workflow_loop.cli import validate_stage_output
 from workflow_loop.state import WorkflowState, load_state, save_state
 from workflow_loop.test_runner import ensure_test_baseline, run_final_regression
@@ -146,3 +147,30 @@ def test_validate_stage_output_runs_baseline_for_test_plan(tmp_path):
     assert passed is True
     assert "修改前全量测试完成" in detail
     assert state.test_baseline.status == "passed"
+
+
+def test_validate_stage_output_can_validate_regression_without_rerunning(tmp_path, monkeypatch):
+    state = _state()
+    calls = []
+
+    def fail_if_called(_project_root, _workflow_state):
+        calls.append(True)
+        raise AssertionError("确认门不应该再次执行最终全量回归")
+
+    monkeypatch.setattr(cli_mod.test_runner_mod, "run_final_regression", fail_if_called)
+
+    class PassingStage:
+        def code_validate(self, _project_root):
+            return True, "已使用保存的最终回归结果"
+
+    passed, detail = validate_stage_output(
+        str(tmp_path),
+        state,
+        "regression_test",
+        PassingStage(),
+        execute_regression=False,
+    )
+
+    assert passed is True
+    assert "保存的最终回归结果" in detail
+    assert calls == []

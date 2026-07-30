@@ -871,8 +871,8 @@ def test_wrong_stage_gate_explains_recovery_reason_and_action(tmp_path):
     assert code == 1
     assert "当前 stage 是 impl" in out
     assert "test_plan（测试计划）已经完成" in out
-    assert "当前不是从头重做" in out
-    assert "重新核对实施计划" in out
+    assert "当前不是从头重做" not in out
+    assert "workflow gate impl --discuss-done" in out
 
 
 def test_status_restores_recovery_reason_from_old_journal(tmp_path):
@@ -939,6 +939,24 @@ def test_status_clears_completed_material_recovery_reason(tmp_path):
         "created_at": "2026-07-29T03:00:00+00:00",
     }
     state_path.write_text(json.dumps(state), encoding="utf-8")
+    journal_path = tmp_path / ".workflow_loop" / "journal.jsonl"
+    with journal_path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "ts": "2026-07-29T03:00:01+00:00",
+                    "action": "验证失效",
+                    "actor": "workflow.py",
+                    "workflow_id": state["workflow_id"],
+                    "from_stage": "test_execution",
+                    "to_stage": "topic_acceptance 及全部后续阶段",
+                    "reason": state["recovery"]["reason"],
+                    "recovery_created_at": state["recovery"]["created_at"],
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
 
     code, out, err = _run(["status"], str(tmp_path))
 
@@ -953,7 +971,20 @@ def test_status_clears_completed_material_recovery_reason(tmp_path):
         for line in (tmp_path / ".workflow_loop" / "journal.jsonl").read_text().splitlines()
         if line.strip()
     ]
-    assert any(entry.get("action") == "恢复提示已处理" for entry in journal)
+    handled = [entry for entry in journal if entry.get("action") == "恢复提示已处理"]
+    assert len(handled) == 1
+    assert handled[0]["recovery_created_at"] == state["recovery"]["created_at"]
+
+    code, out, err = _run(["status"], str(tmp_path))
+
+    assert code == 0, err
+    assert "当前处于上游变化后的恢复流程" not in out
+    journal_after = [
+        json.loads(line)
+        for line in (tmp_path / ".workflow_loop" / "journal.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len([entry for entry in journal_after if entry.get("action") == "恢复提示已处理"]) == 1
 
 
 def test_accept_existing_test_code_flag_is_rejected_with_clear_reason(tmp_path):

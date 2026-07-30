@@ -873,13 +873,13 @@ class StageStrategy(ABC):
 
 | 字段 | 值 |
 |---|---|
-| 角色 | 架构文档更新者（详细落地） |
+| 角色 | 最终设计同步者（产品、功能、架构与代码映射） |
 | 产物文档模板 | 共用 `Template_Repository/code_design/code_design.md` |
 | 阶段工作规范 | `Standardized_Repository/code_design/update_code_design.md` |
-| 产物 | 写入/更新 `spec/architecture_code_design.md` |
-| `code_validate` | 检查架构文档确实在本阶段发生变化，并且当前工作流追踪表存在；bugfix 无结构变化时也要在文档中补充本轮核对结论（不省略 stage） |
+| 产物 | 写入/更新 `spec/architecture_code_design.md`；不直接修改产品总说明、功能文档或生产代码 |
+| `code_validate` | 检查架构文档确实在本阶段发生变化；产品总说明和功能文档不能在本阶段变化；最终文档必须包含产品/功能/架构/代码核对结论，并且每个功能都有真实代码映射；当前工作流追踪表必须存在 |
 | 门3确认处理 | 更新追踪表的最终代码设计列，并置 `architecture.detailed_done=true` |
-| instruction | "详细架构收尾：写入/更新 spec/architecture_code_design.md，反映最终被验证和接受的真实结构" |
+| instruction | "最终设计同步：核对产品设计、功能文档、架构设计和真实代码；架构有变化时更新架构和功能到代码的映射，架构无变化时记录核对结论；发现功能变化返回 spec，发现代码未实现返回 impl" |
 
 **强制**：所有工作意图在 `regression_test` 通过且 `overall_acceptance` 经用户确认之后必须经过 `update_code_design`。
 
@@ -1237,7 +1237,7 @@ class StageStrategy(ABC):
    - `from_scratch` 在 `code_design` stage 产出
    - `product_change` 在 `revise_code_design` stage 产出
    - `bugfix` 在 `project_design_init` stage 产出（若 `project_design_initialized=false`）
-2. **详细架构**（最终全量回归和整体验收通过后）：`overall_acceptance` 之后强制更新/写全，反映最终被验证和接受的真实结构
+2. **详细架构**（最终全量回归和整体验收通过后）：`overall_acceptance` 之后强制进行最终设计同步，反映最终被验证和接受的产品、功能、架构和真实代码关系。只改变架构时更新架构和功能到代码的映射；发现功能变化返回 `spec`；发现代码未实现返回 `impl`。
    - 所有意图末段 `update_code_design` stage
 
 ### 9.2 Architecture Gate Marks
@@ -1254,6 +1254,17 @@ State Snapshot 中记录架构完成度：
 - `spec/product.md` 里始终有 markdown 链接 `[code_design](./architecture_code_design.md)`
 - `from_scratch`：`spec` 阶段先写链接，紧接着的 `code_design` 阶段创建初步文档；末段 `update_code_design` 再按最终代码、测试和验收结果更新
 - `product_change`/`bugfix`：链接指向已存在的文件（来自 `project_design_init` 或 `revise_code_design`）
+
+### 9.4 最终设计同步的返回规则
+
+`update_code_design` 不把最终代码现状当成新的产品需求。它只负责在已通过测试和验收的前提下，补齐真实架构和功能到代码映射。
+
+| 发现内容 | 处理阶段 | 原因 |
+|---|---|---|
+| 只有架构分层、模块关系或调用链变化 | `update_code_design` | 用户可见产品行为没有变化，只需同步架构和代码映射 |
+| 用户可见功能、规则、边界、使用过程或异常变化 | `spec` | 产品依据变了，原验收条件不能继续代表新的功能 |
+| 代码没有实现已确认的产品要求 | `impl` | 需要修改真实代码，不能修改文档掩盖实现缺口 |
+| 功能文档没有写清已确认且已验收的行为 | `spec` | 功能文档是产品依据，必须先补齐再重新确认后续链路 |
 
 ---
 
@@ -1388,4 +1399,4 @@ bug/
 - 机制：无 Verification Invalidation + 无 Architecture Gate Marks + 无 Clean Confirm + 无 Optional Spike --skip → 全部新增
 - 穿刺：只检查任意 `spike_*.md` → 当前工作流清单 + 每项结论 + 固定状态 + 阻塞检查 + 产品/代码设计修改哈希校验
 
-**当前状态**：产品设计、代码设计、穿刺、验收计划、测试计划、实施、测试代码和测试执行阶段已经按“产物文档模板 + 阶段工作规范 + 代码开发规范 + Python 门禁”重新校准。实施后的正式路径拆成 `test_code`、`test_execution`、`topic_acceptance` 三个阶段，不再使用 `topic_execution`。上游变化后，State Snapshot 保存恢复原因，stdout 和 status 明确区分“复核既有计划/代码”和“重新执行测试/验收”；`impl` 与 `test_code` 分别支持确认既有实施代码和既有测试代码，禁止为了门禁制造无意义修改。`test_execution` 使用 `workflow test prepare/run` 登记和执行真实命令，保存当前机器执行记录，失败时用 `workflow return` 由用户决定退回阶段和受影响主题。纯人工主题不会生成假测试代码或测试结果文件。
+**当前状态**：产品设计、代码设计、穿刺、验收计划、测试计划、实施、测试代码和测试执行阶段已经按“产物文档模板 + 阶段工作规范 + 代码开发规范 + Python 门禁”重新校准。实施后的正式路径拆成 `test_code`、`test_execution`、`topic_acceptance` 三个阶段，不再使用 `topic_execution`。上游变化后，State Snapshot 保存恢复原因，stdout 和 status 明确区分“复核既有计划/代码”和“重新执行测试/验收”；`impl` 与 `test_code` 分别支持确认既有实施代码和既有测试代码，禁止为了门禁制造无意义修改。`test_execution` 使用 `workflow test prepare/run` 登记和执行真实命令，保存当前机器执行记录，失败时用 `workflow return` 由用户决定退回阶段和受影响主题。纯人工主题不会生成假测试代码或测试结果文件。末段 `update_code_design` 已明确为最终产品、功能、架构与真实代码同步：只改架构时更新架构和功能到代码映射，发现功能变化返回 `spec`，发现代码未实现返回 `impl`；门禁检查最终同步结论和每个功能的真实代码映射。

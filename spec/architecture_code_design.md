@@ -8,7 +8,7 @@
 
 维护者可以从本文看清：产品设计文档生成和技术不确定性验证分别经过哪些代码环节；命令、阶段规则、状态文件、产物文档模板、阶段工作规范和门禁怎样协作；关键判断和文件写入发生在哪里；哪些行为已经有测试或运行证据；哪些内容仍只能由 AI 和用户判断。
 
-本文最初由 `code_design`（初步代码架构）阶段生成，后续会在 `update_code_design`（最终代码设计更新）阶段按已经通过测试和验收的真实代码继续校准。本文记录代码职责、调用关系、状态变化和验证位置，不记录某一次工作流当前停在哪个阶段，也不能代替实施记录、测试结果和用户验收。
+本文最初由 `code_design`（初步代码架构）阶段生成，后续会在 `update_code_design`（最终产品、架构与代码设计同步）阶段按已经通过测试和验收的真实代码继续校准。最终同步不只是更新架构名称，还要核对产品总说明、功能文档、架构设计和真实代码，并把每个功能到真实代码的映射写全。本文记录代码职责、调用关系、状态变化和验证位置，不记录某一次工作流当前停在哪个阶段，也不能代替实施记录、测试结果和用户验收。
 
 ### 1.2 设计依据
 
@@ -27,7 +27,7 @@
 
 | 结论 | 证据状态 | 依据 |
 |---|---|---|
-| 命令入口、阶段路径、三道门禁、阶段产物基线、项目初始化证据、缺陷复现校验、穿刺结构化校验、验收与测试计划结构、测试代码映射和哈希冻结、最终回归与整体验收固定门禁和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-29 运行项目统一测试入口，171 项通过；测试覆盖阶段材料安装、AC/TC 逐条映射、纯人工主题、跨语言测试文件识别、测试标识防伪和单测试单映射、测试与产品配置哈希拆分、主题依赖执行、有效结果复用、缺陷状态、最终回归和整体验收门禁 |
+| 命令入口、阶段路径、三道门禁、阶段产物基线、项目初始化证据、缺陷复现校验、穿刺结构化校验、验收与测试计划结构、测试代码映射和哈希冻结、最终回归与整体验收固定门禁、最终设计同步门禁和状态写入按本文所述工作 | 测试确认、代码确认 | 2026-07-30 运行项目统一测试入口，201 项通过；测试覆盖阶段材料安装、AC/TC 逐条映射、纯人工主题、跨语言测试文件识别、测试标识防伪和单测试单映射、测试与产品配置哈希拆分、主题依赖执行、有效结果复用、缺陷状态、最终回归、整体验收和最终设计同步门禁 |
 | 包内穿刺模板、穿刺规范与当前项目运行副本内容一致 | 文件确认 | 2026-07-23 对两组文件执行逐字节比较，结果一致 |
 | 新项目安装后会得到包内保存的产物文档模板和阶段工作规范 | 运行确认、测试确认 | 安装器从 `src/workflow_loop/data/` 复制资源；安装和资源内容测试通过 |
 | AI 是否真的完成事实调查、证据是否来自真实场景、两个候选是否语义重复 | 未由程序确认 | 当前由穿刺规范要求 AI 展示证据，再由用户审查；程序只检查工作流编号、结构、状态、阻塞和设计哈希等可明确判断的内容 |
@@ -96,6 +96,7 @@ Workflow Loop 用命令和状态文件管理 AI 驱动的软件开发过程。�
 | 从零重做不能沿用旧设计产物 | 开始时发现旧产物必须先获得清场确认，确认后删除约定目录并重置初始化状态 | `detect_clean_artifacts()`、`clean_artifacts()`、`cmd_start()` | 从零生成 |
 | 后续验证只对当前代码和计划有效 | 上游实施、测试计划或验收计划改变时，已通过的下游门禁必须失效 | `VerificationState`、`check_invalidation()` | 当前产品文档未单独定义；属于全项目约束 |
 | 每条命令都要告诉 AI 下一步做什么 | 所有改变流程的命令必须在输出末尾给出下一条操作 | `print_next_step()` 和各 `cmd_*()` 命令 | 所有场景及后续阶段 |
+| 最终阶段必须区分产品变化、架构变化和代码未实现 | 最终设计同步只允许更新架构文档和功能到代码映射；产品变化返回 `spec`，代码未实现返回 `impl` | `UpdateCodeDesignStage.code_validate()`、`validate_final_code_design_document()`、`cmd_gate()` | 所有场景的最终设计同步 |
 
 ## 4. 代码架构分层
 
@@ -324,6 +325,23 @@ flowchart TB
 - **失败结果**：测试代码哈希变化、任务入口不全、命令不安全、依赖错误、退出码非零、执行超时、正式文档与当前记录不一致时，不能通过 `test_execution` 门2，也不能进入主题验收。
 - **验证位置**：[tests/test_test_execution.py](../tests/test_test_execution.py)、[tests/test_test_mapping.py](../tests/test_test_mapping.py)、[tests/test_stages.py](../tests/test_stages.py)、[tests/test_commands.py](../tests/test_commands.py)。
 
+### 5.12 最终产品、架构与代码设计同步
+
+- **为什么关键**：前面的验收证明本次代码达到了已确认的结果，但还不能自动说明维护者看到的架构文档已经和真实代码一致。最终阶段必须把产品功能、架构分层、真实入口和验证证据放在同一份文档中；发现产品变化或代码缺口时，不能用文档改写事实。
+- **对应产品内容**：维护者需要通过代码架构文档知道每个产品功能怎样落到真实代码；用户可见功能变化必须重新进入产品设计阶段，代码没有实现已确认要求必须返回实施阶段。
+- **代码位置**：`src/workflow_loop/stages/stages.py` 中的 `UpdateCodeDesignStage.code_validate()`（最终设计同步门禁）；`src/workflow_loop/artifact_validation.py` 中的 `validate_final_code_design_document()`（最终架构文档结构、功能链接、真实代码文件和最终同步结论校验）；`src/workflow_loop/artifact_validation.py` 中的 `changed_stage_paths()`（比较讨论完成时的产品、功能和架构文档基线）；`src/workflow_loop/cli.py` 中的 `cmd_discuss()` 和 `cmd_gate()`（加载材料、执行三道门和打印返回阶段）。
+- **上游**：已经确认的 `spec/product.md`、`spec/feature_*.md`、初步 `spec/architecture_code_design.md`、主题实施记录、测试结果、主题验收结果、最终全量回归、整体验收和 `traceability.md`。
+- **主要处理**：
+  1. `workflow discuss` 加载架构文档模板和最终同步规范，并记录材料哈希。
+  2. 最终阶段把 `spec/product.md`、全部 `spec/feature_*.md` 和 `spec/architecture_code_design.md` 纳入阶段基线；产品或功能文档在本阶段变化时门禁拒绝，并提示返回 `spec`。
+  3. 只有架构分层、模块关系、调用链或共享代码职责变化时，AI 才在架构文档中更新架构和功能到代码映射；即使架构没有变化，也必须写入最终同步结论。
+  4. `validate_final_code_design_document()` 要求文档包含九个固定章节，每个功能文档在第 6 章有唯一对应段落，并且该段落能定位到项目内真实代码文件和验证位置。
+  5. 最终同步结论必须绑定当前工作流，确认产品设计、功能文档、代码实现和功能到代码映射已经一致；第三道门确认后，`traceability.py` 更新“更新后的代码设计”列，`cmd_gate()` 置 `architecture.detailed_done=true`。
+- **下游**：维护者阅读 `spec/architecture_code_design.md`；追踪表保存每条验收条件到最终代码设计的链接；下一次工作流使用已经完成的详细架构作为输入。
+- **状态和数据**：阶段文件基线记录产品总说明、功能文档和架构文档的哈希；`state.json` 保存讨论、校验和用户确认状态以及 `architecture.detailed_done`；`journal.jsonl` 保存材料加载、门禁校验、返回原因和阶段推进历史。
+- **失败结果**：产品或功能文档在本阶段变化时返回 `spec`；代码没有实现产品要求时返回 `impl`；架构文档没有更新、缺少功能到真实代码的映射、缺少最终同步结论或追踪表不完整时停留在当前阶段。
+- **验证位置**：[tests/test_architecture_validation.py](../tests/test_architecture_validation.py)、[tests/test_stages.py](../tests/test_stages.py)、[tests/test_commands.py](../tests/test_commands.py)、[tests/test_traceability.py](../tests/test_traceability.py)。
+
 ## 6. 各产品功能的代码设计
 
 ### 6.1 【功能】生成产品设计文档
@@ -333,6 +351,9 @@ flowchart TB
 AI 和用户先形成共同理解。用户确认后，AI 根据统一模板生成或修改 `spec/product.md` 和 `spec/feature_<english-name>.md`。已有代码项目首次初始化时，还要同时生成 `spec/architecture_code_design.md` 和 `spec/project_design_init_evidence.md`。对应产品说明见[功能文档](./feature_product_design_document_generation.md)。
 
 Python 程序负责选择阶段、打印提示词、保存门禁状态、比较文件基线并检查明确字段。产品内容本身由 AI 根据提示词写入文件，不是由 Python 函数自动拼接生成。
+
+- **代码位置**：`src/workflow_loop/cli.py` 的 `cmd_start()`（启动工作流）、`cmd_discuss()`（加载阶段材料）和 `cmd_gate()`（执行三道门）；`src/workflow_loop/stages/stages.py` 的 `SpecStage`（产品设计阶段策略）；`src/workflow_loop/path_composer.py` 的 `build_stage_path()`（按工作意图生成阶段顺序）；`src/workflow_loop/project.py` 的 `is_project_design_initialized()`（读取项目是否已经完成初始设计）。
+- **验证位置**：`tests/test_commands.py` 中产品设计阶段命令测试；`tests/test_stages.py` 中 `SpecStage` 文件与基线校验测试；`tests/test_path_composer.py` 中阶段路径测试。
 
 #### 6.1.2 场景：从零生成产品设计文档
 
@@ -442,6 +463,9 @@ AI 必须先查看现有产品设计、代码设计、代码、测试、日志�
 
 程序不判断两个候选在语义上是否重复，也不能证明证据一定来自真实场景。这两项由提示词要求 AI 调查和比较，再由用户确认。程序负责可以明确检查的编号、字段、文件、状态和哈希。
 
+- **代码位置**：`src/workflow_loop/cli.py` 的 `cmd_gate()`（确认、跳过和推进穿刺阶段）；`src/workflow_loop/stages/stages.py` 的 `SpikeStage`（穿刺阶段策略）；`src/workflow_loop/spike_validation.py` 的 `validate_spike_stage()`（校验清单、详情、状态和阻塞项）；`src/workflow_loop/verification.py` 的 `compute_product_design_hash()` 和 `compute_code_design_hash()`（计算设计文档哈希）。
+- **验证位置**：`tests/test_spike_validation.py` 中穿刺清单与结论校验测试；`tests/test_stages.py` 和 `tests/test_commands.py` 中穿刺门禁、跳过和清理测试。
+
 #### 6.2.2 完整代码过程
 
 ```mermaid
@@ -544,3 +568,24 @@ flowchart TD
 | 产品功能清单中的链接必须真实可用 | `product.md` 中每个功能应链接到存在的文件 | 当前只检查至少一个 `feature_*.md`，不解析 `product.md` 链接 | 链接错误仍可能通过第二道门 | 后续可使用 Markdown 解析器校验功能链接和文件对应关系 | 代码确认 |
 | 产品规则、边界、使用过程和异常必须与代码一致 | 初始化时三类设计文档应描述同一个实际产品 | `ProjectDesignInitStage.code_validate()` 已要求产品设计、代码设计和调查证据都发生变化，但不比较三个设计文档中的名称、规则、流程和异常语义 | 三类设计文档仍可能出现语义冲突 | 当前靠组合提示词、调查证据和用户确认；只有形成稳定字段后才增加机器语义校验 | 代码确认 |
 | 同版本已安装项目应怎样获得阶段材料更新尚未定义 | 本次更新希望当前项目和未来安装使用新的产物文档模板与阶段工作规范 | 安装器检测版本相同后直接退出，其他已安装项目不会自动同步；当前项目已手动同步运行副本 | 不同项目可能继续使用旧阶段材料 | 保持当前零修改策略；升级机制另行设计，不在本次范围内 | 代码确认、用户先前决定 |
+
+本次最终设计同步未发现产品总说明或功能文档需要改变；本次变化属于工作流内部的最终设计同步门禁、架构文档结构和功能到代码映射，已记录在第 5.12 节。
+
+## 9. 最终同步结论
+
+- 工作流编号：2026-07-20-0637-from_scratch
+- 本次同步类型：架构变化
+- 产品设计核对：一致
+- 功能文档核对：一致
+- 代码实现核对：一致
+- 功能到代码映射：完整
+- 未处理差异：暂无
+- 核对依据：[产品总说明](./product.md)、[生成产品设计文档](./feature_product_design_document_generation.md)、[验证技术不确定性](./feature_technical_uncertainty_validation.md)、[需求交付追踪表](../traceability.md)、[项目设计说明](../DESIGN.md)、[最终设计同步测试](../tests/test_architecture_validation.py)
+
+### 9.1 当前工作流的最终核对证据
+
+- 实施代码：当前工作流在恢复流程中复核并接受既有实施代码，代码快照为 `354021e5fa42d5e514fc761c72e2c54b267ffdcaef771d463da8e2210b26e862`。实施记录见 [实施索引](../impl/index.md) 和三个主题实施文档。
+- 主题测试：2026-07-30 重新登记并执行 9 个测试项，全部通过。每个命令、测试入口和退出码都已写入 [测试结果索引](../qa/index.md) 和三个 `qa/<主题>_result.md` 文件。
+- 主题验收：三个主题的全部验收条件均通过。纯自动化条件使用当前测试记录；“验收计划按用户需求生成可判断完成条件”的 AC-02 与 AC-03 已由用户人工确认，结果见三个 `acceptance/<主题>_result.md` 文件。
+- 最终全量回归：2026-07-30 通过统一入口 `scripts/test_all.sh` 执行，201 个测试通过，耗时 15.03 秒。程序状态保存在 `.workflow_loop/state.json` 的 `regression_test`（最终回归）字段。
+- 整体验收：用户已确认本次需求完成。追踪表的当前工作流章节已链接产品依据、验收计划、测试计划、实施记录、测试结果、主题验收结果和本架构文档。
