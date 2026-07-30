@@ -253,6 +253,46 @@ def test_manual_only_topic_needs_no_test_result_or_test_code_change(tmp_path):
     assert "直接进入主题验收" in result_detail
 
 
+def test_existing_test_code_can_be_confirmed_without_fake_change(tmp_path):
+    create_project(str(tmp_path))
+    _write_topic_documents(tmp_path, "自动化测试")
+    _write(
+        tmp_path / "tests" / "test_upload.py",
+        '''def test_upload():
+    """Workflow-Test
+    主题：上传文件
+    测试项：TC-01 验证上传完成
+    验收条件：AC-01 上传完成
+    测试方式：自动化测试
+    测试层级：模块测试
+    测试目标：检查上传结果
+    测试入口：tests/test_upload.py::test_upload
+    代码入口：upload_file()
+    """
+    assert True
+''',
+    )
+    state = WorkflowState(
+        workflow_id=WORKFLOW_ID,
+        intent="from_scratch",
+        current_stage="test_code",
+        topics=[TOPIC],
+        stages={"test_code": StageState(status="in_progress")},
+    )
+    state.stages["test_code"].test_code_baseline_hash = compute_test_code_snapshot_hash(
+        str(tmp_path)
+    )
+    state.stages["test_code"].non_test_code_baseline_hash = (
+        compute_non_test_code_snapshot_hash(str(tmp_path))
+    )
+    save_state(str(tmp_path), state)
+
+    ok, detail = TestCodeStage().validate_existing_test_code(str(tmp_path))
+
+    assert ok is True, detail
+    assert "已覆盖 1 个自动化测试项" in detail
+
+
 def test_workflow_test_marker_must_match_plan_names_method_level_and_entry(tmp_path):
     _write_topic_documents(tmp_path, "自动化测试")
     _write(

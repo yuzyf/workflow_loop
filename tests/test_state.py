@@ -3,6 +3,7 @@ import os
 
 from workflow_loop.state import (
     WorkflowState, StageState, GateState, ArchitectureState, VerificationState, SpikeBaselineState,
+    RecoveryContext, RollbackState,
     TestExecutionRecord as ExecutionRecord,
     TestTaskState as ExecutionTask,
     state_to_dict, state_from_dict, load_state, save_state,
@@ -32,6 +33,7 @@ def test_state_round_trip(tmp_path):
             "code_design": StageState(status="pending", artifact_paths=["spec/architecture_code_design.md"]),
             "test_execution": StageState(
                 discussion_material_hash="materials-123",
+                existing_test_code_accepted_hash="test-code-accepted-123",
                 test_tasks={
                     "上传文件": {
                         "TC-01": ExecutionTask(
@@ -69,6 +71,20 @@ def test_state_round_trip(tmp_path):
             code_design_hash="code123",
             legacy_unavailable=False,
         ),
+        recovery=RecoveryContext(
+            source_stage="test_plan",
+            reason="测试范围发生变化",
+            affected_stages=["test_plan", "impl", "test_code"],
+            created_at="2026-07-29T03:00:00+00:00",
+        ),
+        rollback=RollbackState(
+            manifest_path=".workflow_loop/rollback/test/impl/manifest.json",
+            manifest_hash="manifest-123",
+            prepared_at="2026-07-29T03:01:00+00:00",
+            plan_hash="plan-123",
+            code_baseline_hash="code-123",
+            planned_paths=["src/app.py"],
+        ),
     )
     # 把 state 落盘到临时目录的 .workflow_loop/state.json
     save_state(str(tmp_path), state)
@@ -96,6 +112,7 @@ def test_state_round_trip(tmp_path):
     assert loaded.stages["spec"].existing_code_accepted_hash is None
     test_task = loaded.stages["test_execution"].test_tasks["上传文件"]["TC-01"]
     assert loaded.stages["test_execution"].discussion_material_hash == "materials-123"
+    assert loaded.stages["test_execution"].existing_test_code_accepted_hash == "test-code-accepted-123"
     assert test_task.command == ["pytest", "tests/test_upload.py::test_upload"]
     assert test_task.current_record is not None
     assert test_task.current_record.code_snapshot_hash == "code-123"
@@ -111,6 +128,10 @@ def test_state_round_trip(tmp_path):
     assert loaded.spike_baseline.product_design_hash == "product123"
     assert loaded.spike_baseline.product_design_paths == ["spec/product.md", "spec/feature_example.md"]
     assert loaded.spike_baseline.legacy_unavailable is False
+    assert loaded.recovery.source_stage == "test_plan"
+    assert loaded.recovery.affected_stages == ["test_plan", "impl", "test_code"]
+    assert loaded.rollback.manifest_path == ".workflow_loop/rollback/test/impl/manifest.json"
+    assert loaded.rollback.planned_paths == ["src/app.py"]
 
 
 # 测试 load_state 在 state.json 不存在时返回 None（项目未初始化或首次启动）

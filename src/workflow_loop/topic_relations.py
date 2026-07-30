@@ -128,6 +128,46 @@ def read_topic_index(
 
     if not relations:
         raise ValueError(f"{relative_path} 主题关系表没有数据行")
+
+    topics = [relation.topic for relation in relations]
+    if len(topics) != len(set(topics)):
+        raise ValueError(f"{relative_path} 存在重复验收主题")
+    orders = [relation.order for relation in relations]
+    if len(orders) != len(set(orders)):
+        raise ValueError(f"{relative_path} 展示顺序不能重复")
+
+    known = set(topics)
+    order_by_topic = {relation.topic: relation.order for relation in relations}
+    dependencies = {relation.topic: relation.prerequisites for relation in relations}
+    for relation in relations:
+        for prerequisite in relation.prerequisites:
+            if prerequisite not in known:
+                raise ValueError(
+                    f"{relative_path} 主题“{relation.topic}”引用了不存在的前置主题“{prerequisite}”"
+                )
+            if prerequisite == relation.topic:
+                raise ValueError(f"{relative_path} 主题“{relation.topic}”不能依赖自己")
+            if order_by_topic[prerequisite] >= relation.order:
+                raise ValueError(
+                    f"{relative_path} 主题“{relation.topic}”的前置主题“{prerequisite}”必须排在前面"
+                )
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(topic: str) -> None:
+        if topic in visiting:
+            raise ValueError(f"{relative_path} 的主题前置关系存在循环")
+        if topic in visited:
+            return
+        visiting.add(topic)
+        for prerequisite in dependencies[topic]:
+            visit(prerequisite)
+        visiting.remove(topic)
+        visited.add(topic)
+
+    for topic in topics:
+        visit(topic)
     return relations
 
 
@@ -151,3 +191,21 @@ def relation_signature(
         (relation.order, relation.topic, relation.prerequisites)
         for relation in relations
     ]
+
+
+def expand_dependents(
+    relations: list[TopicRelation],
+    topics: list[str],
+) -> list[str]:
+    """把受影响主题扩展为它们的全部直接和间接后置主题。"""
+    affected = set(topics)
+    changed = True
+    while changed:
+        changed = False
+        for relation in relations:
+            if relation.topic in affected:
+                continue
+            if any(prerequisite in affected for prerequisite in relation.prerequisites):
+                affected.add(relation.topic)
+                changed = True
+    return [relation.topic for relation in relations if relation.topic in affected]

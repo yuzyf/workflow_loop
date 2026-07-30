@@ -8,10 +8,19 @@ import shlex
 import tomllib
 
 from .project import load_project
-from .state import RegressionTestState, WorkflowState, StageState, GateState, load_state
+from .state import (
+    RecoveryContext,
+    RegressionTestState,
+    WorkflowState,
+    StageState,
+    GateState,
+    load_state,
+    now_iso,
+)
 from .test_mapping import automated_topics
 from .topic import candidate_topics
 from . import traceability as traceability_mod
+from . import acceptance_records as acceptance_records_mod
 
 
 # product.md 功能清单中的本地 Markdown 链接
@@ -26,6 +35,14 @@ def hash_text(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _hash_file_path(full_path: str) -> str:
+    digest = hashlib.sha256()
+    with open(full_path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 # 计算单个文件的 SHA256 哈希
 # 用于 Verification Invalidation：绑定上游内容，检测变化
 # 文件不存在时返回 None（还没产出过的 stage）
@@ -35,9 +52,7 @@ def compute_file_hash(project_root: str, rel_path: str) -> str | None:
     # 文件不存在 → 返回 None
     if not os.path.exists(full_path):
         return None
-    # 读文件二进制内容，算 SHA256
-    with open(full_path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
+    return _hash_file_path(full_path)
 
 
 def compute_file_hashes(
@@ -48,6 +63,65 @@ def compute_file_hashes(
     return {
         rel_path: compute_file_hash(project_root, rel_path)
         for rel_path in sorted(set(rel_paths))
+    }
+
+
+def compute_project_file_hashes(project_root: str) -> dict[str, str]:
+    """记录实施阶段可能修改的项目文件，用于发现计划外改动。
+
+    不包含工作流过程文档、版本库、依赖目录和构建产物。这里保存的只是
+    路径与哈希，不复制文件内容。
+    """
+    excluded_roots = {
+        ".git",
+        ".workflow_loop",
+        ".venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        "dist",
+        "build",
+        "spec",
+        "acceptance",
+        "qa",
+        "impl",
+        "bug",
+    }
+    excluded_files = {"traceability.md"}
+    hashes: dict[str, str] = {}
+    for root, dirs, files in os.walk(project_root):
+        dirs[:] = [directory for directory in dirs if directory not in excluded_roots]
+        for filename in files:
+            relative_path = os.path.relpath(os.path.join(root, filename), project_root)
+            normalized = relative_path.replace(os.sep, "/")
+            if normalized in excluded_files:
+                continue
+            full_path = os.path.join(project_root, relative_path)
+            if os.path.islink(full_path) or not os.path.isfile(full_path):
+                continue
+            hashes[normalized] = _hash_file_path(full_path)
+    return dict(sorted(hashes.items()))
+
+
+def is_test_related_path(project_root: str, relative_path: str) -> bool:
+    """判断文件是否需要在 test_code 前保存真实内容。"""
+    normalized = relative_path.replace(os.sep, "/")
+    filename = os.path.basename(normalized)
+    _, test_entry_path = _project_test_entry(project_root)
+    suffix = os.path.splitext(filename)[1].lower()
+    return (
+        _is_test_path(normalized)
+        or _is_standalone_test_config(normalized, test_entry_path)
+        or filename in CONFIG_NAMES
+        or suffix in CONFIG_SUFFIXES
+    )
+
+
+def compute_test_related_file_hashes(project_root: str) -> dict[str, str]:
+    return {
+        path: content_hash
+        for path, content_hash in compute_project_file_hashes(project_root).items()
+        if is_test_related_path(project_root, path)
     }
 
 
@@ -323,11 +397,9 @@ def _snapshot_parts(project_root: str) -> tuple[list[str], list[str]]:
                 continue
             full_path = os.path.join(project_root, relative_path)
             try:
-                with open(full_path, "rb") as stream:
-                    raw_content = stream.read()
+                raw_hash = _hash_file_path(full_path)
             except OSError:
                 continue
-            raw_hash = hashlib.sha256(raw_content).hexdigest()
 
             if relative_path == "pyproject.toml":
                 try:
@@ -472,7 +544,17 @@ def compute_acceptance_result_hash(project_root: str, topics: str | list[str] | 
     if not topic_list:
         return None
     paths = [os.path.join("acceptance", f"{topic}_result.md") for topic in topic_list]
-    return compute_document_set_hash(project_root, paths)
+    document_hash = compute_document_set_hash(project_root, paths)
+    state = load_state(project_root)
+    records = (
+        acceptance_records_mod.acceptance_records_payload(state, topic_list)
+        if state is not None
+        else {}
+    )
+    payload = json.dumps(records, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(
+        f"documents:{document_hash}\nrecords:{payload}".encode("utf-8")
+    ).hexdigest()
 
 
 def compute_regression_test_result_hash(project_root: str) -> str | None:
@@ -498,6 +580,83 @@ def clear_stage_gates(stage: StageState) -> None:
     stage.test_code_baseline_hash = None
     stage.non_test_code_baseline_hash = None
     stage.existing_code_accepted_hash = None
+    stage.existing_test_code_accepted_hash = None
+
+
+def set_recovery_context(
+    state: WorkflowState,
+    source_stage: str,
+    affected_stages: list[str],
+    reason: str,
+) -> None:
+    """保存退回原因，让后续命令能解释当前阶段是复核还是重做。"""
+    state.recovery = RecoveryContext(
+        source_stage=source_stage,
+        reason=reason,
+        affected_stages=list(affected_stages),
+        created_at=now_iso(),
+    )
+
+
+def clear_completed_material_recovery(state: WorkflowState) -> bool:
+    """阶段重新确认完成后，清除已经解决的模板/规范变更提示。"""
+    recovery = state.recovery
+    if not recovery.source_stage or not recovery.reason:
+        return False
+    if "流程模板或规范" not in recovery.reason:
+        return False
+    source_state = state.stages.get(recovery.source_stage)
+    if source_state is None or source_state.status != "done":
+        return False
+    state.recovery = RecoveryContext()
+    return True
+
+
+def recovery_stage_action(state: WorkflowState, stage_name: str) -> str | None:
+    """返回当前恢复阶段的具体动作，避免把复核误说成重新开发。"""
+    recovery = state.recovery
+    if not recovery.source_stage or stage_name not in recovery.affected_stages:
+        return None
+
+    if recovery.reason and "流程模板或规范" in recovery.reason:
+        return (
+            "重新阅读更新后的流程材料，并按新规则核对当前产出；"
+            "只有新规则使现有产出不合格时才修改"
+        )
+
+    if stage_name in {"spec", "reproduce", "code_design", "revise_code_design", "spike"}:
+        return "重新核对上游事实和设计；只有内容确实不一致时才修改文档"
+    if stage_name in {"acceptance_plan", "test_plan"}:
+        return "重新核对上游文档和当前计划；已有内容仍正确时不需要为了门禁重写"
+    if stage_name == "impl":
+        return (
+            "重新核对实施计划、实施记录和现有代码是否符合最新上游计划；"
+            "一致时确认既有代码，不一致时才修改代码"
+        )
+    if stage_name == "test_code":
+        return (
+            "重新核对测试计划与现有测试代码的对应关系；一致时确认既有测试代码，"
+            "不一致时才修改测试代码"
+        )
+    if stage_name == "test_execution":
+        return "旧测试结果不能继续使用，重新登记并执行需要测试的主题"
+    if stage_name == "topic_acceptance":
+        return "使用新的主题测试结果重新逐条验收；不能直接沿用旧验收结果"
+    if stage_name == "regression_test":
+        return "重新执行全量回归；旧回归状态不能代表当前代码"
+    if stage_name == "overall_acceptance":
+        return "根据最新主题验收和全量回归结果重新做整体验收"
+    if stage_name == "update_code_design":
+        return "根据重新确认后的真实代码和验收结果更新详细代码设计"
+    return "重新核对当前阶段产出是否仍符合上游结果"
+
+
+def recovery_summary(state: WorkflowState) -> str | None:
+    """返回一行可直接显示给用户的恢复原因。"""
+    recovery = state.recovery
+    if not recovery.source_stage or not recovery.reason:
+        return None
+    return f"{recovery.source_stage} 相关内容需要重新处理：{recovery.reason}"
 
 
 def reset_stages_and_move_current(state: WorkflowState, stage_names: list[str]) -> None:
@@ -531,6 +690,7 @@ def _invalidate_test_execution_outputs(
             result_path = os.path.join(project_root, directory, f"{topic}_result.md")
             if os.path.isfile(result_path):
                 os.remove(result_path)
+    acceptance_records_mod.clear_topic_records(project_root, state, topics)
     state.regression_test = RegressionTestState()
 
 
@@ -546,19 +706,26 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
         current_topics = candidate_topics(project_root)
         current_ap = compute_acceptance_plan_hash(project_root, current_topics)
         if current_ap != state.verification.acceptance_plan_hash:
+            affected_stages = [
+                "acceptance_plan",
+                "test_plan",
+                "impl",
+                "test_code",
+                "test_execution",
+                "topic_acceptance",
+                "regression_test",
+                "overall_acceptance",
+                "update_code_design",
+            ]
             reset_stages_and_move_current(
                 state,
-                [
-                    "acceptance_plan",
-                    "test_plan",
-                    "impl",
-                    "test_code",
-                    "test_execution",
-                    "topic_acceptance",
-                    "regression_test",
-                    "overall_acceptance",
-                    "update_code_design",
-                ],
+                affected_stages,
+            )
+            set_recovery_context(
+                state,
+                "acceptance_plan",
+                affected_stages,
+                "验收主题或验收条件已经改变，后续计划、代码和结果必须重新核对",
             )
             state.verification.acceptance_plan_hash = None
             state.verification.test_plan_hash = None
@@ -581,18 +748,25 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
     if state.verification.test_plan_hash is not None:
         current_tp = compute_test_plan_hash(project_root, topics)
         if current_tp != state.verification.test_plan_hash:
+            affected_stages = [
+                "test_plan",
+                "impl",
+                "test_code",
+                "test_execution",
+                "topic_acceptance",
+                "regression_test",
+                "overall_acceptance",
+                "update_code_design",
+            ]
             reset_stages_and_move_current(
                 state,
-                [
-                    "test_plan",
-                    "impl",
-                    "test_code",
-                    "test_execution",
-                    "topic_acceptance",
-                    "regression_test",
-                    "overall_acceptance",
-                    "update_code_design",
-                ],
+                affected_stages,
+            )
+            set_recovery_context(
+                state,
+                "test_plan",
+                affected_stages,
+                "测试项、测试方式或测试范围已经改变，后续实施和测试必须重新核对",
             )
             state.verification.test_plan_hash = None
             state.verification.impl_hash = None
@@ -614,17 +788,24 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
     if state.verification.impl_hash is not None:
         current_impl = compute_impl_hash(project_root, topics)
         if current_impl != state.verification.impl_hash:
+            affected_stages = [
+                "impl",
+                "test_code",
+                "test_execution",
+                "topic_acceptance",
+                "regression_test",
+                "overall_acceptance",
+                "update_code_design",
+            ]
             reset_stages_and_move_current(
                 state,
-                [
-                    "impl",
-                    "test_code",
-                    "test_execution",
-                    "topic_acceptance",
-                    "regression_test",
-                    "overall_acceptance",
-                    "update_code_design",
-                ],
+                affected_stages,
+            )
+            set_recovery_context(
+                state,
+                "impl",
+                affected_stages,
+                "实施代码或实施记录已经改变，原测试和验收结果不能继续代表当前实现",
             )
             state.verification.impl_hash = None
             state.verification.test_code_hash = None
@@ -639,16 +820,23 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
     if state.verification.test_code_hash is not None:
         current_test_code = compute_test_code_snapshot_hash(project_root)
         if current_test_code != state.verification.test_code_hash:
+            affected_stages = [
+                "test_code",
+                "test_execution",
+                "topic_acceptance",
+                "regression_test",
+                "overall_acceptance",
+                "update_code_design",
+            ]
             reset_stages_and_move_current(
                 state,
-                [
-                    "test_code",
-                    "test_execution",
-                    "topic_acceptance",
-                    "regression_test",
-                    "overall_acceptance",
-                    "update_code_design",
-                ],
+                affected_stages,
+            )
+            set_recovery_context(
+                state,
+                "test_code",
+                affected_stages,
+                "测试代码、测试配置或统一测试入口已经改变，旧执行记录必须作废",
             )
             state.verification.test_code_hash = None
             state.verification.test_result_hash = None
@@ -662,18 +850,26 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
     if state.verification.test_result_hash is not None:
         current_test_result = compute_test_result_hash(project_root, topics)
         if current_test_result != state.verification.test_result_hash:
+            affected_stages = [
+                "topic_acceptance",
+                "regression_test",
+                "overall_acceptance",
+                "update_code_design",
+            ]
             reset_stages_and_move_current(
                 state,
-                [
-                    "topic_acceptance",
-                    "regression_test",
-                    "overall_acceptance",
-                    "update_code_design",
-                ],
+                affected_stages,
+            )
+            set_recovery_context(
+                state,
+                "test_execution",
+                affected_stages,
+                "主题测试结果已经改变，旧主题验收和后续结论必须重新确认",
             )
             state.verification.test_result_hash = None
             state.verification.acceptance_result_hash = None
             state.verification.regression_test_result_hash = None
+            acceptance_records_mod.clear_topic_records(project_root, state, topics)
             invalidations.append(("test_execution", "topic_acceptance 及全部后续阶段"))
             return invalidations
 
@@ -681,9 +877,16 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
     if state.verification.acceptance_result_hash is not None:
         current_acceptance_result = compute_acceptance_result_hash(project_root, topics)
         if current_acceptance_result != state.verification.acceptance_result_hash:
+            affected_stages = ["regression_test", "overall_acceptance", "update_code_design"]
             reset_stages_and_move_current(
                 state,
-                ["regression_test", "overall_acceptance", "update_code_design"],
+                affected_stages,
+            )
+            set_recovery_context(
+                state,
+                "topic_acceptance",
+                affected_stages,
+                "主题验收结果已经改变，旧全量回归和整体验收结论不能继续使用",
             )
             state.verification.acceptance_result_hash = None
             state.verification.regression_test_result_hash = None
@@ -698,9 +901,21 @@ def check_invalidation(state: WorkflowState, project_root: str) -> list[tuple[st
             state.regression_test.code_snapshot_hash != compute_code_snapshot_hash(project_root)
         )
         if current_regression != state.verification.regression_test_result_hash or regression_code_changed:
+            affected_stages = ["regression_test", "overall_acceptance", "update_code_design"]
             reset_stages_and_move_current(
                 state,
-                ["regression_test", "overall_acceptance", "update_code_design"],
+                affected_stages,
+            )
+            reason = (
+                "全量回归后代码又发生变化，必须重新执行全量回归"
+                if regression_code_changed
+                else "全量回归状态已经改变，后续整体验收不能继续使用旧结论"
+            )
+            set_recovery_context(
+                state,
+                "regression_test",
+                affected_stages,
+                reason,
             )
             state.verification.regression_test_result_hash = None
             invalidations.append(("regression_test", "regression_test、overall_acceptance 和 update_code_design"))

@@ -85,7 +85,9 @@ workflow_loop_spike/                      # 仓库根（可仍名 spike）
   │   ├─ project.py                       # .workflow_loop/project.json 读写
   │   ├─ path_composer.py                 # build_stage_path(intent, project_root)
   │   ├─ verification.py                  # SHA256 哈希 + 失效清零逻辑
+  │   ├─ rollback.py                      # 实施前文件副本、清单校验和安全回退
   │   ├─ artifact_validation.py           # 阶段 Markdown 结构与固定字段校验
+  │   ├─ acceptance_records.py            # 逐条验收记录、当前有效性和主题完成判断
   │   ├─ test_mapping.py                  # AC、TC、测试方式与 Workflow-Test 标识解析
   │   ├─ test_execution.py                # 测试任务登记、依赖调度、受控子进程和当前执行记录
   │   ├─ test_runner.py                   # 修改前基线和最终全量回归的统一入口执行
@@ -191,6 +193,7 @@ AI 回复用户和编写正式文档时：
       "artifact_baseline_hashes": {},
       "discussion_material_hash": null,
       "test_tasks": {},
+      "acceptance_records": {},
       "gate": {
         "discussion_complete": false,
         "code_validated": false,
@@ -227,6 +230,20 @@ AI 回复用户和编写正式文档时：
     "code_design_hash": null,
     "legacy_unavailable": false
   },
+  "rollback": {
+    "manifest_path": null,
+    "manifest_hash": null,
+    "prepared_at": null,
+    "plan_hash": null,
+    "code_baseline_hash": null,
+    "planned_paths": []
+  },
+  "recovery": {
+    "source_stage": null,
+    "reason": null,
+    "affected_stages": [],
+    "created_at": null
+  },
   "meta": {}
 }
 ```
@@ -256,6 +273,14 @@ AI 回复用户和编写正式文档时：
 | `spike_baseline.product_design_paths` | list[str] | 参与产品设计整体哈希的文件路径 |
 | `spike_baseline.code_design_hash` | str\|null | `architecture_code_design.md` 的 SHA256 |
 | `spike_baseline.legacy_unavailable` | bool | 旧工作流已经进入 spike，但没有保存入场基线；为 true 时不能证明设计文档在穿刺后发生变化 |
+| `rollback.manifest_path` | str\|null | 实施前回退清单路径，例如 `.workflow_loop/rollback/<workflow_id>/impl/manifest.json` |
+| `rollback.manifest_hash` | str\|null | 回退清单文件的 SHA256；清单或副本被改动时门禁拒绝 |
+| `rollback.planned_paths` | list[str] | 当前实施计划明确列出的代码文件路径；只保存这些文件的修改前内容 |
+| `rollback.restored_at` | str\|null | `abort` 已恢复代码但临时副本还没有清理成功时记录的时间；重试 `abort` 只继续清理，不再次覆盖恢复后的代码 |
+| `recovery.source_stage` | str\|null | 引发自动失效或用户主动退回的阶段，例如 `test_plan`（测试计划阶段） |
+| `recovery.reason` | str\|null | 退回的具体原因；stdout 和 status 用它解释为什么重新经过当前阶段 |
+| `recovery.affected_stages` | list[str] | 需要重新确认或重新执行的阶段，按原路径顺序保存 |
+| `recovery.created_at` | str\|null | 恢复流程开始时间；旧状态缺失时可从 Journal 最近一次有效退回记录补回 |
 | `meta` | dict | 自由扩展口子（hooks 等后面用） |
 
 **StageState 字段**：
@@ -269,8 +294,10 @@ AI 回复用户和编写正式文档时：
 | `artifact_baseline_hashes` | dict[str, str\|null] | 讨论完成时相关文件的 SHA256；文件当时不存在时记录 null，用于识别本阶段新增、修改或删除 |
 | `code_baseline_hash` | str\|null | `impl` 进入或重设基线时的代码快照哈希；正常实施要求计划确认后代码相对它发生变化 |
 | `existing_code_accepted_hash` | str\|null | 用户确认“当前已有代码就是本次实施结果”时保存的代码快照哈希；该值存在时，代码必须保持不变 |
+| `existing_test_code_accepted_hash` | str\|null | 上游变化后用户确认现有测试代码仍覆盖最新测试计划时保存的测试代码快照哈希；确认后再次变化必须重新核对 |
 | `discussion_material_hash` | str\|null | `workflow discuss` 实际加载的全局规范、阶段模板、阶段规范和附加材料的组合 SHA256；材料变化后旧讨论确认失效 |
 | `test_tasks` | dict | `test_execution` 阶段按主题和 TC 保存的任务登记、测试入口、参数数组、依赖、超时时间和当前成功执行记录 |
+| `acceptance_records` | dict | `topic_acceptance` 阶段按主题和 AC 保存的当前有效验收记录；纯自动化记录由程序根据测试执行记录建立，人工记录由用户回答后建立 |
 | `gate.discussion_complete` | bool | 第 1 道闸（讨论完毕） |
 | `gate.code_validated` | bool | 第 2 道闸（代码校验通过） |
 | `gate.user_confirmed` | bool | 第 3 道闸（用户确认） |
@@ -278,7 +305,7 @@ AI 回复用户和编写正式文档时：
 **state 不存的**：
 - 不存 journal（历史在 journal.jsonl）
 - 不存讨论内容（讨论在 AI 和用户之间，不落 workflow）
-- 不存 artifact 内容（只存路径，不存文件内容）
+- 不存普通 artifact 内容（只存路径，不存文件内容）；实施代码回退副本放在 `.workflow_loop/rollback/`，state 只保存清单路径和哈希
 - 不存 `project_design_initialized`、`topic_history`、`installer_version`（项目级字段，落 `project.json`）
 
 ### 3.2 .workflow_loop/project.json（项目级持久字段）
@@ -331,6 +358,12 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 | 修改前全量测试复用 | `test_plan` 第三道门发现代码快照未变化时 | 同上，并增加 `reused=true` |
 | 门禁确认前复核 | `gate --confirmed` 推进前重新校验当前产物时 | `stage`, `passed`, `details` |
 | 验证失效 | 上游 hash 变化清零下游时 | `from_stage`, `to_stage`, `reason` |
+| 既有实施代码确认 | `gate impl --accept-existing-code` 时 | `workflow_id`, `stage`, `code_snapshot_hash`, `reason` |
+| 既有测试代码确认 | `gate test_code --accept-existing-test-code` 时 | `workflow_id`, `stage`, `test_code_snapshot_hash`, `reason` |
+| 实施前文件回退基线 | `gate impl --prepare-code` 时 | `workflow_id`, `manifest`, `manifest_hash`, `plan_hash`, `planned_paths` |
+| 测试代码回退基线 | `gate test_code --discuss-done` 时 | `workflow_id`, `saved_paths`, `manifest_hash` |
+| 测试代码变化登记 | `gate test_code` 时 | `workflow_id`, `changed_paths`, `manifest_hash` |
+| 中止回退失败 | `abort` 无法安全恢复时 | `workflow_id`, `reason` |
 | 门禁用户确认 | `gate --confirmed` 时 | `stage`, `passed` |
 | 阶段推进 | `--confirmed` 推进时 | `from`, `to` |
 | 主题确定 | `bugfix` 的 `reproduce` 或其他意图的 `acceptance_plan` `--confirmed` 时 | `topics` |
@@ -364,7 +397,9 @@ append-only，每条一行 JSON。记录 workflow 发生的每个动作。
 - `run_status=active` → Active Run Guard 禁止再 `start`
 - `completed` 或 `aborted` 后：允许新 `start --intent`；新 Run **直接整份覆盖**写入新 `state.json`（新局 `run_status=active`），不另建 history 目录
 - 历史追溯：依赖 Journal，不堆叠多份 state 文件
-- `abort` 不删产物、不删 state 文件（仅改 `run_status=aborted` + 写 `aborted_at` 直至被下次 `start` 覆盖）
+- `done` 成功后删除本次 Run 的 `.workflow_loop/rollback/<workflow_id>/` 临时副本和清单，产物与 state 保留
+- `abort` 先按回退清单恢复代码，再删除临时副本；回退失败时保持 `active` 并保留副本。代码已恢复但清理失败时记录 `rollback.restored_at`，重试只继续清理，不再次覆盖代码
+- `abort` 不删除产品设计、验收计划、测试计划和实施记录；这些文档保留为本次中止过程的历史，state 和 Journal 记录中止结果
 
 ---
 
@@ -640,8 +675,27 @@ class StageStrategy(ABC):
 | 主题测试结果 | `topic_acceptance` | `topic_acceptance` 及全部后续阶段 |
 | 主题验收结果 | `regression_test` | `regression_test`、`overall_acceptance`、`update_code_design` |
 | 最终全量回归结果 | `regression_test` | `regression_test`、`overall_acceptance`、`update_code_design` |
+| 当前阶段模板或规范材料 | 当前阶段 | 清除当前阶段讨论门禁，要求重新阅读和确认；不自动要求业务代码或文档发生变化 |
 
-**失效动作**：清零对应门禁和旧哈希，把 `current_stage` 移到最早受影响阶段，写入 State Snapshot，并写 journal（"验证失效"，记录 from_stage/to_stage/reason）。实施代码或实施记录变化返回 `impl`；测试代码、测试配置或统一测试入口变化返回 `test_code`；测试结果变化返回 `topic_acceptance`；主题验收结果变化返回 `regression_test`。上游文件绕过 `workflow return` 直接变化时，安全清空全部主题测试任务、主题测试结果、主题验收结果和最终回归状态；通过 `workflow return` 明确退回时，只清理用户确认的受影响主题结果，并清空最终回归状态。
+**失效动作**：清零对应门禁和旧哈希，把 `current_stage` 移到最早受影响阶段，写入 State Snapshot，并写 journal（"验证失效"，记录 from_stage/to_stage/reason）。同时写入 `state.recovery`，保存触发阶段、具体原因、受影响阶段和发生时间。`workflow status`、错误阶段提示、门禁失效提示和阶段推进后的“下一步”都必须读取这份状态，直接回答三件事：为什么回来、当前阶段是复核还是重做、旧产出能否继续使用。
+
+模板或规范材料变化与业务内容失效分开处理。模板或规范变化对应的触发阶段重新确认完成后，清空该次 `state.recovery`；进入下一阶段是正常推进，stdout 和 `workflow status` 不再显示上一阶段的“退回原因”。验收计划、测试计划、代码或结果变化产生的恢复上下文继续保留到需要复核的后续阶段，保证 `impl` 和 `test_code` 仍能判断是否复用既有代码。
+
+恢复动作分为两类：
+
+| 阶段 | 恢复动作 |
+|---|---|
+| `acceptance_plan`、`test_plan` | 根据最新上游重新核对计划；内容仍正确时不强制重写 |
+| `impl` | 核对实施计划、实施记录和现有代码；一致时用 `--accept-existing-code`，不一致时才修改代码 |
+| `test_code` | 核对测试计划与现有测试代码；一致时用 `--accept-existing-test-code`，不一致时才修改测试代码 |
+| `test_execution` | 删除旧机器记录和结果，重新登记并执行受影响主题 |
+| `topic_acceptance` | 使用新测试结果重新逐条验收 |
+| `regression_test` | 重新执行统一全量测试入口 |
+| `overall_acceptance`、`update_code_design` | 使用重新确认后的上游结果重新确认或更新 |
+
+因此“重新经过阶段”不等于“从头重新开发”。计划、实施代码和测试代码先复核；机器测试、主题验收和最终回归由于绑定旧代码或旧计划，必须重新执行。上游文件绕过 `workflow return` 直接变化时，安全清空全部主题测试任务、主题测试结果、主题验收结果和最终回归状态；通过 `workflow return` 明确退回时，只清理用户确认的受影响主题结果，并清空最终回归状态。
+
+恢复流程进入 `impl` 时，程序自动保存当前代码快照作为恢复基线，供第一道门检查讨论期间代码是否继续变化。`--rebaseline` 只在用户明确确认当前代码是新的实施前现状时使用，不是确认既有实施代码的默认步骤。
 
 **实现位置**：`src/workflow_loop/verification.py`。
 
@@ -874,11 +928,12 @@ class StageStrategy(ABC):
 | 附加代码开发规范 | `Standardized_Repository/impl/code_implementation.md`；规定模块、接口、依赖、接缝、状态、副作用、错误处理和测试面的代码写法 |
 | 产物 | `impl/index.md` + 每个验收主题的 `impl/<topic>.md` |
 | `discussion_validate` | 检查当前工作流已经用 `workflow discuss` 加载三份实施材料、验收索引关系已继承、全部主题实施前计划存在、未决问题为“暂无”、进入 impl 后代码没有变化 |
-| `code_validate` | 检查实施索引和主题实施文档、实施后记录、未完成内容、上下游链接；不得包含“计划与实际的差异”；确认真实代码相对 impl 入场基线发生变化 |
+| `prepare_code_validate` | 检查全部实施计划中的代码文件路径都能明确解析到当前项目内；保存这些文件修改前的真实内容，计划新增文件保存“原本不存在”；检查回退副本、清单和哈希完整且未被改动。通过前不得修改实施代码 |
+| `code_validate` | 检查实施索引和主题实施文档、实施后记录、未完成内容、上下游链接；不得包含“计划与实际的差异”；必须先通过 `prepare_code_validate`；正常实施确认真实代码相对实施前基线发生变化，恢复流程中用户已确认既有代码时允许代码保持不变 |
 | 门3确认处理 | 更新追踪表的实施计划与实施记录列，记录实施综合哈希；用户确认后进入 `test_code` |
 | instruction | "根据已确认的验收计划和测试计划，先确认全部主题实施前计划，再修改真实代码并记录实施结果" |
 
-`impl` 不重新确定主题，不降低验收条件，不记录正式测试结果或主题验收结果。提交和推送代码不是固定门禁，只有用户明确要求时执行。
+`impl` 不重新确定主题，不降低验收条件，不记录正式测试结果或主题验收结果。实施前回退基线只保存实施计划明确列出的文件，不复制整个项目；它只服务于整个 Run 的 `workflow abort`，不用于取消单个功能。提交和推送代码不是固定门禁，只有用户明确要求时执行。
 
 ### 7.10 test_code（测试代码编写）
 
@@ -889,7 +944,7 @@ class StageStrategy(ABC):
 | 阶段工作规范 | `Standardized_Repository/qa/test_code.md`；规定开始前调查、测试落点讨论、测试方式、阶段退回和正式结果边界 |
 | 附加测试代码开发规范 | `Standardized_Repository/qa/test_code_implementation.md`；规定测试命名、断言、隔离、fixture（测试准备工具）、mock（模拟依赖）和代码修改边界 |
 | 产物 | 与验收主题和测试计划对应的单元测试或自动化测试代码 |
-| `code_validate` | 解析测试计划的测试方式；自动化和混合测试项必须有完整 `Workflow-Test` 标识；有自动化测试项时测试代码必须相对阶段开始基线变化；产品代码不得变化 |
+| `code_validate` | 解析测试计划的测试方式；自动化和混合测试项必须有完整 `Workflow-Test` 标识；正常进入时测试代码必须相对阶段开始基线变化，恢复流程中用户已确认既有测试代码仍覆盖最新计划时允许保持不变；产品代码不得变化；测试代码开始前的旧文件内容已加入回退清单，本阶段新建测试文件在门禁时登记为“原本不存在” |
 | 门3确认处理 | 冻结测试代码、测试配置和统一测试入口哈希；不生成测试结果；确认后进入 `test_execution` |
 | instruction | "调查真实代码并确认测试落点，再编写测试代码；本阶段不运行任何测试命令" |
 
@@ -903,7 +958,7 @@ class StageStrategy(ABC):
 | 产物文档模板 | `Template_Repository/qa/test.md` |
 | 阶段工作规范 | `Standardized_Repository/qa/test.md` |
 | 产物 | 每个主题的 `qa/<topic>_result.md` |
-| 讨论完成前登记 | AI 向用户说明每个主题和 TC 的全部测试入口、前置测试项、参数数组命令、环境和超时；用户确认后用 `workflow test prepare` 逐项登记 |
+| 讨论完成前登记 | AI 向用户说明每个主题和 TC 的全部测试入口、前置测试项、参数数组命令、环境和超时；用户确认后用 `workflow test prepare` 逐项登记；程序检查命令直接选择这些入口，拒绝无关的成功命令和临时代码命令 |
 | 正式执行 | `workflow test run` 先读取 `qa/index.md` 的前置主题，再按主题依赖分批执行；同一批独立主题并行、主题内按前置 TC 顺序执行；使用 `shell=False`，已有当前成功记录不重复执行，失败或超时清除旧成功记录且不生成正式结果 |
 | 当前执行记录 | `StageState.test_tasks` 保存任务和当前成功记录；记录绑定测试入口、命令、时间、时长、退出码、环境、产品代码快照和测试代码哈希；Journal 保存全部尝试历史 |
 | `code_validate` | 从测试计划计算自动化和混合 TC 集合，检查任务登记、当前成功执行记录、全部 `Workflow-Test` 测试入口和结果文档完全对应；顶部必须写“自动化测试结果：通过”，混合测试必须写“人工验收状态：待主题验收”及人工验收交接 |
@@ -920,11 +975,11 @@ class StageStrategy(ABC):
 | 产物文档模板 | `Template_Repository/acceptance/acceptance_result.md` |
 | 阶段工作规范 | `Standardized_Repository/acceptance/acceptance.md` |
 | 产物 | 每个主题的 `acceptance/<topic>_result.md` |
-| `code_validate` | 先确认对应主题测试结果全部通过，再确认每个主题验收结果绑定当前工作流并明确写“验收结果：通过” |
+| `code_validate` | 先确认对应主题测试结果全部通过，再检查 State Snapshot 中每条 AC 的当前有效程序记录；结果文档必须绑定当前工作流和当前主题、覆盖验收计划中的全部 `AC-xx`、与程序记录的验收方式、实际结果、证据、回答和确认时间一致，每条判定和总结果都是“通过” |
 | 门3确认处理 | 记录 `verification.acceptance_result_hash`，更新追踪表的主题验收结果列；bugfix 追加“主题验收通过，待全量回归” |
 | instruction | "根据验收计划逐条核对用户结果，用户确认后写主题验收结果" |
 
-本阶段不修改验收条件，不执行测试代码。发现实现不符合验收条件时返回 `impl`，重新经过 `test_code` 和 `test_execution`。
+本阶段不修改验收条件，不执行测试代码，也不允许遗留、部分通过或带条件通过。只有全部验收条件通过时才生成正式主题验收结果。任一条件未通过、无法验证、缺少证据或受到阻塞时不生成正式结果，并按原因返回 `impl`、`test_code`、`test_execution`、`test_plan`、`acceptance_plan` 或 `spec`。用户只取消一个功能时，使用 `workflow return --to spec --topic <主题>` 返回产品设计，删除该功能设计，并在后续 `impl` 定向删除对应代码、保留其他功能仍使用的公共代码；只有整个工作流都不再继续时才执行 `workflow abort`。
 
 ### 7.13 regression_test（最终全量回归）
 
@@ -972,7 +1027,7 @@ class StageStrategy(ABC):
 
 > **设计约束**：每条命令的 stdout 末尾必须给出“下一步”。`status` 在读取旧状态时允许先执行阶段路径迁移，然后根据当前门禁状态打印正确命令。
 
-正式日常命令面：`start`、`discuss`、`gate`、`test prepare`、`test run`、`return`、`status`、`done`、`abort`（及已定参数：`--intent`、`--confirm-clean`、`gate spike --skip`、`gate <stage> --discuss-done`、`gate <stage> --confirmed`）。安装命令 `install-project` 是日常 CLI 之外的安装入口，由 `install.sh` 调用。
+正式日常命令面：`start`、`discuss`、`gate`、`test prepare`、`test run`、`return`、`status`、`done`、`abort`（及已定参数：`--intent`、`--confirm-clean`、`gate spike --skip`、`gate <stage> --discuss-done`、`gate <stage> --confirmed`、`gate impl --prepare-code`、`gate impl --rebaseline`、`gate impl --accept-existing-code`、`gate test_code --accept-existing-test-code`）。安装命令 `install-project` 是日常 CLI 之外的安装入口，由 `install.sh` 调用。
 
 旧命令 `overview` / `align` / `start --entry` / `attach` / `--overwrite-agent` 直接删除，不做双写兼容。误用旧参数时明确报错并用说人话提示正确入口。
 
@@ -1021,25 +1076,43 @@ class StageStrategy(ABC):
 - **前置**：命令中的 stage 必须是 `state.current_stage`。该命令代表用户已经确认讨论完成；`impl` 还必须检查当前工作流是否先用 `workflow discuss` 加载了实施计划模板、实施流程规范和代码开发规范。
 - **错误阶段**：拒绝修改状态，并打印当前 stage 和正确的下一步。当前阶段尚未完成讨论时，下一步先给出 `workflow discuss`，并同时说明讨论完成后的 `workflow gate <current_stage> --discuss-done`
 - **流程**：标记 `gate.discussion_complete = True`；需要变化校验的阶段同时记录当前文件哈希基线；写 journal。重复调用不覆盖原基线。
-- **stdout 末尾**：`下一步：写产出文件 <artifact_paths>。写完调 workflow gate <stage>`
+- **stdout 末尾**：普通阶段提示写产出文件；`impl` 提示先调 `workflow gate impl --prepare-code` 保存计划修改文件的原内容，保存成功后才允许改代码
 
-### 8.3.1 `gate impl --rebaseline`
+### 8.3.1 `gate impl --prepare-code`
+- **中文含义**：准备实施代码回退基线。
+- **干啥**：从已经确认的 `impl/<topic>.md` 读取本阶段计划修改的文件，保存这些文件修改前的真实内容。计划新增的文件记录为“准备基线时不存在”。
+- **前置**：当前 stage 必须是 `impl`；`gate.discussion_complete=True`；`impl/index.md` 和全部主题实施文档已经通过结构校验；未决问题为“暂无”；当前代码仍与讨论完成时一致。
+- **路径检查**：每个计划文件必须是当前项目内可以明确解析的相对路径；不能只有目录、通配符、模块名或“相关文件”等模糊表达。重复列出的同一文件只保存一份；计划外文件不进入本次基线。
+- **保存检查**：程序逐个保存原文件内容或“不存在”标记，并记录回退清单、副本位置和内容哈希。所有副本写完后重新读取并核对；任一文件缺失、写入失败或哈希不一致时，本命令失败。
+- **不做什么**：不修改产品代码，不复制整个项目，不推进 stage，不把单个功能取消变成整轮回退。
+- **通过后**：标记本阶段实施前回退基线已准备，只有这时才允许修改代码。
+- **下一步**：按照已确认的实施计划修改代码并填写实施后记录，完成后调 `workflow gate impl`。
+
+### 8.3.2 `gate impl --rebaseline`
 - **干啥**：用户明确确认当前代码是新的实施计划确认前现状，重设 `impl` 的代码基线。
 - **前置**：当前 stage 必须是 `impl`；`impl` 第一道门尚未通过；当前工作流已经用 `workflow discuss` 加载实施计划模板、实施流程规范和代码开发规范。
 - **不做什么**：不修改代码，不修改实施文档，不把 `discussion_complete` 置为通过，不推进到下一 stage。
 - **记录**：更新 `state.stages.impl.code_baseline_hash`，并在 Journal 写入旧哈希、新哈希、工作流编号和重设原因。
 - **下一步**：用户确认实施前计划没有继续修改代码后，再调 `workflow gate impl --discuss-done`。
 
-### 8.3.2 `gate impl --accept-existing-code`
+### 8.3.3 `gate impl --accept-existing-code`
 - **干啥**：用户确认当前代码在实施计划确认前已经是本次需求的实施结果。
 - **前置**：当前 `impl` 第一道人门已经通过；三个主题的实施后记录和追踪表已经完整；当前代码快照由用户确认。
 - **流程**：保存 `existing_code_accepted_hash`，写入 Journal，不把这次确认伪装成计划确认后的代码修改。
 - **代码校验**：后续调 `workflow gate impl` 时，如果当前代码仍等于该哈希，允许通过；如果代码又变化，拒绝通过。
 - **下一步**：调 `workflow gate impl` 做实施代码校验。
 
+### 8.3.4 `gate test_code --accept-existing-test-code`
+- **干啥**：验收计划、测试计划或实施内容变化后，用户确认当前测试代码仍覆盖最新测试计划。
+- **前置**：当前 stage 必须是 `test_code`；第一道门已经通过；产品代码没有在测试代码阶段变化；全部自动化或混合测试项仍能找到正确的 `Workflow-Test` 标识、测试入口和代码入口；追踪表关系完整。
+- **流程**：保存 `existing_test_code_accepted_hash`，写 Journal“既有测试代码确认”，不伪造测试代码修改。
+- **代码校验**：后续 `workflow gate test_code` 允许测试代码相对本次重新进入阶段时保持不变；确认后测试代码再次变化时必须重新核对。
+- **不表示**：不表示测试已经执行，不生成 `qa/<topic>_result.md`，不允许直接进入主题验收。
+- **下一步**：调 `workflow gate test_code` 做测试代码校验。
+
 ### 8.4 `gate <stage>`（无 flag，第 2 道闸代码校验）
 - **前置**：命令中的 stage 必须是 `state.current_stage`，并且 `discussion_complete=True`
-- **Verification Invalidation 检查**：先重算上游 hash；不一致时退回最早受影响阶段，清零该阶段及其后续门禁和旧哈希，写 journal "验证失效"，并打印退回阶段的下一条命令
+- **Verification Invalidation 检查**：先重算上游 hash；不一致时退回最早受影响阶段，清零该阶段及其后续门禁和旧哈希，写 journal "验证失效" 和 `state.recovery`。stdout 必须说明退回原因、当前阶段动作和旧产出处理，不能统一写成“重新写产出”
 - **流程**：
   1. 跑 `stage.code_validate(project_root)`
   2. 检查产出文件是否存在（写 journal: 产出文件检查）
@@ -1060,9 +1133,9 @@ class StageStrategy(ABC):
   7. **设置 Architecture Gate Marks**（若 stage 是 code_design/revise_code_design/project_design_init/update_code_design）
   8. **设置 project_design_initialized**（若 stage 是 project_design_init，或 from_scratch 的 spec+code_design 都已确认）
   9. **写入 topics 并登记项目主题历史**（`bugfix` 在 `reproduce`；`from_scratch`、`product_change` 在 `acceptance_plan`）
-  10. 推进 `state.current_stage` = 下一 stage（或 `"completed"` 临时中间态，由 done 确认）
+  10. 如果当前恢复原因只是本阶段模板或规范变化，当前阶段重新确认完成后清除该恢复提示；再推进 `state.current_stage` = 下一 stage（或 `"completed"` 临时中间态，由 done 确认）
   11. 写 journal：门禁用户确认 / 阶段推进 / 追踪表更新 / 缺陷状态更新 / 主题确定 / 架构标记（若适用）
-- **stdout 末尾**（非最后 stage）：`下一步：调 workflow discuss 加载 <next_stage> stage 提示词`
+- **stdout 末尾**（非最后 stage）：正常推进时提示加载下一阶段材料；业务内容变化触发的恢复流程仍说明下一阶段只需复核既有产出还是必须重新执行；已完成的模板或规范复核不得继续显示成下一阶段的退回原因
 - **stdout 末尾**（最后 stage）：`下一步：调 workflow done 标记完成`
 
 ### 8.6 `gate spike --skip`（特殊跳过）
@@ -1114,23 +1187,30 @@ class StageStrategy(ABC):
 - **流程**：
   1. 标记 `run_status=completed`
   2. 写 `ended_at`（不动 `aborted_at`）
-  3. 写 journal：Run 完成
-  4. 解除 Active Run Guard，允许之后重新 `start --intent`
+  3. 删除本次 Run 的 `.workflow_loop/rollback/<workflow_id>/` 临时副本和清单
+  4. 写 journal：Run 完成，并记录清理路径
+  5. 解除 Active Run Guard，允许之后重新 `start --intent`
 - **不**再向用户二次确认"整轮结束"
 - **不**删除产物
   - **不**在 done 时改写 `bug/index.md` 等文档（缺陷状态由主题验收、回归和整体验收阶段按实际结果更新）
 - **stdout 末尾**：`工作流完成。本次 workflow 结束。`
 
 ### 8.9 `abort`
-- **干啥**：将进行中的 Workflow Run 正式中止
+- **干啥**：将整个进行中的 Workflow Run 正式中止，并回退本次 Run 产生的全部代码修改；取消单个主题不能使用本命令
 - **前置**：`run_status=active`（对已 `completed`/已 `aborted`/无 state 的调用明确报错，不静默空操作装成功）
+- **工作区约束**：一个活动 Workflow Run 独占当前工作区的代码修改范围；无关代码必须在独立代码目录中修改，程序不尝试猜测同一文件中的修改归属
+- **回退基线**：不保存整个项目压缩包。每个会改代码的阶段在修改前按已确认计划保存实际会修改文件的原内容；计划新增文件记录为“原本不存在”。State Snapshot 只保存回退清单、副本位置和哈希，真实内容保存在工作流回退区。
 - **流程**：
-  1. 标记 `run_status=aborted`
-  2. 写 `aborted_at`（不动 `ended_at`）
-  3. 写 journal：Run 作废
-  4. **不**删除已有 Artifact
-  5. **不**删除 `state.json`（保留作废快照直至下次 `start` 覆盖）
-  6. Active Run Guard 视为无活跃 Run，允许重新 `start --intent`
+  1. 读取本次 Run 各阶段已经通过门禁保存的回退清单和文件副本
+  2. 重新检查清单、文件副本和哈希完整；缺少任何必需副本时停止，不开始部分回退
+  3. 按回退清单恢复实施代码；原文件有内容时恢复内容，原文件不存在时删除本次新增文件；不按整项目压缩包覆盖其他文件
+  4. 保留本次产品设计、验收计划、测试计划、实施记录、测试结果和验收结果作为中止过程历史，不删除这些文档
+  5. 删除本次 Run 的 `.workflow_loop/rollback/<workflow_id>/` 临时副本和清单
+  6. 保留 `state.json` 和 Journal，并写入恢复文件、清理路径和中止原因
+  7. 所有回退和清理成功后标记 `run_status=aborted`
+  8. 写 `aborted_at`（不动 `ended_at`）
+  9. Active Run Guard 视为无活跃 Run，允许重新 `start --intent`
+- **失败**：代码无法回退时保持当前 Run 为 `active`，打印未回退文件和原因，不能标记为已作废。代码已经恢复但临时副本清理失败时，先把 `rollback.restored_at` 写入 `state.json`；再次执行 `abort` 只重试清理，不再次恢复文件，避免覆盖用户在恢复后做的修改。
 - **stdout 末尾**：`Run 已作废。可重新调 workflow start --intent <intent> 开新 Run`
 
 ### 8.10 `install-project`（由 install.sh 调用，非日常命令）
@@ -1308,4 +1388,4 @@ bug/
 - 机制：无 Verification Invalidation + 无 Architecture Gate Marks + 无 Clean Confirm + 无 Optional Spike --skip → 全部新增
 - 穿刺：只检查任意 `spike_*.md` → 当前工作流清单 + 每项结论 + 固定状态 + 阻塞检查 + 产品/代码设计修改哈希校验
 
-**当前状态**：产品设计、代码设计、穿刺、验收计划、测试计划、实施、测试代码和测试执行阶段已经按“产物文档模板 + 阶段工作规范 + 代码开发规范 + Python 门禁”重新校准。实施后的正式路径拆成 `test_code`、`test_execution`、`topic_acceptance` 三个阶段，不再使用 `topic_execution`。`test_code` 只编写并静态检查测试代码；`test_execution` 使用 `workflow test prepare/run` 登记和执行真实命令，保存当前机器执行记录，失败时用 `workflow return` 由用户决定退回阶段和受影响主题。纯人工主题不会生成假测试代码或测试结果文件。
+**当前状态**：产品设计、代码设计、穿刺、验收计划、测试计划、实施、测试代码和测试执行阶段已经按“产物文档模板 + 阶段工作规范 + 代码开发规范 + Python 门禁”重新校准。实施后的正式路径拆成 `test_code`、`test_execution`、`topic_acceptance` 三个阶段，不再使用 `topic_execution`。上游变化后，State Snapshot 保存恢复原因，stdout 和 status 明确区分“复核既有计划/代码”和“重新执行测试/验收”；`impl` 与 `test_code` 分别支持确认既有实施代码和既有测试代码，禁止为了门禁制造无意义修改。`test_execution` 使用 `workflow test prepare/run` 登记和执行真实命令，保存当前机器执行记录，失败时用 `workflow return` 由用户决定退回阶段和受影响主题。纯人工主题不会生成假测试代码或测试结果文件。

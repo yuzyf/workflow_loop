@@ -3,6 +3,13 @@ import json
 import subprocess
 import sys
 import shutil
+from types import SimpleNamespace
+
+from workflow_loop import cli as cli_mod
+from workflow_loop import rollback as rollback_mod
+from workflow_loop.project import create_project
+from workflow_loop.state import GateState, StageState, WorkflowState, load_state, save_state
+from workflow_loop.verification import compute_non_test_code_snapshot_hash
 
 # 使用当前 pytest 解释器加载仓库源码，避免测试误跑全局安装的旧版本
 WORKFLOW_CMD = [sys.executable, "-m", "workflow_loop.cli"]
@@ -745,7 +752,8 @@ def test_test_code_discuss_loads_workflow_and_code_development_standards(tmp_pat
 
     code, out, err = _run(["gate", "test_code", "--discuss-done"], str(tmp_path))
     assert code == 0, f"test_code discuss gate failed: {out} {err}"
-    assert "test_code 讨论完毕" in out
+    assert "无法保存测试代码修改前内容" in out
+    assert "workflow gate impl --prepare-code" in out
 
 
 def test_impl_discuss_done_accepts_legacy_material_load_record_for_current_workflow(tmp_path):
@@ -836,6 +844,138 @@ def test_impl_accept_existing_code_records_hash_and_allows_unchanged_code(tmp_pa
     assert "既有代码确认失败" in out
 
 
+def test_wrong_stage_gate_explains_recovery_reason_and_action(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "impl"
+    state["stages"]["impl"]["status"] = "in_progress"
+    state["stages"]["test_plan"]["status"] = "done"
+    state["stages"]["test_plan"]["gate"] = {
+        "discussion_complete": True,
+        "code_validated": True,
+        "user_confirmed": True,
+    }
+    state["recovery"] = {
+        "source_stage": "test_plan",
+        "reason": "测试范围发生变化",
+        "affected_stages": ["test_plan", "impl", "test_code"],
+        "created_at": "2026-07-29T03:00:00+00:00",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, _ = _run(["gate", "test_plan", "--confirmed"], str(tmp_path))
+
+    assert code == 1
+    assert "当前 stage 是 impl" in out
+    assert "test_plan（测试计划）已经完成" in out
+    assert "当前不是从头重做" in out
+    assert "重新核对实施计划" in out
+
+
+def test_status_restores_recovery_reason_from_old_journal(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "impl"
+    state["stages"]["impl"]["status"] = "in_progress"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    journal_path = tmp_path / ".workflow_loop" / "journal.jsonl"
+    with journal_path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "ts": "2026-07-29T03:00:00+00:00",
+                    "action": "验证失效",
+                    "actor": "workflow.py",
+                    "from_stage": "test_plan",
+                    "to_stage": "test_plan 及全部后续阶段",
+                    "reason": "上游内容已变化",
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    code, out, _ = _run(["status"], str(tmp_path))
+
+    assert code == 0
+    assert "测试项、测试方式或测试范围已经改变" in out
+    assert "当前不是从头重做" in out
+    assert "workflow gate impl --discuss-done" in out
+    updated = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated["stages"]["impl"]["code_baseline_hash"] is not None
+
+    updated["stages"]["impl"]["gate"]["discussion_complete"] = True
+    state_path.write_text(json.dumps(updated), encoding="utf-8")
+    code, out, _ = _run(["status"], str(tmp_path))
+
+    assert code == 0
+    assert "workflow gate impl --accept-existing-code" in out
+
+
+def test_status_clears_completed_material_recovery_reason(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "topic_acceptance"
+    state["stages"]["test_execution"]["status"] = "done"
+    state["stages"]["test_execution"]["gate"] = {
+        "discussion_complete": True,
+        "code_validated": True,
+        "user_confirmed": True,
+    }
+    state["stages"]["topic_acceptance"]["status"] = "in_progress"
+    state["recovery"] = {
+        "source_stage": "test_execution",
+        "reason": "当前阶段的流程模板或规范已经更新，旧讨论结论必须重新确认",
+        "affected_stages": ["test_execution", "topic_acceptance"],
+        "created_at": "2026-07-29T03:00:00+00:00",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, err = _run(["status"], str(tmp_path))
+
+    assert code == 0, err
+    assert "当前 stage: topic_acceptance" in out
+    assert "退回原因" not in out
+    assert "当前处于上游变化后的恢复流程" not in out
+    updated = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated["recovery"]["source_stage"] is None
+    journal = [
+        json.loads(line)
+        for line in (tmp_path / ".workflow_loop" / "journal.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert any(entry.get("action") == "恢复提示已处理" for entry in journal)
+
+
+def test_accept_existing_test_code_flag_is_rejected_with_clear_reason(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["current_stage"] = "test_code"
+    state["stages"]["test_code"]["status"] = "in_progress"
+    state["stages"]["test_code"]["gate"]["discussion_complete"] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    code, out, _ = _run(
+        ["gate", "test_code", "--accept-existing-test-code"],
+        str(tmp_path),
+    )
+
+    assert code == 0
+    assert "既有测试代码确认失败" in out
+
+
 def test_test_prepare_requires_current_test_execution_materials(tmp_path):
     _setup_project(tmp_path)
     _run(["start", "--intent", "from_scratch"], str(tmp_path))
@@ -915,6 +1055,189 @@ def test_workflow_return_clears_only_affected_topic_results_and_regression_state
     assert updated["verification"]["regression_test_result_hash"] is None
     assert not qa_result.exists()
     assert not acceptance_result.exists()
+
+
+def test_prepare_code_then_abort_restores_files_and_cleans_snapshot(tmp_path):
+    _setup_project(tmp_path)
+    _run(["start", "--intent", "from_scratch"], str(tmp_path))
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    workflow_id = state["workflow_id"]
+    topic = "上传文件"
+
+    impl_dir = tmp_path / "impl"
+    impl_dir.mkdir()
+    (impl_dir / "index.md").write_text(
+        f"""# 实施索引
+
+## {workflow_id}
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 实施文档 |
+|---|---|---|---|---|---|
+| 1 | {topic} | 无 | [验收计划](../acceptance/{topic}_plan.md) | [测试计划](../qa/{topic}_plan.md) | [实施文档](./{topic}.md) |
+""",
+        encoding="utf-8",
+    )
+    (impl_dir / f"{topic}.md").write_text(
+        f"""# 【实施】{topic}
+
+- 工作流编号：{workflow_id}
+
+## 2. 实施前计划
+
+### 2.2 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改的具体逻辑 | 数据、状态或输出变化 | 对应验收条件和测试项 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | src/app.py | run | 暂无 | 新增处理逻辑 | 输出改变 | AC-01；TC-01 | 无 |
+""",
+        encoding="utf-8",
+    )
+    state["current_stage"] = "impl"
+    state["topics"] = [topic]
+    state["stages"]["impl"]["status"] = "in_progress"
+    state["stages"]["impl"]["gate"]["discussion_complete"] = True
+    state["stages"]["impl"]["code_baseline_hash"] = compute_non_test_code_snapshot_hash(
+        str(tmp_path)
+    )
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    code, out, err = _run(["gate", "impl", "--prepare-code"], str(tmp_path))
+    assert code == 0, err
+    assert "实施前回退基线已保存" in out
+
+    app_path = tmp_path / "src" / "app.py"
+    app_path.parent.mkdir()
+    app_path.write_text("def run(): return 'new'\n", encoding="utf-8")
+
+    code, out, err = _run(["abort"], str(tmp_path))
+    assert code == 0, err
+    assert "工作流作废" in out
+    assert not app_path.exists()
+    assert not (tmp_path / ".workflow_loop" / "rollback" / workflow_id).exists()
+    updated = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated["run_status"] == "aborted"
+    assert updated["rollback"]["manifest_path"] is None
+
+
+def test_abort_cleanup_retry_does_not_restore_code_twice(tmp_path, monkeypatch):
+    create_project(str(tmp_path))
+    topic = "上传文件"
+    impl_dir = tmp_path / "impl"
+    impl_dir.mkdir()
+    (impl_dir / f"{topic}.md").write_text(
+        """# 【实施】上传文件
+
+## 2. 实施前计划
+
+### 2.2 代码修改计划
+
+| 文件 |
+|---|
+| src/app.py |
+""",
+        encoding="utf-8",
+    )
+    app_path = tmp_path / "src" / "app.py"
+    app_path.parent.mkdir()
+    app_path.write_text("old\n", encoding="utf-8")
+    state = WorkflowState(
+        workflow_id="test-abort-retry",
+        intent="from_scratch",
+        current_stage="impl",
+        topics=[topic],
+        stage_path=["impl"],
+        stages={
+            "impl": StageState(
+                status="in_progress",
+                gate=GateState(discussion_complete=True),
+                code_baseline_hash=compute_non_test_code_snapshot_hash(str(tmp_path)),
+            )
+        },
+    )
+    rollback_mod.prepare_impl(str(tmp_path), state)
+    save_state(str(tmp_path), state)
+    app_path.write_text("workflow change\n", encoding="utf-8")
+
+    real_cleanup = rollback_mod.cleanup
+
+    def fail_cleanup(project_root, workflow_id):
+        raise OSError("permission denied")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod.rollback_mod, "cleanup", fail_cleanup)
+    cli_mod.cmd_abort(SimpleNamespace())
+
+    after_failure = load_state(str(tmp_path))
+    assert after_failure is not None
+    assert after_failure.run_status == "active"
+    assert after_failure.rollback.restored_at is not None
+    assert app_path.read_text(encoding="utf-8") == "old\n"
+
+    app_path.write_text("user change after restore\n", encoding="utf-8")
+    monkeypatch.setattr(cli_mod.rollback_mod, "cleanup", real_cleanup)
+    cli_mod.cmd_abort(SimpleNamespace())
+
+    after_retry = load_state(str(tmp_path))
+    assert after_retry is not None
+    assert after_retry.run_status == "aborted"
+    assert app_path.read_text(encoding="utf-8") == "user change after restore\n"
+
+
+def test_return_failure_keeps_existing_result_files(tmp_path, monkeypatch):
+    create_project(str(tmp_path))
+    topic = "上传文件"
+    acceptance_dir = tmp_path / "acceptance"
+    qa_dir = tmp_path / "qa"
+    acceptance_dir.mkdir()
+    qa_dir.mkdir()
+    (acceptance_dir / "index.md").write_text(
+        f"""# 验收主题索引
+
+## test-return
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+| 1 | {topic} | 无 | [计划](./{topic}_plan.md) | [结果](./{topic}_result.md) |
+""",
+        encoding="utf-8",
+    )
+    qa_result = qa_dir / f"{topic}_result.md"
+    acceptance_result = acceptance_dir / f"{topic}_result.md"
+    qa_result.write_text("test result\n", encoding="utf-8")
+    acceptance_result.write_text("acceptance result\n", encoding="utf-8")
+    stage_path = ["impl", "test_code", "test_execution", "topic_acceptance"]
+    state = WorkflowState(
+        workflow_id="test-return",
+        intent="from_scratch",
+        current_stage="topic_acceptance",
+        topics=[topic],
+        stage_path=stage_path,
+        stages={name: StageState(status="done") for name in stage_path},
+    )
+    state.stages["topic_acceptance"].status = "in_progress"
+    save_state(str(tmp_path), state)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_mod.traceability_mod,
+        "reset_topics_for_return",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("追踪表损坏")),
+    )
+    cli_mod.cmd_return(
+        SimpleNamespace(
+            to="impl",
+            topic=[topic],
+            all_topics=False,
+            reason="实现需要修正",
+        )
+    )
+
+    after = load_state(str(tmp_path))
+    assert after is not None
+    assert after.current_stage == "topic_acceptance"
+    assert qa_result.is_file()
+    assert acceptance_result.is_file()
 
 
 def test_spike_discuss_prints_real_uncertainty_rules(tmp_path):

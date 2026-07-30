@@ -1,5 +1,14 @@
 from workflow_loop.project import create_project, register_topics
-from workflow_loop.state import RegressionTestState, StageState, WorkflowState, save_state
+from workflow_loop import acceptance_records as acceptance_records_mod
+from workflow_loop import rollback as rollback_mod
+from workflow_loop.state import (
+    AcceptanceCriterionRecord,
+    RegressionTestState,
+    StageState,
+    WorkflowState,
+    load_state,
+    save_state,
+)
 from workflow_loop.stages.stages import (
     AcceptancePlanStage,
     ImplStage,
@@ -347,6 +356,76 @@ def _write_acceptance_documents(tmp_path, workflow_id, topics):
 |---|---|---|---|---|
 {chr(10).join(index_rows)}
 """)
+
+
+def _write_acceptance_result(tmp_path, workflow_id, topic):
+    state = load_state(str(tmp_path))
+    assert state is not None
+    state.verification.acceptance_plan_hash = state.verification.acceptance_plan_hash or "acceptance-plan"
+    state.verification.impl_hash = state.verification.impl_hash or "impl"
+    state.verification.test_result_hash = state.verification.test_result_hash or "test-result"
+    stage_state = state.stages.setdefault("topic_acceptance", StageState())
+    record = AcceptanceCriterionRecord(
+        topic=topic,
+        criterion_id="AC-01",
+        method="自动化测试",
+        result="passed",
+        actual_result=f"自动化测试确认用户得到 {topic} 的结果。",
+        evidence=f"qa/{topic}_result.md",
+        confirmed_at="2026-07-24T04:00:00+00:00",
+        acceptance_plan_hash=state.verification.acceptance_plan_hash,
+        impl_hash=state.verification.impl_hash,
+        test_result_hash=state.verification.test_result_hash,
+        test_ids=["TC-01"],
+    )
+    record.record_id = acceptance_records_mod.compute_record_id(record)
+    stage_state.acceptance_records[topic] = {"AC-01": record}
+    save_state(str(tmp_path), state)
+    _write(
+        tmp_path / "acceptance" / f"{topic}_result.md",
+        f"""# 【主题验收结果】{topic}
+
+- 工作流编号：{workflow_id}
+- 验收主题：{topic}
+- 验收结果：通过
+- 验收完成时间：2026-07-24T04:00:00+00:00
+
+## 1. 验收依据
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [主题验收计划](./{topic}_plan.md) | 验收条件 |
+| 上游 | [主题测试结果](../qa/{topic}_result.md) | 自动化证据 |
+| 上游 | [实施记录](../impl/{topic}.md) | 实际实现 |
+| 全局追踪 | [需求交付追踪表](../traceability.md) | 完整链路 |
+
+## 2. 验收条件结果
+
+### AC-01：{topic}完成
+
+- 验收方式：自动化测试
+- 验收条件：[AC-01：{topic}完成](./{topic}_plan.md#ac-01)
+- 自动化依据：[TC-01](../qa/{topic}_result.md#tc-01)
+- 人工验收步骤：不适用
+- 用户实际回答：不适用
+- 人工确认：不适用
+- 确认时间：不适用
+- 实际结果：{record.actual_result}
+- 判定：通过
+- 验收证据：{record.evidence}
+- 程序记录：{record.record_id}
+
+## 3. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [主题验收计划](./{topic}_plan.md) | 验收标准 |
+| 上游 | [主题测试结果](../qa/{topic}_result.md) | 自动化证据 |
+| 上游 | [实施记录](../impl/{topic}.md) | 实际实现 |
+| 全局追踪 | [需求交付追踪表](../traceability.md) | 完整链路 |
+| 下游 | 最终全量回归 | 所有主题通过后执行 |
+""",
+    )
 
 
 def test_spec_stage_accepts_english_feature_filename(tmp_path):
@@ -837,7 +916,13 @@ def test_acceptance_index_rejects_visible_topic_that_differs_from_plan_link(tmp_
     assert "显示的验收主题“错误名称”与验收计划链接“上传文件”不一致" in detail
 
 
-def _prepare_impl_stage(tmp_path, *, with_record=False, with_difference=False):
+def _prepare_impl_stage(
+    tmp_path,
+    *,
+    with_record=False,
+    with_difference=False,
+    prepare_rollback=False,
+):
     topic = "上传文件"
     _write_acceptance_documents(tmp_path, "test", [topic])
     _write_test_plan(tmp_path, topic)
@@ -863,10 +948,16 @@ def _prepare_impl_stage(tmp_path, *, with_record=False, with_difference=False):
                     "workflow_loop.verification",
                     fromlist=["compute_non_test_code_snapshot_hash"],
                 ).compute_non_test_code_snapshot_hash(str(tmp_path)),
+                gate=__import__("workflow_loop.state", fromlist=["GateState"]).GateState(
+                    discussion_complete=prepare_rollback,
+                ),
             ),
         },
     )
     save_state(str(tmp_path), state)
+    if prepare_rollback:
+        rollback_mod.prepare_impl(str(tmp_path), state)
+        save_state(str(tmp_path), state)
     return topic
 
 
@@ -883,7 +974,7 @@ def test_impl_discussion_requires_all_confirmed_plans_before_code(tmp_path):
 
 
 def test_impl_code_gate_requires_actual_record_and_code_change(tmp_path):
-    topic = _prepare_impl_stage(tmp_path, with_record=True)
+    topic = _prepare_impl_stage(tmp_path, with_record=True, prepare_rollback=True)
     _write(tmp_path / "src" / "app.py", "def run():\n    return 'ok'\n")
     state = __import__("workflow_loop.state", fromlist=["load_state"]).load_state(str(tmp_path))
 
@@ -902,6 +993,8 @@ def test_impl_code_gate_accepts_user_confirmed_existing_code(tmp_path):
         fromlist=["compute_non_test_code_snapshot_hash"],
     ).compute_non_test_code_snapshot_hash(str(tmp_path))
     state.stages["impl"].code_baseline_hash = current_hash
+    state.stages["impl"].gate.discussion_complete = True
+    rollback_mod.prepare_impl(str(tmp_path), state)
     state.stages["impl"].existing_code_accepted_hash = current_hash
     save_state(str(tmp_path), state)
 
@@ -1021,8 +1114,37 @@ def test_topic_acceptance_requires_passed_test_results(tmp_path):
     assert "主题测试未全部通过" in detail
 
     _write(tmp_path / "qa" / "上传文件_result.md", "- 工作流编号：test\n- 测试结果：通过\n")
+    _write_acceptance_result(tmp_path, "test", "上传文件")
     ok, detail = TopicAcceptanceStage().code_validate(str(tmp_path))
     assert ok is True, detail
+
+
+def test_topic_acceptance_rejects_non_pass_or_incomplete_formal_result(tmp_path):
+    create_project(str(tmp_path))
+    save_state(str(tmp_path), WorkflowState(
+        workflow_id="test",
+        intent="from_scratch",
+        topics=["上传文件"],
+    ))
+    _write_acceptance_documents(tmp_path, "test", ["上传文件"])
+    _write_test_plan(tmp_path, "上传文件")
+    _write_qa_index(tmp_path, "test", ["上传文件"])
+    _write(tmp_path / "qa" / "上传文件_result.md", "- 工作流编号：test\n- 测试结果：通过\n")
+    _write_acceptance_result(tmp_path, "test", "上传文件")
+
+    result_path = tmp_path / "acceptance" / "上传文件_result.md"
+    content = result_path.read_text(encoding="utf-8")
+    result_path.write_text(content.replace("- 验收结果：通过", "- 验收结果：遗留"), encoding="utf-8")
+    ok, detail = TopicAcceptanceStage().code_validate(str(tmp_path))
+    assert ok is False
+    assert "验收结果：通过" in detail
+
+    _write_acceptance_result(tmp_path, "test", "上传文件")
+    content = result_path.read_text(encoding="utf-8")
+    result_path.write_text(content.replace("### AC-01：", "### AC-02："), encoding="utf-8")
+    ok, detail = TopicAcceptanceStage().code_validate(str(tmp_path))
+    assert ok is False
+    assert "验收条件必须与验收计划完全一致" in detail
 
 
 def test_final_regression_requires_current_workflow_and_passed_status(tmp_path):
@@ -1090,11 +1212,7 @@ def test_overall_acceptance_requires_all_topic_acceptance_and_passed_regression(
 - 工作流编号：2026-07-24-1200-test
 - 测试结果：通过
 """)
-    _write(tmp_path / "acceptance" / "上传文件_result.md", """# 主题验收结果
-
-- 工作流编号：2026-07-24-1200-test
-- 验收结果：通过
-""")
+    _write_acceptance_result(tmp_path, "2026-07-24-1200-test", "上传文件")
     ok, detail = stage.code_validate(str(tmp_path))
     assert ok is True
     assert "可以请用户确认整体验收" in detail

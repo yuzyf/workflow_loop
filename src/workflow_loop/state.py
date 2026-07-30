@@ -56,6 +56,25 @@ class TestTaskState:
     current_record: TestExecutionRecord | None = None
 
 
+@dataclass
+class AcceptanceCriterionRecord:
+    """一条验收条件当前仍有效的验收记录。"""
+
+    topic: str = ""
+    criterion_id: str = ""
+    method: str = ""
+    result: str = "passed"
+    actual_result: str = ""
+    user_answer: str | None = None
+    evidence: str = ""
+    confirmed_at: str | None = None
+    acceptance_plan_hash: str | None = None
+    impl_hash: str | None = None
+    test_result_hash: str | None = None
+    test_ids: list[str] = field(default_factory=list)
+    record_id: str | None = None
+
+
 # 单个 stage 的完整状态
 # 嵌套在 WorkflowState.stages 字典里，key 是 stage 名（如 "spec" / "impl"）
 @dataclass
@@ -78,11 +97,15 @@ class StageState:
     non_test_code_baseline_hash: str | None = None
     # 用户确认代码在实施计划确认前已经存在时，保存被确认的代码快照哈希
     existing_code_accepted_hash: str | None = None
+    # 上游变化后，用户确认当前测试代码仍符合最新测试计划时保存的测试代码快照哈希
+    existing_test_code_accepted_hash: str | None = None
     # workflow discuss 读取的全局规范、阶段模板和补充规范的组合哈希。
     # 材料变化后，旧的讨论确认自动失效，必须重新阅读后再过门禁。
     discussion_material_hash: str | None = None
     # test_execution 阶段的任务登记：第一层 key 是主题，第二层 key 是 TC 编号。
     test_tasks: dict[str, dict[str, TestTaskState]] = field(default_factory=dict)
+    # topic_acceptance 阶段的当前有效验收记录：第一层 key 是主题，第二层 key 是 AC 编号。
+    acceptance_records: dict[str, dict[str, AcceptanceCriterionRecord]] = field(default_factory=dict)
     # 该 stage 的 3 道闸状态，嵌套 dataclass
     gate: GateState = field(default_factory=GateState)
 
@@ -96,6 +119,20 @@ class ArchitectureState:
     # 详细架构完成：末段 update_code_design --confirmed 后置 true
     # 文件存在只是必要条件，不得因已存在而自动跳过详细架构收尾
     detailed_done: bool = False
+
+
+@dataclass
+class RecoveryContext:
+    """上游变化或用户主动退回后，解释为什么重新经过当前阶段。"""
+
+    # 引发退回的阶段，例如 test_plan（测试计划阶段）
+    source_stage: str | None = None
+    # 发生退回的具体原因
+    reason: str | None = None
+    # 需要重新确认或重新执行的阶段，按原路径顺序保存
+    affected_stages: list[str] = field(default_factory=list)
+    # 发生时间 ISO 8601 UTC
+    created_at: str | None = None
 
 
 # Verification Invalidation 的哈希绑定（CONTEXT.md "Verification Invalidation"）
@@ -183,6 +220,21 @@ class SpikeBaselineState:
     legacy_unavailable: bool = False
 
 
+@dataclass
+class RollbackState:
+    """当前 Run 的实施代码回退清单。"""
+
+    manifest_path: str | None = None
+    manifest_hash: str | None = None
+    prepared_at: str | None = None
+    plan_hash: str | None = None
+    code_baseline_hash: str | None = None
+    planned_paths: list[str] = field(default_factory=list)
+    # abort 已经恢复代码、但临时副本尚未清理完成时记录时间。
+    # 重试 abort 只继续清理，不能再次覆盖用户在恢复后做的新修改。
+    restored_at: str | None = None
+
+
 # 整个 workflow Run 的当前快照，对应 state.json 的完整结构
 # 每次 CLI 调用都是新进程，state 必须落盘，下次进程启动时读回来
 @dataclass
@@ -225,6 +277,10 @@ class WorkflowState:
     regression_test: RegressionTestState = field(default_factory=RegressionTestState)
     # 穿刺进入时的产品设计和代码设计基线
     spike_baseline: SpikeBaselineState = field(default_factory=SpikeBaselineState)
+    # 实施前保存的真实文件内容；只用于整个 Run 中止时恢复代码
+    rollback: RollbackState = field(default_factory=RollbackState)
+    # 上游失效或用户主动退回后的恢复说明；用于 status 和“下一步”解释当前阶段
+    recovery: RecoveryContext = field(default_factory=RecoveryContext)
     # 自由扩展口子（hooks 等后面用，第一版为空）
     meta: dict = field(default_factory=dict)
 
@@ -274,6 +330,24 @@ def _test_task_from_dict(data: dict) -> TestTaskState:
     )
 
 
+def _acceptance_record_from_dict(data: dict) -> AcceptanceCriterionRecord:
+    return AcceptanceCriterionRecord(
+        topic=data.get("topic", ""),
+        criterion_id=data.get("criterion_id", ""),
+        method=data.get("method", ""),
+        result=data.get("result", "passed"),
+        actual_result=data.get("actual_result", ""),
+        user_answer=data.get("user_answer"),
+        evidence=data.get("evidence", ""),
+        confirmed_at=data.get("confirmed_at"),
+        acceptance_plan_hash=data.get("acceptance_plan_hash"),
+        impl_hash=data.get("impl_hash"),
+        test_result_hash=data.get("test_result_hash"),
+        test_ids=data.get("test_ids", []),
+        record_id=data.get("record_id"),
+    )
+
+
 # 从 dict 反序列化成 WorkflowState dataclass
 # 手动重建嵌套的 StageState 和 GateState，因为 dataclass 不自动处理嵌套 dict→dataclass
 def state_from_dict(data: dict) -> WorkflowState:
@@ -299,6 +373,7 @@ def state_from_dict(data: dict) -> WorkflowState:
             test_code_baseline_hash=stage_data.get("test_code_baseline_hash"),
             non_test_code_baseline_hash=stage_data.get("non_test_code_baseline_hash"),
             existing_code_accepted_hash=stage_data.get("existing_code_accepted_hash"),
+            existing_test_code_accepted_hash=stage_data.get("existing_test_code_accepted_hash"),
             discussion_material_hash=stage_data.get("discussion_material_hash"),
             test_tasks={
                 topic: {
@@ -306,6 +381,13 @@ def state_from_dict(data: dict) -> WorkflowState:
                     for test_id, task_data in topic_tasks.items()
                 }
                 for topic, topic_tasks in stage_data.get("test_tasks", {}).items()
+            },
+            acceptance_records={
+                topic: {
+                    criterion_id: _acceptance_record_from_dict(record_data)
+                    for criterion_id, record_data in topic_records.items()
+                }
+                for topic, topic_records in stage_data.get("acceptance_records", {}).items()
             },
             gate=gate,
         )
@@ -319,6 +401,10 @@ def state_from_dict(data: dict) -> WorkflowState:
     regression_test_data = data.get("regression_test", {})
     # 读 spike_baseline 字段；旧 state.json 没有时按未记录处理
     spike_baseline_data = data.get("spike_baseline", {})
+    # 读 rollback 字段；旧 state.json 没有时表示尚未准备代码回退基线
+    rollback_data = data.get("rollback", {})
+    # 读 recovery 字段；旧 state.json 没有时表示当前不是失效恢复流程
+    recovery_data = data.get("recovery", {})
     # 兼容旧版单主题 state.json：没有 topics 时把 topic 转成单元素列表。
     legacy_topic = data.get("topic")
     topics = data.get("topics", [])
@@ -379,6 +465,21 @@ def state_from_dict(data: dict) -> WorkflowState:
             product_design_paths=spike_baseline_data.get("product_design_paths", []),
             code_design_hash=spike_baseline_data.get("code_design_hash"),
             legacy_unavailable=spike_baseline_data.get("legacy_unavailable", False),
+        ),
+        rollback=RollbackState(
+            manifest_path=rollback_data.get("manifest_path"),
+            manifest_hash=rollback_data.get("manifest_hash"),
+            prepared_at=rollback_data.get("prepared_at"),
+            plan_hash=rollback_data.get("plan_hash"),
+            code_baseline_hash=rollback_data.get("code_baseline_hash"),
+            planned_paths=rollback_data.get("planned_paths", []),
+            restored_at=rollback_data.get("restored_at"),
+        ),
+        recovery=RecoveryContext(
+            source_stage=recovery_data.get("source_stage"),
+            reason=recovery_data.get("reason"),
+            affected_stages=recovery_data.get("affected_stages", []),
+            created_at=recovery_data.get("created_at"),
         ),
         meta=data.get("meta", {}),
     )

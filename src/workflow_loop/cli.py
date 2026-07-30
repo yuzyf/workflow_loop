@@ -13,9 +13,12 @@ from . import installer as installer_mod
 from . import bug_record as bug_record_mod
 from . import traceability as traceability_mod
 from . import topic as topic_mod
+from . import topic_relations as topic_relations_mod
 from . import test_runner as test_runner_mod
 from . import test_execution as test_execution_mod
 from . import test_mapping as test_mapping_mod
+from . import acceptance_records as acceptance_records_mod
+from . import rollback as rollback_mod
 from .verification import (
     compute_code_snapshot_hash,
     compute_non_test_code_snapshot_hash,
@@ -37,12 +40,57 @@ CLEAN_DETECT_DIRS = ["spec", "acceptance", "qa", "impl", "bug"]
 # from_scratch 清场时需要一起删除的项目根文件
 CLEAN_DETECT_FILES = ["traceability.md"]
 
+STAGE_LABELS = {
+    "spec": "产品设计",
+    "code_design": "初步代码设计",
+    "revise_code_design": "设计期代码设计修订",
+    "project_design_init": "项目设计初始化",
+    "reproduce": "缺陷复现",
+    "spike": "技术不确定性穿刺",
+    "acceptance_plan": "验收计划",
+    "test_plan": "测试计划",
+    "impl": "代码实施",
+    "test_code": "测试代码编写",
+    "test_execution": "测试执行",
+    "topic_acceptance": "主题验收",
+    "regression_test": "最终全量回归",
+    "overall_acceptance": "整体验收",
+    "update_code_design": "详细代码设计收尾",
+}
+
 
 # 打印 stdout 末尾的"下一步"指令（stdout 驱动原则的核心）
 # 每条命令结束前都调这个，AI 读 stdout 知道下一步干啥
 def print_next_step(instruction: str) -> None:
     # 分隔线 + 下一步指令
     print(f"\n{NEXT_STEP_SEPARATOR}\n下一步：{instruction}")
+
+
+def stage_label(stage_name: str) -> str:
+    """给 stage 标识补充中文含义，避免用户只看到英文代码名。"""
+    label = STAGE_LABELS.get(stage_name)
+    return f"{stage_name}（{label}）" if label else stage_name
+
+
+def recovery_instruction(wf_state) -> str | None:
+    """返回当前阶段在恢复流程中的动作说明。"""
+    summary = verification_mod.recovery_summary(wf_state)
+    action = verification_mod.recovery_stage_action(wf_state, wf_state.current_stage)
+    if not summary or not action:
+        return None
+    return f"原因：{summary}。当前不是从头重做，当前阶段要做的是：{action}。"
+
+
+def print_recovery_details(wf_state) -> None:
+    """打印当前退回原因和本阶段动作；没有恢复上下文时不输出。"""
+    summary = verification_mod.recovery_summary(wf_state)
+    action = verification_mod.recovery_stage_action(wf_state, wf_state.current_stage)
+    if not summary or not action:
+        return
+    print(f"退回原因: {summary}")
+    print(f"当前阶段: {stage_label(wf_state.current_stage)}")
+    print(f"当前要做: {action}")
+    print("说明: 重新经过一个阶段不等于从头重做；先核对旧产出，只有不再符合最新上游时才修改。")
 
 
 # 根据当前阶段的门禁状态，给出不会跨阶段的下一步
@@ -56,22 +104,160 @@ def current_stage_next_instruction(wf_state) -> str:
         return "调 `workflow status` 查看当前工作流状态"
 
     gate = stage_state.gate
+    recovery = recovery_instruction(wf_state)
+    prefix = f"{recovery} " if recovery else ""
     if not gate.discussion_complete:
         return (
-            f"调 `workflow discuss` 加载当前 {stage_name} stage 提示词；"
+            f"{prefix}调 `workflow discuss` 加载当前 {stage_label(stage_name)}材料；"
             f"讨论完成后调 `workflow gate {stage_name} --discuss-done`"
         )
     if not gate.code_validated:
+        if stage_name == "topic_acceptance":
+            project_root = resolve_project_root() or os.getcwd()
+            progress = acceptance_records_mod.acceptance_progress(project_root, wf_state)
+            pending = [line for line in progress if "待验收" in line]
+            if pending:
+                return (
+                    f"{prefix}继续按主题逐条验收；用户回答后调 `workflow acceptance record`。"
+                    f"当前待处理：{pending}"
+                )
+            return (
+                f"{prefix}生成或复核全部 `acceptance/<topic>_result.md` 后，"
+                "调 `workflow gate topic_acceptance`"
+            )
+        if stage_name == "impl" and recovery:
+            if stage_state.existing_code_accepted_hash is not None:
+                return f"{prefix}既有实施代码已经确认，调 `workflow gate impl` 执行实施校验"
+            return (
+                f"{prefix}如果现有代码已经符合最新计划，先调 "
+                "`workflow gate impl --accept-existing-code`；否则修改代码后调 `workflow gate impl`"
+            )
+        if stage_name == "impl":
+            prepared, _, _ = rollback_mod.validate_prepared(
+                resolve_project_root() or os.getcwd(),
+                wf_state,
+            )
+            if not prepared:
+                return (
+                    f"{prefix}先调 `workflow gate impl --prepare-code` 保存实施计划所列文件的修改前内容；"
+                    "保存成功后再修改代码"
+                )
+        if stage_name == "test_code" and recovery:
+            if stage_state.existing_test_code_accepted_hash is not None:
+                return f"{prefix}既有测试代码已经确认，调 `workflow gate test_code` 执行测试代码校验"
+            return (
+                f"{prefix}如果现有测试代码已经覆盖最新测试计划，先调 "
+                "`workflow gate test_code --accept-existing-test-code`；否则修改测试代码后调 `workflow gate test_code`"
+            )
         return (
-            f"完成当前 {stage_name} stage 的产出文件后，"
+            f"{prefix}完成当前 {stage_label(stage_name)}的产出文件后，"
             f"调 `workflow gate {stage_name}` 执行校验"
         )
     if not gate.user_confirmed:
         return (
-            f"用户确认当前 {stage_name} stage 的产出后，"
+            f"{prefix}用户确认当前 {stage_label(stage_name)}的产出后，"
             f"调 `workflow gate {stage_name} --confirmed`"
         )
     return "调 `workflow status` 查看当前工作流状态"
+
+
+def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
+    """为旧 state.json 从 Journal（追加式历史日志）补回退回说明。"""
+    if wf_state.recovery.source_stage:
+        return False
+
+    first_affected_stage = {
+        "acceptance_plan": "acceptance_plan",
+        "test_plan": "test_plan",
+        "impl": "impl",
+        "test_code": "test_code",
+        "test_execution": "topic_acceptance",
+        "topic_acceptance": "regression_test",
+        "regression_test": "regression_test",
+    }
+    default_reasons = {
+        "acceptance_plan": "验收主题或验收条件已经改变，后续计划、代码和结果必须重新核对",
+        "test_plan": "测试项、测试方式或测试范围已经改变，后续实施和测试必须重新核对",
+        "impl": "实施代码或实施记录已经改变，原测试和验收结果不能继续代表当前实现",
+        "test_code": "测试代码、测试配置或统一测试入口已经改变，旧执行记录必须作废",
+        "test_execution": "主题测试结果已经改变，旧主题验收和后续结论必须重新确认",
+        "topic_acceptance": "主题验收结果已经改变，旧全量回归和整体验收结论不能继续使用",
+        "regression_test": "全量回归状态或回归后的代码已经改变，必须重新执行全量回归",
+    }
+    stage_indexes = {name: index for index, name in enumerate(wf_state.stage_path)}
+    current_index = stage_indexes.get(wf_state.current_stage)
+    if current_index is None:
+        return False
+
+    for entry in reversed(journal_mod.read_all(project_root)):
+        action = entry.get("action")
+        if action == "验证失效":
+            source_stage = entry.get("from_stage")
+            target_stage = first_affected_stage.get(source_stage)
+            reason = entry.get("reason")
+            if reason in {None, "上游内容已变化", "用户确认前发现上游内容已变化"}:
+                reason = default_reasons.get(source_stage, "上游内容变化")
+        elif action == "流程退回":
+            source_stage = entry.get("to_stage")
+            target_stage = source_stage
+            reason = entry.get("reason") or "用户确认退回"
+        else:
+            continue
+        if not source_stage or target_stage not in stage_indexes:
+            continue
+        target_index = stage_indexes[target_stage]
+        if current_index < target_index:
+            continue
+        affected_stages = wf_state.stage_path[target_index:]
+        if wf_state.current_stage not in affected_stages:
+            continue
+        verification_mod.set_recovery_context(
+            wf_state,
+            source_stage,
+            affected_stages,
+            reason,
+        )
+        return True
+    return False
+
+
+def clear_completed_material_recovery(project_root: str, wf_state) -> bool:
+    """清除已经完成的模板/规范复核提示，并保留 Journal 历史。"""
+    recovery = wf_state.recovery
+    if not verification_mod.clear_completed_material_recovery(wf_state):
+        return False
+    journal_mod.append_entry(
+        project_root,
+        "恢复提示已处理",
+        "workflow.py",
+        workflow_id=wf_state.workflow_id,
+        source_stage=recovery.source_stage,
+        reason=recovery.reason,
+    )
+    state_mod.save_state(project_root, wf_state)
+    return True
+
+
+def ensure_impl_recovery_baseline(project_root: str, wf_state) -> bool:
+    """恢复到 impl 时记录当前代码，供后续判断是复用还是重新实施。"""
+    if wf_state.current_stage != "impl":
+        return False
+    if not verification_mod.recovery_summary(wf_state):
+        return False
+    stage_state = wf_state.stages.get("impl")
+    if stage_state is None or stage_state.code_baseline_hash is not None:
+        return False
+    stage_state.code_baseline_hash = compute_non_test_code_snapshot_hash(project_root)
+    journal_mod.append_entry(
+        project_root,
+        "恢复流程实施代码基线",
+        "workflow.py",
+        workflow_id=wf_state.workflow_id,
+        stage="impl",
+        code_snapshot_hash=stage_state.code_baseline_hash,
+        reason="恢复流程开始时记录现有代码，后续由用户决定复用还是修改",
+    )
+    return True
 
 
 # 从当前工作目录向上查找 .workflow_loop/ 目录，定位项目根
@@ -516,6 +702,11 @@ def cmd_discuss(args) -> None:
         sys.exit(1)
     if ensure_stage_path_current(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
+    if restore_recovery_context_from_journal(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
+    clear_completed_material_recovery(project_root, wf_state)
+    if ensure_impl_recovery_baseline(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
     # 工作流已完成
     if wf_state.current_stage == "completed":
         print("错误：工作流已完成。")
@@ -541,6 +732,13 @@ def cmd_discuss(args) -> None:
     ):
         verification_mod.clear_stage_gates(stage_state)
         stage_state.status = "in_progress"
+        stage_index = wf_state.stage_path.index(stage.name())
+        verification_mod.set_recovery_context(
+            wf_state,
+            stage.name(),
+            wf_state.stage_path[stage_index:],
+            "当前阶段的流程模板或规范已经更新，旧讨论结论必须重新确认",
+        )
         journal_mod.append_entry(
             project_root,
             "阶段材料变化导致讨论失效",
@@ -551,6 +749,29 @@ def cmd_discuss(args) -> None:
             current_material_hash=material_hash,
         )
     stage_state.discussion_material_hash = material_hash
+    automated_acceptance_records = []
+    if stage.name() == "topic_acceptance":
+        try:
+            automated_acceptance_records = acceptance_records_mod.ensure_automated_records(
+                project_root,
+                wf_state,
+            )
+        except ValueError:
+            automated_acceptance_records = []
+        for record in automated_acceptance_records:
+            journal_mod.append_entry(
+                project_root,
+                "自动化验收记录",
+                "workflow.py",
+                workflow_id=wf_state.workflow_id,
+                topic=record.topic,
+                criterion_id=record.criterion_id,
+                result=record.result,
+                record_id=record.record_id,
+                test_ids=record.test_ids,
+            )
+    if ensure_impl_recovery_baseline(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
     state_mod.save_state(project_root, wf_state)
 
     # 加载全局写作规范（所有 stage 共用）
@@ -566,7 +787,10 @@ def cmd_discuss(args) -> None:
     role_doc = role_doc_mod.get_role_doc(stage.name())
 
     # 打印 stage 头
-    print(f"═══ {stage.name()} stage ═══")
+    print(f"═══ {stage.name()} stage（{STAGE_LABELS.get(stage.name(), stage.name())}）═══")
+    if verification_mod.recovery_summary(wf_state):
+        print("\n【为什么重新进入当前阶段】")
+        print_recovery_details(wf_state)
     # 打印角色定义
     print(f"\n【角色定义】")
     if role_doc:
@@ -604,6 +828,10 @@ def cmd_discuss(args) -> None:
     # 打印期望产出
     print(f"\n【期望产出】")
     print(f"文件: {stage.artifact_paths()}")
+    if stage.name() == "topic_acceptance":
+        print("\n【当前主题验收进度】")
+        for line in acceptance_records_mod.acceptance_progress(project_root, wf_state):
+            print(f"- {line}")
 
     # 写 journal：提示词加载
     journal_mod.append_entry(project_root, "提示词加载", "workflow.py",
@@ -617,7 +845,6 @@ def cmd_discuss(args) -> None:
     journal_mod.append_entry(project_root, "角色文档加载", "workflow.py",
                             stage=stage.name())
 
-    # 下一步：和用户讨论，讨论完毕调 gate --discuss-done
     print_next_step(
         f"用这个提示词和用户讨论。讨论完用户说'完毕'后，"
         f"调 `workflow gate {stage.name()} --discuss-done`"
@@ -720,6 +947,12 @@ def apply_stage_completion_updates(
             wf_state.workflow_id,
             topics,
         )
+    elif stage_name == "regression_test":
+        detail = bug_record_mod.record_regression_pass(
+            project_root,
+            wf_state.workflow_id,
+            topics,
+        )
     elif stage_name == "overall_acceptance":
         detail = bug_record_mod.record_overall_acceptance_pass(
             project_root,
@@ -791,6 +1024,10 @@ def _load_active_workflow_for_command(project_root: str) -> state_mod.WorkflowSt
     if workflow_state.run_status != "active":
         print(f"错误：Run 已 {workflow_state.run_status}，不能执行当前命令")
         sys.exit(1)
+    if restore_recovery_context_from_journal(project_root, workflow_state):
+        state_mod.save_state(project_root, workflow_state)
+    if ensure_impl_recovery_baseline(project_root, workflow_state):
+        state_mod.save_state(project_root, workflow_state)
     return workflow_state
 
 
@@ -801,6 +1038,7 @@ def _test_execution_inputs_are_current(
     """测试登记和执行前先确认实施结果、计划和测试代码没有失效。"""
     invalidations = verification_mod.check_invalidation(wf_state, project_root)
     if invalidations:
+        ensure_impl_recovery_baseline(project_root, wf_state)
         state_mod.save_state(project_root, wf_state)
         for from_stage, to_stages in invalidations:
             journal_mod.append_entry(
@@ -809,11 +1047,12 @@ def _test_execution_inputs_are_current(
                 "workflow.py",
                 from_stage=from_stage,
                 to_stage=to_stages,
-                reason="测试登记或执行前发现上游内容变化",
+                reason=wf_state.recovery.reason or "测试登记或执行前发现上游内容变化",
             )
         print("═══ 测试执行前置内容已失效 ═══")
         for from_stage, to_stages in invalidations:
             print(f"{from_stage} 变化，已退回 {to_stages}")
+        print_recovery_details(wf_state)
         print_next_step(current_stage_next_instruction(wf_state))
         return False
     if wf_state.verification.test_code_hash is None:
@@ -960,6 +1199,76 @@ def cmd_test_run(args) -> None:
             print_next_step("当前没有自动化测试结果文件需要生成，直接调 `workflow gate test_execution`")
 
 
+def cmd_acceptance_record(args) -> None:
+    """记录一条人工或混合验收条件的用户回答。"""
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("错误：找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    wf_state = _load_active_workflow_for_command(project_root)
+    if wf_state.current_stage != "topic_acceptance":
+        print(f"错误：当前 stage 是 {wf_state.current_stage}，不能记录主题验收回答")
+        print_next_step(current_stage_next_instruction(wf_state))
+        return
+    try:
+        created = acceptance_records_mod.ensure_automated_records(project_root, wf_state)
+        record = acceptance_records_mod.record_user_result(
+            project_root,
+            wf_state,
+            topic=args.topic,
+            criterion_id=args.criterion,
+            result=args.result,
+            actual_result=args.actual_result,
+            user_answer=args.answer,
+            evidence=args.evidence or "",
+        )
+    except ValueError as exc:
+        print("═══ 主题验收记录失败 ═══")
+        print(f"详情: {exc}")
+        print_next_step("先把当前问题问清楚；用户确认后再记录，不能直接生成主题验收结果")
+        return
+
+    for auto_record in created:
+        journal_mod.append_entry(
+            project_root,
+            "自动化验收记录",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            topic=auto_record.topic,
+            criterion_id=auto_record.criterion_id,
+            result=auto_record.result,
+            record_id=auto_record.record_id,
+            test_ids=auto_record.test_ids,
+        )
+    action = "人工验收记录" if record.result == "passed" else "主题验收问题记录"
+    journal_mod.append_entry(
+        project_root,
+        action,
+        "user",
+        workflow_id=wf_state.workflow_id,
+        topic=record.topic,
+        criterion_id=record.criterion_id,
+        result=record.result,
+        actual_result=record.actual_result,
+        user_answer=record.user_answer,
+        evidence=record.evidence,
+        confirmed_at=record.confirmed_at,
+        record_id=record.record_id,
+    )
+    state_mod.save_state(project_root, wf_state)
+    print("═══ 主题验收回答已记录 ═══" if record.result == "passed" else "═══ 主题验收问题已记录 ═══")
+    print(f"主题: {record.topic}")
+    print(f"验收条件: {record.criterion_id}")
+    print(f"程序记录: {record.record_id}")
+    if record.result != "passed":
+        print_next_step("先调查问题并和用户确认处理方式，再由用户决定是否 workflow return")
+        return
+    if acceptance_records_mod.topic_records_complete(project_root, wf_state, record.topic):
+        print_next_step(f"生成或复核 `acceptance/{record.topic}_result.md`，再继续其他可验收主题")
+    else:
+        print_next_step("继续展示当前主题尚未确认的人工验收条件")
+
+
 def _stage_index_map(wf_state: state_mod.WorkflowState) -> dict[str, int]:
     return {stage_name: index for index, stage_name in enumerate(wf_state.stage_path)}
 
@@ -985,6 +1294,7 @@ def _clear_topic_test_state(
         acceptance_path = os.path.join(project_root, "acceptance", f"{topic}_result.md")
         if os.path.exists(acceptance_path):
             os.remove(acceptance_path)
+    acceptance_records_mod.clear_topic_records(project_root, wf_state, topics)
 
 
 def cmd_return(args) -> None:
@@ -1014,6 +1324,34 @@ def cmd_return(args) -> None:
     if unknown:
         print(f"错误：受影响主题不属于当前工作流: {unknown}")
         return
+    try:
+        relations = topic_relations_mod.read_topic_index(
+            project_root,
+            os.path.join("acceptance", "index.md"),
+            wf_state.workflow_id,
+            ["展示顺序", "验收主题", "前置主题", "验收计划", "主题验收结果"],
+        )
+        expanded_topics = topic_relations_mod.expand_dependents(relations, affected_topics)
+    except ValueError as exc:
+        print("═══ 工作流退回失败 ═══")
+        print(f"详情: 无法读取验收主题依赖关系：{exc}")
+        print_next_step("先修正 acceptance/index.md 的主题关系后再调 `workflow return`")
+        return
+    affected_topics = expanded_topics
+
+    # 先确认追踪表能够完成退回更新，再删除测试/验收结果。
+    # 否则追踪表错误会留下“state 仍在原阶段、结果文件却已经被删”的半完成状态。
+    try:
+        trace_detail = traceability_mod.reset_topics_for_return(
+            project_root,
+            wf_state.workflow_id,
+            affected_topics,
+            args.to,
+        )
+    except ValueError as exc:
+        print("═══ 工作流退回失败 ═══")
+        print(f"详情: {exc}")
+        return
 
     previous_stage = wf_state.current_stage
     downstream_names = wf_state.stage_path[stage_indexes[args.to] :]
@@ -1023,6 +1361,14 @@ def cmd_return(args) -> None:
         stage_state.status = "pending"
     wf_state.current_stage = args.to
     wf_state.stages[args.to].status = "in_progress"
+    verification_mod.set_recovery_context(
+        wf_state,
+        args.to,
+        downstream_names,
+        args.reason.strip(),
+    )
+    if ensure_impl_recovery_baseline(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
 
     if stage_indexes[args.to] <= stage_indexes.get("test_execution", len(wf_state.stage_path)):
         _clear_topic_test_state(project_root, wf_state, affected_topics)
@@ -1038,18 +1384,6 @@ def cmd_return(args) -> None:
         wf_state.verification.acceptance_plan_hash = None
     if stage_indexes[args.to] <= stage_indexes.get("impl", len(wf_state.stage_path)):
         wf_state.verification.impl_hash = None
-
-    try:
-        trace_detail = traceability_mod.reset_topics_for_return(
-            project_root,
-            wf_state.workflow_id,
-            affected_topics,
-            args.to,
-        )
-    except ValueError as exc:
-        print("═══ 工作流退回失败 ═══")
-        print(f"详情: {exc}")
-        return
 
     journal_mod.append_entry(
         project_root,
@@ -1068,7 +1402,8 @@ def cmd_return(args) -> None:
     print(f"受影响主题: {', '.join(affected_topics)}")
     print(f"原因: {args.reason.strip()}")
     print(trace_detail)
-    print_next_step(f"调 `workflow discuss` 重新加载 {args.to} 阶段材料")
+    print_recovery_details(wf_state)
+    print_next_step(current_stage_next_instruction(wf_state))
 
 
 # gate 命令：3 道闸的总入口 + spike --skip
@@ -1093,6 +1428,11 @@ def cmd_gate(args) -> None:
         sys.exit(1)
     if ensure_stage_path_current(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
+    if restore_recovery_context_from_journal(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
+    clear_completed_material_recovery(project_root, wf_state)
+    if ensure_impl_recovery_baseline(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
 
     # 要过门禁的 stage 名
     stage_name = args.stage
@@ -1104,14 +1444,29 @@ def cmd_gate(args) -> None:
         sys.exit(1)
     if stage_name != wf_state.current_stage:
         print(f"错误：当前 stage 是 {wf_state.current_stage}，不能操作 {stage_name} 的门禁")
+        requested_stage = wf_state.stages[stage_name]
+        if requested_stage.gate.user_confirmed:
+            print(
+                f"{stage_label(stage_name)}已经完成；你刚才重复调用了它的门禁，"
+                f"当前应处理 {stage_label(wf_state.current_stage)}。"
+            )
+        print_recovery_details(wf_state)
         print_next_step(current_stage_next_instruction(wf_state))
         sys.exit(1)
 
     # --rebaseline 是实施阶段的显式基线确认，不得和其它门禁动作合用。
-    if (args.rebaseline or args.accept_existing_code) and (
+    if (
+        args.rebaseline
+        or args.prepare_code
+        or args.accept_existing_code
+        or args.accept_existing_test_code
+    ) and (
         args.skip or args.discuss_done or args.confirmed
     ):
-        print("错误：--rebaseline 和 --accept-existing-code 不能和其它 gate 参数同时使用")
+        print(
+            "错误：--rebaseline、--prepare-code、--accept-existing-code 和 "
+            "--accept-existing-test-code 不能和其它 gate 参数同时使用"
+        )
         sys.exit(1)
 
     # ── 特殊：--skip（仅 spike）──
@@ -1162,6 +1517,61 @@ def cmd_gate(args) -> None:
         print(f"错误：找不到 stage '{stage_name}' 的策略实现")
         sys.exit(1)
 
+    if stage_name == "topic_acceptance":
+        try:
+            created_records = acceptance_records_mod.ensure_automated_records(
+                project_root,
+                wf_state,
+            )
+        except ValueError as exc:
+            print("═══ topic_acceptance 自动化验收准备失败 ═══")
+            print(f"详情: {exc}")
+            print_next_step("先修正验收计划、测试计划或测试结果，再重新进入主题验收")
+            return
+        for record in created_records:
+            journal_mod.append_entry(
+                project_root,
+                "自动化验收记录",
+                "workflow.py",
+                workflow_id=wf_state.workflow_id,
+                topic=record.topic,
+                criterion_id=record.criterion_id,
+                result=record.result,
+                record_id=record.record_id,
+                test_ids=record.test_ids,
+            )
+        if created_records:
+            state_mod.save_state(project_root, wf_state)
+
+    # ── --prepare-code：保存实施计划所列文件的真实修改前内容 ──
+    if args.prepare_code:
+        if stage_name != "impl":
+            print("错误：--prepare-code 只适用于 impl stage")
+            sys.exit(1)
+        try:
+            detail, paths = rollback_mod.prepare_impl(project_root, wf_state)
+        except ValueError as exc:
+            print("═══ impl 实施前回退基线准备失败 ═══")
+            print(f"详情: {exc}")
+            print_next_step("修正实施计划中的文件路径或代码基线后，重新调 `workflow gate impl --prepare-code`")
+            return
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "实施前文件回退基线",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            manifest=wf_state.rollback.manifest_path,
+            manifest_hash=wf_state.rollback.manifest_hash,
+            plan_hash=wf_state.rollback.plan_hash,
+            planned_paths=paths,
+        )
+        print("═══ impl 实施前回退基线已保存 ═══")
+        print(detail)
+        print(f"计划修改文件: {paths}")
+        print_next_step("现在可以按实施计划修改代码；完成实施后记录后调 `workflow gate impl`")
+        return
+
     current_material_hash = compute_stage_material_hash(project_root, stage)
     if (
         gate.discussion_complete
@@ -1180,6 +1590,13 @@ def cmd_gate(args) -> None:
         verification_mod.clear_stage_gates(stage_state)
         stage_state.discussion_material_hash = None
         stage_state.status = "in_progress"
+        stage_index = wf_state.stage_path.index(stage_name)
+        verification_mod.set_recovery_context(
+            wf_state,
+            stage_name,
+            wf_state.stage_path[stage_index:],
+            "当前阶段的流程模板或规范已经更新，旧讨论结论必须重新确认",
+        )
         journal_mod.append_entry(
             project_root,
             "阶段材料变化导致讨论失效",
@@ -1189,10 +1606,13 @@ def cmd_gate(args) -> None:
             previous_material_hash=previous_material_hash,
             current_material_hash=current_material_hash,
         )
+        if ensure_impl_recovery_baseline(project_root, wf_state):
+            state_mod.save_state(project_root, wf_state)
         state_mod.save_state(project_root, wf_state)
         if not args.discuss_done:
             print(f"═══ {stage_name} 讨论材料已变化 ═══")
             print("旧的讨论确认已经失效，必须重新阅读当前材料")
+            print_recovery_details(wf_state)
             print_next_step("先调 `workflow discuss`，阅读更新后的阶段材料")
             return
 
@@ -1204,6 +1624,15 @@ def cmd_gate(args) -> None:
         if not gate.discussion_complete:
             print("错误：必须先通过 `workflow gate impl --discuss-done`，才能确认已有代码")
             print_next_step("先完成实施计划讨论，再调 `workflow gate impl --discuss-done`")
+            return
+        rollback_ok, rollback_detail, _ = rollback_mod.validate_prepared(
+            project_root,
+            wf_state,
+        )
+        if not rollback_ok:
+            print("═══ impl 既有代码确认失败 ═══")
+            print(f"详情: {rollback_detail}")
+            print_next_step("先调 `workflow gate impl --prepare-code` 保存当前计划对应的回退清单")
             return
         valid, detail, _ = stage.validate_implementation_records(project_root, wf_state)
         if not valid:
@@ -1230,6 +1659,40 @@ def cmd_gate(args) -> None:
         print("═══ impl 既有实施代码已确认 ═══")
         print(f"已确认代码快照: {current_hash}")
         print_next_step("调 `workflow gate impl` 做实施代码校验")
+        return
+
+    # ── --accept-existing-test-code：用户确认既有测试代码仍覆盖最新测试计划 ──
+    if args.accept_existing_test_code:
+        if stage_name != "test_code":
+            print("错误：--accept-existing-test-code 只适用于 test_code stage")
+            sys.exit(1)
+        if not gate.discussion_complete:
+            print("错误：必须先通过 `workflow gate test_code --discuss-done`，才能确认既有测试代码")
+            print_next_step("先调 `workflow discuss` 阅读测试代码流程规范和代码开发规范")
+            return
+        valid, detail = stage.validate_existing_test_code(project_root)
+        if not valid:
+            print("═══ test_code 既有测试代码确认失败 ═══")
+            print(f"详情: {detail}")
+            print_next_step("修改测试代码后调 `workflow gate test_code`，或补齐确认条件后重试")
+            return
+        current_hash = compute_test_code_snapshot_hash(project_root)
+        previous_hash = stage_state.existing_test_code_accepted_hash
+        stage_state.existing_test_code_accepted_hash = current_hash
+        journal_mod.append_entry(
+            project_root,
+            "既有测试代码确认",
+            "user",
+            workflow_id=wf_state.workflow_id,
+            stage=stage_name,
+            previous_existing_test_code_hash=previous_hash,
+            test_code_snapshot_hash=current_hash,
+            reason="用户确认当前测试代码已经覆盖最新测试计划",
+        )
+        state_mod.save_state(project_root, wf_state)
+        print("═══ test_code 既有测试代码已确认 ═══")
+        print(f"已确认测试代码快照: {current_hash}")
+        print_next_step("调 `workflow gate test_code` 做测试代码校验")
         return
 
     # ── --rebaseline：用户确认当前代码作为新的实施前基线 ──
@@ -1320,17 +1783,48 @@ def cmd_gate(args) -> None:
                 test_code_snapshot_hash=stage_state.test_code_baseline_hash,
                 non_test_code_snapshot_hash=stage_state.non_test_code_baseline_hash,
             )
+            try:
+                rollback_test_paths = rollback_mod.prepare_test_code_baseline(
+                    project_root,
+                    wf_state,
+                )
+            except ValueError as exc:
+                gate.discussion_complete = False
+                stage_state.discussion_material_hash = None
+                stage_state.test_code_baseline_hash = None
+                stage_state.non_test_code_baseline_hash = None
+                state_mod.save_state(project_root, wf_state)
+                print("═══ test_code 讨论完成校验失败 ═══")
+                print(f"详情: 无法保存测试代码修改前内容：{exc}")
+                print_next_step("先修复 impl 的回退清单，再重新调 `workflow gate test_code --discuss-done`")
+                return
+            journal_mod.append_entry(
+                project_root,
+                "测试代码回退基线",
+                "workflow.py",
+                workflow_id=wf_state.workflow_id,
+                saved_paths=rollback_test_paths,
+                manifest_hash=wf_state.rollback.manifest_hash,
+            )
         ensure_stage_artifact_baseline(project_root, wf_state, stage)
         # 保存 gate 和基线
         state_mod.save_state(project_root, wf_state)
         # 打印讨论完毕
         print(f"═══ {stage_name} 讨论完毕 ═══")
         print(f"可以写产出文件了")
-        # 下一步：写产出文件
-        print_next_step(
-            f"写产出文件 {stage_state.artifact_paths}。"
-            f"写完调 `workflow gate {stage_name}`"
-        )
+        if recovery_instruction(wf_state):
+            print_next_step(current_stage_next_instruction(wf_state))
+        else:
+            if stage_name == "impl":
+                print_next_step(
+                    "实施前计划已经确认。先调 `workflow gate impl --prepare-code` 保存计划修改文件的原内容，"
+                    "保存成功后再修改代码"
+                )
+            else:
+                print_next_step(
+                    f"写产出文件 {stage_state.artifact_paths}。"
+                    f"写完调 `workflow gate {stage_name}`"
+                )
         return
 
     # ── 第 2 道闸：无 flag（代码校验）──
@@ -1352,23 +1846,44 @@ def cmd_gate(args) -> None:
 
         # Verification Invalidation 检查：上游 hash 是否变化
         invalidations = verification_mod.check_invalidation(wf_state, project_root)
-        # 有失效 → 清零下游，提示重新写产出
+        # 有失效 → 清零下游，解释哪些阶段只需复核、哪些结果必须重做
         if invalidations:
+            ensure_impl_recovery_baseline(project_root, wf_state)
             # 保存清零后的 state
             state_mod.save_state(project_root, wf_state)
             # 写 journal：验证失效
             for from_stage, to_stages in invalidations:
                 journal_mod.append_entry(project_root, "验证失效", "workflow.py",
                                         from_stage=from_stage, to_stage=to_stages,
-                                        reason="上游内容已变化")
+                                        reason=wf_state.recovery.reason or "上游内容已变化")
             # 打印失效信息
             print(f"═══ 验证失效 ═══")
             for from_stage, to_stages in invalidations:
                 print(f"  {from_stage} 变化 → 清零 {to_stages}")
-            print(f"请重新写产出后再过门禁")
-            # 下一步：重新写产出
+            print_recovery_details(wf_state)
             print_next_step(current_stage_next_instruction(wf_state))
             return
+
+        if stage_name == "test_code":
+            try:
+                changed_test_paths = rollback_mod.finalize_test_code_changes(
+                    project_root,
+                    wf_state,
+                )
+            except ValueError as exc:
+                print("═══ test_code 回退记录校验失败 ═══")
+                print(f"详情: {exc}")
+                print_next_step("修复测试代码回退记录后再调 `workflow gate test_code`")
+                return
+            state_mod.save_state(project_root, wf_state)
+            journal_mod.append_entry(
+                project_root,
+                "测试代码变化登记",
+                "workflow.py",
+                workflow_id=wf_state.workflow_id,
+                changed_paths=changed_test_paths,
+                manifest_hash=wf_state.rollback.manifest_hash,
+            )
 
         # 跑 code_validate（第 2 道闸的核心）；test_plan 还会执行修改前全量测试
         passed, details = validate_stage_output(
@@ -1425,8 +1940,19 @@ def cmd_gate(args) -> None:
             state_mod.save_state(project_root, wf_state)
             print(f"═══ {stage_name} 代码校验失败 ═══")
             print(f"详情: {details}")
-            # 下一步：补完产出再校验
-            print_next_step(f"产出文件未就绪，补完后再调 `workflow gate {stage_name}`")
+            recovery_command_needed = (
+                "--accept-existing-code" in details
+                or "--accept-existing-test-code" in details
+            )
+            if recovery_instruction(wf_state) and recovery_command_needed:
+                print_next_step(current_stage_next_instruction(wf_state))
+            elif recovery_instruction(wf_state):
+                print_next_step(
+                    f"按上面的具体详情修正当前 {stage_label(stage_name)}，"
+                    f"修正后再调 `workflow gate {stage_name}`"
+                )
+            else:
+                print_next_step(f"产出文件未就绪，补完后再调 `workflow gate {stage_name}`")
             return
 
         # 校验通过
@@ -1459,6 +1985,7 @@ def cmd_gate(args) -> None:
     # 门2通过后文件仍可能变化。门3推进前必须重新检查当前文件，不能只相信旧布尔值。
     invalidations = verification_mod.check_invalidation(wf_state, project_root)
     if invalidations:
+        ensure_impl_recovery_baseline(project_root, wf_state)
         state_mod.save_state(project_root, wf_state)
         for from_stage, to_stages in invalidations:
             journal_mod.append_entry(
@@ -1467,11 +1994,12 @@ def cmd_gate(args) -> None:
                 "workflow.py",
                 from_stage=from_stage,
                 to_stage=to_stages,
-                reason="用户确认前发现上游内容已变化",
+                reason=wf_state.recovery.reason or "用户确认前发现上游内容已变化",
             )
         print("═══ 用户确认前校验失败 ═══")
         for from_stage, to_stages in invalidations:
             print(f"  {from_stage} 变化 → 清零 {to_stages}")
+        print_recovery_details(wf_state)
         print_next_step(current_stage_next_instruction(wf_state))
         return
 
@@ -1579,6 +2107,8 @@ def cmd_gate(args) -> None:
     gate.user_confirmed = True
     # stage 状态改为 done
     stage_state.status = "done"
+    # 模板/规范变更触发的恢复只解释触发阶段；该阶段重新确认后不再向后续阶段显示旧原因。
+    clear_completed_material_recovery(project_root, wf_state)
 
     # 调 on_advance 钩子（spike 清理临时代码、样本和原始输出）
     cleaned_paths = stage.on_advance(project_root)
@@ -1699,7 +2229,8 @@ def cmd_gate(args) -> None:
         print(f"═══ {stage_name} 完成 ═══")
         print(f"进入 {next_stage}")
         # 下一步：discuss 下一 stage
-        print_next_step(f"调 `workflow discuss` 加载 {next_stage} stage 提示词")
+        print_recovery_details(wf_state)
+        print_next_step(current_stage_next_instruction(wf_state))
     # 没有下一个 stage → 所有 stage 已完成
     else:
         # 临时置 "completed"，由 done 命令确认
@@ -1731,6 +2262,11 @@ def cmd_status(args) -> None:
         return
     if wf_state.run_status == "active" and ensure_stage_path_current(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
+    if restore_recovery_context_from_journal(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
+    clear_completed_material_recovery(project_root, wf_state)
+    if ensure_impl_recovery_baseline(project_root, wf_state):
+        state_mod.save_state(project_root, wf_state)
 
     # 打印 state 摘要
     print(f"═══ 工作流状态 ═══")
@@ -1744,6 +2280,16 @@ def cmd_status(args) -> None:
     print(f"作废时间: {wf_state.aborted_at or '（未作废）'}")
     print(f"spike_skipped: {wf_state.spike_skipped}")
     print(f"架构: preliminary_done={wf_state.architecture.preliminary_done}, detailed_done={wf_state.architecture.detailed_done}")
+    if wf_state.rollback.manifest_path:
+        print(
+            "实施前回退基线: 已准备 "
+            f"（{wf_state.rollback.manifest_path}，计划文件 {wf_state.rollback.planned_paths}）"
+        )
+    else:
+        print("实施前回退基线: 未准备")
+    if verification_mod.recovery_summary(wf_state):
+        print("\n当前处于上游变化后的恢复流程：")
+        print_recovery_details(wf_state)
     # 打印每个 stage 的门禁状态
     print(f"\n各阶段门禁状态：")
     for name, stage_state in wf_state.stages.items():
@@ -1763,8 +2309,8 @@ def cmd_status(args) -> None:
     print(f"\n下一步：{current_stage_next_instruction(wf_state)}")
 
 
-# done 命令：标记 Run 为 completed，写结束时间
-# 不再二次确认；不删除产物；不改写 bug/index.md
+# done 命令：清理临时回退副本，标记 Run 为 completed，写结束时间
+# 不再二次确认；保留正式产物；不改写 bug/index.md
 def cmd_done(args) -> None:
     # 定位项目根
     project_root = resolve_project_root()
@@ -1791,6 +2337,14 @@ def cmd_done(args) -> None:
               f"请先完成所有 stage 的 gate --confirmed")
         sys.exit(1)
 
+    try:
+        cleaned_snapshots = rollback_mod.cleanup(project_root, wf_state.workflow_id)
+    except OSError as exc:
+        print("═══ 工作流完成失败 ═══")
+        print(f"详情: 无法清理临时回退副本：{exc}")
+        print_next_step("保留当前 Run，处理回退目录权限后重新调 `workflow done`")
+        return
+    wf_state.rollback = state_mod.RollbackState()
     # 标记 Run 为 completed
     wf_state.run_status = "completed"
     # 写结束时间
@@ -1799,7 +2353,8 @@ def cmd_done(args) -> None:
     state_mod.save_state(project_root, wf_state)
     # 写 journal：Run 完成
     journal_mod.append_entry(project_root, "Run 完成", "workflow.py",
-                            workflow_id=wf_state.workflow_id)
+                            workflow_id=wf_state.workflow_id,
+                            cleaned_rollback_paths=cleaned_snapshots)
 
     # 打印完成信息
     print(f"═══ 工作流完成 ═══")
@@ -1809,8 +2364,8 @@ def cmd_done(args) -> None:
     print_next_step("工作流完成。本次 workflow 结束。")
 
 
-# abort 命令：将进行中的 Run 正式中止
-# 不删除 Artifact；不删除 state.json；保留作废快照直至下次 start 覆盖
+# abort 命令：恢复已保存的实施和测试代码文件，再将进行中的 Run 正式中止
+# 保留正式过程文档和 state.json；成功后删除临时回退副本
 def cmd_abort(args) -> None:
     # 定位项目根
     project_root = resolve_project_root()
@@ -1828,20 +2383,79 @@ def cmd_abort(args) -> None:
         print(f"错误：Run 状态为 {wf_state.run_status}，无法 abort（仅 active 可 abort）")
         sys.exit(1)
 
+    restored_paths: list[str] = []
+    impl_state = wf_state.stages.get("impl")
+    if wf_state.rollback.manifest_path and wf_state.rollback.restored_at is None:
+        try:
+            restored_paths = rollback_mod.restore(project_root, wf_state)
+        except ValueError as exc:
+            journal_mod.append_entry(
+                project_root,
+                "Run 中止回退失败",
+                "workflow.py",
+                workflow_id=wf_state.workflow_id,
+                reason=str(exc),
+            )
+            print("═══ 工作流中止失败 ═══")
+            print(f"详情: {exc}")
+            print_next_step("先处理无法安全回退的文件；回退副本已保留，当前 Run 仍是 active")
+            return
+        wf_state.rollback.restored_at = state_mod.now_iso()
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "Run 中止代码已恢复",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            restored_paths=restored_paths,
+            restored_at=wf_state.rollback.restored_at,
+        )
+    elif (
+        wf_state.rollback.restored_at is None
+        and
+        impl_state is not None
+        and impl_state.code_baseline_hash is not None
+        and compute_non_test_code_snapshot_hash(project_root) != impl_state.code_baseline_hash
+    ):
+        print("═══ 工作流中止失败 ═══")
+        print("详情: 实施代码已经变化，但当前 Run 没有保存真实文件副本，不能安全回退")
+        print_next_step("不要手工标记中止；先确认缺失副本的代码怎样恢复")
+        return
+
+    try:
+        cleaned_snapshots = rollback_mod.cleanup(project_root, wf_state.workflow_id)
+    except OSError as exc:
+        journal_mod.append_entry(
+            project_root,
+            "Run 中止清理失败",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            reason=str(exc),
+            restored_paths=restored_paths,
+        )
+        print("═══ 工作流中止失败 ═══")
+        print(f"详情: 代码已经恢复，但临时回退副本清理失败：{exc}")
+        print_next_step("处理回退目录权限后重新调 `workflow abort`，当前 Run 仍是 active")
+        return
+    wf_state.rollback = state_mod.RollbackState()
     # 标记 Run 为 aborted
     wf_state.run_status = "aborted"
     # 写作废时间
     wf_state.aborted_at = state_mod.now_iso()
-    # 保存 state（不删除，保留作废快照）
+    # 保存 state（不删除，保留本次中止历史）
     state_mod.save_state(project_root, wf_state)
     # 写 journal：Run 作废
     journal_mod.append_entry(project_root, "Run 作废", "workflow.py",
-                            workflow_id=wf_state.workflow_id)
+                            workflow_id=wf_state.workflow_id,
+                            restored_paths=restored_paths,
+                            cleaned_rollback_paths=cleaned_snapshots)
 
     # 打印作废信息
     print(f"═══ 工作流作废 ═══")
     print(f"workflow_id: {wf_state.workflow_id}")
     print(f"作废时间: {wf_state.aborted_at}")
+    if restored_paths:
+        print(f"已恢复实施前代码文件: {restored_paths}")
     # 下一步：可重新开新 Run
     print_next_step(f"Run 已作废。可重新调 `workflow start --intent {wf_state.intent}` 开新 Run")
 
@@ -1904,6 +2518,44 @@ def main() -> None:
         help="最多并行执行的独立主题数；默认读取 project.json 的 test_parallelism",
     )
 
+    # acceptance 命令：用户在聊天中回答后，由 AI 记录当前 AC 的验收事实。
+    acceptance_parser = subparsers.add_parser("acceptance", help="记录主题验收回答")
+    acceptance_subparsers = acceptance_parser.add_subparsers(
+        dest="acceptance_action",
+        required=True,
+    )
+    acceptance_record_parser = acceptance_subparsers.add_parser(
+        "record",
+        help="记录一条人工或混合验收条件",
+    )
+    acceptance_record_parser.add_argument("--topic", required=True, help="验收主题名称")
+    acceptance_record_parser.add_argument(
+        "--criterion",
+        required=True,
+        help="验收条件编号，例如 AC-01",
+    )
+    acceptance_record_parser.add_argument(
+        "--result",
+        required=True,
+        choices=("passed", "failed", "blocked"),
+        help="验收结果：passed（通过）、failed（未通过）、blocked（无法继续验证）",
+    )
+    acceptance_record_parser.add_argument(
+        "--actual-result",
+        required=True,
+        help="验收者实际观察到的结果",
+    )
+    acceptance_record_parser.add_argument(
+        "--answer",
+        required=True,
+        help="验收者的实际回答",
+    )
+    acceptance_record_parser.add_argument(
+        "--evidence",
+        default="",
+        help="可选证据说明；没有独立证据时可以省略",
+    )
+
     # gate 命令
     gate_parser = subparsers.add_parser("gate", help="过门禁")
     # stage 名（位置参数）
@@ -1920,9 +2572,20 @@ def main() -> None:
     # --rebaseline：用户确认当前代码作为 impl 的新实施前基线
     gate_parser.add_argument("--rebaseline", action="store_true",
                              help="重设 impl 实施前代码基线（仅用户确认后使用）")
+    gate_parser.add_argument(
+        "--prepare-code",
+        action="store_true",
+        help="保存 impl 计划修改文件的真实修改前内容，供整个 Run 中止时回退",
+    )
     # --accept-existing-code：用户确认代码在计划确认前已经是本次实施结果
     gate_parser.add_argument("--accept-existing-code", action="store_true",
                              help="确认当前已有代码就是本次实施结果（仅 impl）")
+    # --accept-existing-test-code：上游计划变化后确认现有测试代码仍然适用
+    gate_parser.add_argument(
+        "--accept-existing-test-code",
+        action="store_true",
+        help="确认当前已有测试代码仍覆盖最新测试计划（仅 test_code）",
+    )
     # status 命令（旧状态可能先迁移阶段路径）
     subparsers.add_parser("status", help="打印状态摘要")
     # done 命令
@@ -1971,6 +2634,8 @@ def main() -> None:
             cmd_test_prepare(args)
         else:
             cmd_test_run(args)
+    elif args.command == "acceptance":
+        cmd_acceptance_record(args)
     elif args.command == "gate":
         cmd_gate(args)
     elif args.command == "status":

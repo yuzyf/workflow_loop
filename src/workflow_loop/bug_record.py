@@ -159,6 +159,20 @@ def record_regression_failure(project_root: str, workflow_id: str, topics: list[
     )
 
 
+def record_regression_pass(project_root: str, workflow_id: str, topics: list[str]) -> str:
+    return update_status(
+        project_root,
+        workflow_id,
+        topics,
+        stage_label="最终全量回归结果",
+        status="全量回归通过，待整体验收",
+        details=[
+            "- 回归结果：统一测试入口执行通过，详情见当前工作流 state.json 和 journal",
+            "- 后续处理：等待用户进行整体验收",
+        ],
+    )
+
+
 def has_explicit_regression_failure(project_root: str, workflow_id: str) -> bool:
     state = load_state(project_root)
     return (

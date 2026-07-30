@@ -21,6 +21,7 @@ from .topic_relations import read_topic_index
 
 
 FORBIDDEN_SHELL_TOKENS = ("|", "&&", ";", ">", "<", "$(", "`")
+INLINE_CODE_FLAGS = {"-c", "-e", "--eval", "--evaluate"}
 DEFAULT_TIMEOUT_SECONDS = 600
 SAFE_ENVIRONMENT_KEYS = {
     "CI",
@@ -53,6 +54,42 @@ def validate_command(argv: list[str]) -> tuple[bool, str]:
             return False, "测试命令参数必须是非空字符串"
         if any(operator in token for operator in FORBIDDEN_SHELL_TOKENS):
             return False, "测试命令不能包含管道、重定向、命令串联或命令替换"
+    return True, ""
+
+
+def _command_value_tokens(command: list[str]) -> set[str]:
+    values = set(command)
+    for token in command:
+        if "=" in token:
+            values.add(token.split("=", 1)[1])
+    return values
+
+
+def _entry_is_selected(entry: str, command_values: set[str]) -> bool:
+    normalized_entry = entry.replace("\\", "/")
+    parts = normalized_entry.split("::")
+    path = parts[0]
+    symbol = parts[-1] if len(parts) > 1 else ""
+    candidates = {normalized_entry, path}
+    if symbol:
+        candidates.add(symbol)
+    for value in command_values:
+        normalized_value = value.replace("\\", "/").rstrip("/")
+        if normalized_value in candidates:
+            return True
+        if normalized_value and path.startswith(normalized_value + "/"):
+            return True
+    return False
+
+
+def validate_command_entries(command: list[str], entries: list[str]) -> tuple[bool, str]:
+    """确认登记命令确实选择了当前 TC 的测试入口，而不是任意成功命令。"""
+    if any(flag in command for flag in INLINE_CODE_FLAGS):
+        return False, "测试命令不能使用 -c、-e 或 --eval 执行临时代码，必须运行真实测试入口"
+    command_values = _command_value_tokens(command)
+    missing = [entry for entry in entries if not _entry_is_selected(entry, command_values)]
+    if missing:
+        return False, f"测试命令没有明确选择当前测试入口: {missing}"
     return True, ""
 
 
@@ -111,6 +148,9 @@ def prepare_task(
     entries = _markers_by_test(project_root, [topic]).get((topic, test_id), [])
     if not entries:
         raise ValueError(f"{topic} / {test_id} 没有可追踪的测试入口")
+    entries_ok, entries_detail = validate_command_entries(command, entries)
+    if not entries_ok:
+        raise ValueError(f"{topic} / {test_id}: {entries_detail}")
 
     stage_state = workflow_state.stages.get("test_execution")
     if stage_state is None:
@@ -192,6 +232,9 @@ def validate_prepared_tasks(
         expected_entries = sorted(set(current_entries.get(key, [])))
         if sorted(set(task.test_entries)) != expected_entries:
             return False, f"{item.topic} / {item.test_id} 的登记测试入口与当前测试代码不一致"
+        entries_ok, entries_detail = validate_command_entries(task.command, expected_entries)
+        if not entries_ok:
+            return False, f"{item.topic} / {item.test_id}: {entries_detail}"
     return True, f"{len(expected)} 个自动化测试项的登记任务与当前计划和测试代码一致"
 
 

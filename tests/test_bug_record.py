@@ -3,6 +3,7 @@ from pathlib import Path
 from workflow_loop.bug_record import (
     record_overall_acceptance_pass,
     record_regression_failure,
+    record_regression_pass,
     record_topic_acceptance_pass,
 )
 
@@ -79,6 +80,17 @@ def test_regression_failure_reopens_bug_without_rewriting_reproduction(tmp_path)
     failed = (tmp_path / "bug" / BUG_FILE).read_text(encoding="utf-8")
     assert failed.startswith(original)
     assert "回归失败，重新处理中" in failed
+
+
+def test_regression_pass_waits_for_overall_acceptance(tmp_path):
+    original = _setup(tmp_path)
+
+    record_regression_pass(str(tmp_path), WORKFLOW_ID, [TOPIC])
+
+    content = (tmp_path / "bug" / BUG_FILE).read_text(encoding="utf-8")
+    assert content.startswith(original)
+    assert "全量回归通过，待整体验收" in content
+    assert "已修复并验收" not in content
 
 
 def test_overall_acceptance_closes_bug_and_preserves_reproduction(tmp_path):

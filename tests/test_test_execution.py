@@ -9,12 +9,17 @@ from workflow_loop.test_execution import (
     prepare_task,
     run_prepared_tasks,
     validate_command,
+    validate_command_entries,
 )
 from workflow_loop.verification import compute_code_snapshot_hash, compute_test_code_snapshot_hash
 
 
 WORKFLOW_ID = "2026-07-28-1300-test-execution"
 TOPIC = "上传文件"
+
+
+def _pytest_command(entry: str) -> list[str]:
+    return [sys.executable, "-m", "pytest", entry, "-q"]
 
 
 def _write_test_documents(tmp_path, *, command_label="通过"):
@@ -95,7 +100,7 @@ def _state(tmp_path):
 def test_prepare_registers_real_argv_and_plan_dependencies(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
-    command = [sys.executable, "-c", "raise SystemExit(0)"]
+    command = _pytest_command("tests/test_upload.py::test_upload")
 
     task = prepare_task(str(tmp_path), state, TOPIC, "TC-01", command, timeout_seconds=12)
 
@@ -109,7 +114,7 @@ def test_prepare_registers_real_argv_and_plan_dependencies(tmp_path):
 def test_run_success_writes_current_record_but_not_formal_result(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
-    command = [sys.executable, "-c", "raise SystemExit(0)"]
+    command = _pytest_command("tests/test_upload.py::test_upload")
     prepare_task(str(tmp_path), state, TOPIC, "TC-01", command)
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=1)
@@ -127,7 +132,7 @@ def test_run_success_writes_current_record_but_not_formal_result(tmp_path):
 def test_rerun_keeps_current_success_without_executing_it_twice(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
-    command = [sys.executable, "-c", "raise SystemExit(0)"]
+    command = _pytest_command("tests/test_upload.py::test_upload")
     prepare_task(str(tmp_path), state, TOPIC, "TC-01", command)
     assert len(run_prepared_tasks(str(tmp_path), state, parallelism=1)) == 1
 
@@ -139,12 +144,17 @@ def test_rerun_keeps_current_success_without_executing_it_twice(tmp_path):
 def test_failed_rerun_clears_previous_current_success_and_result(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
-    success_command = [sys.executable, "-c", "raise SystemExit(0)"]
+    success_command = _pytest_command("tests/test_upload.py::test_upload")
     prepare_task(str(tmp_path), state, TOPIC, "TC-01", success_command)
     assert run_prepared_tasks(str(tmp_path), state, parallelism=1)[0].status == "passed"
     (tmp_path / "qa" / f"{TOPIC}_result.md").write_text("旧的通过结果", encoding="utf-8")
 
-    failure_command = [sys.executable, "-c", "raise SystemExit(1)"]
+    test_path = tmp_path / "tests" / "test_upload.py"
+    test_path.write_text(
+        test_path.read_text(encoding="utf-8").replace("assert True", "assert False"),
+        encoding="utf-8",
+    )
+    failure_command = _pytest_command("tests/test_upload.py::test_upload")
     prepare_task(str(tmp_path), state, TOPIC, "TC-01", failure_command)
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=1)
     loaded = load_state(str(tmp_path))
@@ -163,10 +173,29 @@ def test_test_command_rejects_shell_operators():
     assert "命令串联" in detail
 
 
+def test_test_command_must_select_the_registered_test_entry():
+    entry = "tests/test_upload.py::test_upload"
+    ok, detail = validate_command_entries(
+        [sys.executable, "-c", "raise SystemExit(0)"],
+        [entry],
+    )
+    assert ok is False
+    assert "临时代码" in detail
+
+    ok, detail = validate_command_entries(
+        [sys.executable, "-m", "pytest", "tests/test_other.py", "-q"],
+        [entry],
+    )
+    assert ok is False
+    assert entry in detail
+
+    assert validate_command_entries(_pytest_command(entry), [entry]) == (True, "")
+
+
 def test_result_gate_matches_current_execution_record_and_command(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
-    command = [sys.executable, "-c", "raise SystemExit(0)"]
+    command = _pytest_command("tests/test_upload.py::test_upload")
     prepare_task(str(tmp_path), state, TOPIC, "TC-01", command)
     assert run_prepared_tasks(str(tmp_path), state, parallelism=1)[0].status == "passed"
     command_text = shlex.join(command)
@@ -204,7 +233,13 @@ def test_result_gate_matches_current_execution_record_and_command(tmp_path):
     assert "退出码 0" in detail
 
 
-def _write_dependency_topic(tmp_path: Path, topic: str, entry_name: str) -> None:
+def _write_dependency_topic(
+    tmp_path: Path,
+    topic: str,
+    entry_name: str,
+    *,
+    body: str = "    assert True",
+) -> None:
     (tmp_path / "qa").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
     (tmp_path / "qa" / f"{topic}_plan.md").write_text(
@@ -230,7 +265,7 @@ def _write_dependency_topic(tmp_path: Path, topic: str, entry_name: str) -> None
     测试入口：tests/test_{entry_name}.py::test_{entry_name}
     代码入口：src/{entry_name}.py 的 run()
     """
-    assert True
+{body}
 ''',
         encoding="utf-8",
     )
@@ -253,8 +288,24 @@ def _dependency_state(tmp_path: Path, topics: list[str]) -> WorkflowState:
 def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
     first = "准备上传环境"
     second = "上传文件"
-    _write_dependency_topic(tmp_path, first, "prepare_upload")
-    _write_dependency_topic(tmp_path, second, "upload_file")
+    _write_dependency_topic(
+        tmp_path,
+        first,
+        "prepare_upload",
+        body='''    from pathlib import Path
+    import time
+    time.sleep(0.15)
+    with Path("order.txt").open("a", encoding="utf-8") as stream:
+        stream.write("准备上传环境\\n")''',
+    )
+    _write_dependency_topic(
+        tmp_path,
+        second,
+        "upload_file",
+        body='''    from pathlib import Path
+    with Path("order.txt").open("a", encoding="utf-8") as stream:
+        stream.write("上传文件\\n")''',
+    )
     (tmp_path / "qa" / "index.md").write_text(
         f"""# 测试计划索引
 
@@ -269,19 +320,6 @@ def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
 """,
         encoding="utf-8",
     )
-    recorder = tmp_path / "record_order.py"
-    recorder.write_text(
-        """from pathlib import Path
-import sys
-import time
-
-if sys.argv[1] == "first":
-    time.sleep(0.15)
-with Path(sys.argv[3]).open("a", encoding="utf-8") as stream:
-    stream.write(sys.argv[2] + "\\n")
-""",
-        encoding="utf-8",
-    )
     order_path = tmp_path / "order.txt"
     state = _dependency_state(tmp_path, [first, second])
     prepare_task(
@@ -289,14 +327,14 @@ with Path(sys.argv[3]).open("a", encoding="utf-8") as stream:
         state,
         first,
         "TC-01",
-        [sys.executable, str(recorder), "first", first, str(order_path)],
+        _pytest_command("tests/test_prepare_upload.py::test_prepare_upload"),
     )
     prepare_task(
         str(tmp_path),
         state,
         second,
         "TC-01",
-        [sys.executable, str(recorder), "second", second, str(order_path)],
+        _pytest_command("tests/test_upload_file.py::test_upload_file"),
     )
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=2)
@@ -308,7 +346,7 @@ with Path(sys.argv[3]).open("a", encoding="utf-8") as stream:
 def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
     first = "准备上传环境"
     second = "上传文件"
-    _write_dependency_topic(tmp_path, first, "prepare_upload")
+    _write_dependency_topic(tmp_path, first, "prepare_upload", body="    assert False")
     _write_dependency_topic(tmp_path, second, "upload_file")
     (tmp_path / "qa" / "index.md").write_text(
         f"""# 测试计划索引
@@ -330,14 +368,14 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
         state,
         first,
         "TC-01",
-        [sys.executable, "-c", "raise SystemExit(1)"],
+        _pytest_command("tests/test_prepare_upload.py::test_prepare_upload"),
     )
     prepare_task(
         str(tmp_path),
         state,
         second,
         "TC-01",
-        [sys.executable, "-c", "raise SystemExit(0)"],
+        _pytest_command("tests/test_upload_file.py::test_upload_file"),
     )
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=2)

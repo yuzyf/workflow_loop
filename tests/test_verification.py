@@ -18,6 +18,7 @@ from workflow_loop.verification import (
     compute_non_test_code_snapshot_hash, compute_test_code_snapshot_hash,
     compute_product_design_hash, compute_code_design_hash,
     get_linked_product_design_paths, check_invalidation, clear_stage_gates,
+    clear_completed_material_recovery, recovery_stage_action,
 )
 
 
@@ -344,6 +345,9 @@ def test_check_invalidation_impl_changed(tmp_path):
     assert not qa_result.exists()
     assert not acceptance_result.exists()
     assert state.regression_test.status == "not_run"
+    assert state.recovery.source_stage == "impl"
+    assert "原测试和验收结果不能继续代表当前实现" in state.recovery.reason
+    assert recovery_stage_action(state, "test_code") is not None
 
 
 def test_acceptance_result_change_returns_to_regression_test(tmp_path):
@@ -436,6 +440,51 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     assert state.stages["test_plan"].artifact_baseline_captured_at is None
     assert state.stages["test_plan"].artifact_baseline_hashes == {}
     assert state.stages["impl"].code_baseline_hash is None
+    assert state.recovery.source_stage == "acceptance_plan"
+    assert recovery_stage_action(state, "impl").startswith("重新核对实施计划")
+
+
+def test_recovery_actions_distinguish_recheck_from_rerun(tmp_path):
+    state = _make_state(str(tmp_path))
+    state.recovery.source_stage = "test_plan"
+    state.recovery.reason = "测试范围变化"
+    state.recovery.affected_stages = [
+        "test_plan",
+        "impl",
+        "test_code",
+        "test_execution",
+        "topic_acceptance",
+    ]
+
+    assert "不一致时才修改代码" in recovery_stage_action(state, "impl")
+    assert "确认既有测试代码" in recovery_stage_action(state, "test_code")
+    assert "重新登记并执行" in recovery_stage_action(state, "test_execution")
+    assert "重新逐条验收" in recovery_stage_action(state, "topic_acceptance")
+
+
+def test_completed_material_recovery_reason_is_cleared_after_source_stage(tmp_path):
+    state = _make_state(str(tmp_path))
+    state.current_stage = "topic_acceptance"
+    state.stages["test_execution"].status = "done"
+    state.recovery.source_stage = "test_execution"
+    state.recovery.reason = "当前阶段的流程模板或规范已经更新，旧讨论结论必须重新确认"
+    state.recovery.affected_stages = ["test_execution", "topic_acceptance"]
+
+    assert clear_completed_material_recovery(state) is True
+    assert state.recovery.source_stage is None
+    assert state.recovery.reason is None
+
+
+def test_content_invalidation_recovery_reason_is_not_cleared_after_source_stage(tmp_path):
+    state = _make_state(str(tmp_path))
+    state.current_stage = "impl"
+    state.stages["test_plan"].status = "done"
+    state.recovery.source_stage = "test_plan"
+    state.recovery.reason = "测试项、测试方式或测试范围已经改变，后续实施和测试必须重新核对"
+    state.recovery.affected_stages = ["test_plan", "impl", "test_code"]
+
+    assert clear_completed_material_recovery(state) is False
+    assert state.recovery.source_stage == "test_plan"
 
 
 def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):

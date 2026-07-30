@@ -35,6 +35,7 @@ from ..verification import (
     compute_non_test_code_snapshot_hash,
     compute_test_code_snapshot_hash,
 )
+from .. import rollback as rollback_mod
 from .base import StageStrategy, clean_spike_tmp
 
 
@@ -514,13 +515,38 @@ class ImplStage(StageStrategy):
         stage_state = state.stages.get(self.name())
         if stage_state is None or stage_state.code_baseline_hash is None:
             return (False, "缺少进入 impl 时的代码基线，不能确认实施代码变化")
+        rollback_ok, rollback_detail, _ = rollback_mod.validate_prepared(
+            project_root,
+            state,
+        )
+        if not rollback_ok:
+            return (False, rollback_detail)
         current_hash = compute_non_test_code_snapshot_hash(project_root)
         if stage_state.existing_code_accepted_hash is not None:
             if current_hash != stage_state.existing_code_accepted_hash:
                 return (False, "用户确认既有代码后代码又发生变化，不能通过实施门禁")
             return (True, f"{len(topics)} 个验收主题的实施计划和实施记录完整，既有代码未发生变化")
         if current_hash == stage_state.code_baseline_hash:
+            recovery = getattr(state, "recovery", None)
+            if (
+                recovery is not None
+                and recovery.source_stage
+                and "impl" in recovery.affected_stages
+            ):
+                return (
+                    False,
+                    "当前代码相对恢复基线没有变化；如果现有代码已经是本次实施结果，"
+                    "请先调 workflow gate impl --accept-existing-code 明确确认，"
+                    "否则修改代码后再调 workflow gate impl",
+                )
             return (False, "实施代码没有相对计划确认时的代码基线发生变化")
+
+        changes_ok, changes_detail = rollback_mod.validate_implementation_changes(
+            project_root,
+            state,
+        )
+        if not changes_ok:
+            return (False, changes_detail)
 
         trace_ok, trace_detail = validate_downstream_traceability(
             project_root,
@@ -529,7 +555,10 @@ class ImplStage(StageStrategy):
         )
         if not trace_ok:
             return (False, trace_detail)
-        return (True, f"{len(topics)} 个验收主题的实施计划和实施记录完整，代码已发生实施变更")
+        return (
+            True,
+            f"{len(topics)} 个验收主题的实施计划和实施记录完整；{changes_detail}",
+        )
 
     # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
@@ -591,7 +620,7 @@ class _LegacyTestStage(StageStrategy):
 
 
 # 旧验收阶段实现只保留给旧状态迁移参考；正式路径使用 TopicAcceptanceStage。
-class _LegacyAcceptanceStage(StageStrategy):
+class _DeprecatedAcceptanceStage(StageStrategy):
     # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "acceptance"
@@ -766,7 +795,12 @@ class TestCodeStage(StageStrategy):
     def change_tracked_paths(self, project_root: str) -> list[str]:
         return _test_code_paths(project_root)
 
-    def code_validate(self, project_root: str) -> tuple[bool, str]:
+    def _validate_current_test_code(
+        self,
+        project_root: str,
+        *,
+        allow_unchanged: bool,
+    ) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
@@ -784,12 +818,21 @@ class TestCodeStage(StageStrategy):
             automated_items = automated_test_items(project_root, topics)
         except ValueError as exc:
             return (False, str(exc))
+        current_test_code_hash = compute_test_code_snapshot_hash(project_root)
+        accepted_hash = stage_state.existing_test_code_accepted_hash
+        if accepted_hash is not None and current_test_code_hash != accepted_hash:
+            return (False, "既有测试代码确认后又发生变化，需要重新确认或重新修改测试代码")
         if (
             automated_items
-            and compute_test_code_snapshot_hash(project_root)
-            == stage_state.test_code_baseline_hash
+            and current_test_code_hash == stage_state.test_code_baseline_hash
+            and accepted_hash != current_test_code_hash
+            and not allow_unchanged
         ):
-            return (False, "存在自动化测试项，但测试代码没有相对 test_code 开始时发生变化")
+            return (
+                False,
+                "存在自动化测试项，但测试代码没有变化；如果当前测试代码已经覆盖最新测试计划，"
+                "请由用户执行 workflow gate test_code --accept-existing-test-code 明确确认",
+            )
         marker_ok, marker_detail = validate_workflow_test_markers(project_root, topics)
         if not marker_ok:
             return (False, marker_detail)
@@ -806,6 +849,13 @@ class TestCodeStage(StageStrategy):
             True,
             f"测试代码已覆盖 {len(automated_items)} 个自动化测试项；{marker_detail}",
         )
+
+    def validate_existing_test_code(self, project_root: str) -> tuple[bool, str]:
+        """校验当前测试代码是否可以作为最新测试计划的既有实现继续使用。"""
+        return self._validate_current_test_code(project_root, allow_unchanged=True)
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        return self._validate_current_test_code(project_root, allow_unchanged=False)
 
     def instruction(self) -> str:
         return (
@@ -917,7 +967,9 @@ class TopicAcceptanceStage(StageStrategy):
     def instruction(self) -> str:
         return (
             "主题验收阶段：先确认对应主题的测试结果已经通过，再按 acceptance/<topic>_plan.md 逐条核对用户结果；"
-            "用户确认后产出 acceptance/<topic>_result.md，本阶段不修改验收条件"
+            "只有全部验收条件通过后才产出 acceptance/<topic>_result.md；任一条件未通过、无法验证或阻塞时不生成正式结果，"
+            "调查原因后返回对应阶段；只取消一个功能时退回 spec 并定向删除对应代码，"
+            "只有整个工作流不再继续时才执行 workflow abort"
         )
 
 

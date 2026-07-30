@@ -2,6 +2,7 @@ import os
 import re
 import shlex
 
+from . import acceptance_records as acceptance_records_mod
 from .state import load_state
 from .test_mapping import (
     automated_topics,
@@ -61,6 +62,19 @@ def _section(content: str, heading: str) -> str | None:
 def _acceptance_criterion_sections(content: str) -> list[tuple[str, str]]:
     """拆出“验收条件”章节中的每条 AC，供固定字段校验。"""
     criteria_content = _section(content, "4. 验收条件")
+    if criteria_content is None:
+        return []
+    matches = list(ACCEPTANCE_CRITERION_RE.finditer(criteria_content))
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(criteria_content)
+        sections.append((match.group(1), criteria_content[match.end() : end].strip()))
+    return sections
+
+
+def _acceptance_result_criterion_sections(content: str) -> list[tuple[str, str]]:
+    """拆出主题验收结果中的每条 AC，检查它们是否全部明确通过。"""
+    criteria_content = _section(content, "2. 验收条件结果")
     if criteria_content is None:
         return []
     matches = list(ACCEPTANCE_CRITERION_RE.finditer(criteria_content))
@@ -654,6 +668,134 @@ def _validate_topic_result_file(
     return True, ""
 
 
+def _validate_topic_acceptance_result(
+    project_root: str,
+    workflow_id: str,
+    topic: str,
+) -> tuple[bool, str]:
+    """校验正式主题验收结果只包含全部通过的当前验收条件。"""
+    rel_path = os.path.join("acceptance", f"{topic}_result.md")
+    ok, detail = _validate_topic_result_file(
+        project_root,
+        rel_path,
+        workflow_id,
+        "验收结果",
+    )
+    if not ok:
+        return False, detail
+
+    content = _read_text(project_root, rel_path)
+    if _field(content, "验收主题") != topic:
+        return False, f"{rel_path} 的验收主题必须是“{topic}”"
+    if not _has_real_text(_field(content, "验收完成时间")):
+        return False, f"{rel_path} 缺少具体验收完成时间"
+
+    for heading in ("1. 验收依据", "2. 验收条件结果", "3. 上下游文档"):
+        if not _has_real_text(_section(content, heading)):
+            return False, f"{rel_path} 缺少具体“{heading}”"
+
+    state = load_state(project_root)
+    if state is None or state.workflow_id != workflow_id:
+        return False, f"{rel_path} 找不到当前工作流状态"
+    stage_state = state.stages.get("topic_acceptance")
+    if stage_state is None:
+        return False, "缺少 topic_acceptance（主题验收阶段）状态"
+
+    plan_rel_path = os.path.join("acceptance", f"{topic}_plan.md")
+    if not os.path.isfile(os.path.join(project_root, plan_rel_path)):
+        return False, f"{plan_rel_path} 不存在"
+    plan_content = _read_text(project_root, plan_rel_path)
+    plan_ids = [
+        criterion_id
+        for criterion_id, _ in _acceptance_criterion_sections(plan_content)
+    ]
+    result_sections = _acceptance_result_criterion_sections(content)
+    result_ids = [criterion_id for criterion_id, _ in result_sections]
+    if not plan_ids:
+        return False, f"{plan_rel_path} 没有可验收的 AC-xx"
+    if result_ids != plan_ids:
+        return (
+            False,
+            f"{rel_path} 的验收条件必须与验收计划完全一致: 计划={plan_ids}, 结果={result_ids}",
+        )
+
+    try:
+        methods = acceptance_records_mod.criterion_methods(project_root, topic)
+    except ValueError as exc:
+        return False, str(exc)
+    records = stage_state.acceptance_records.get(topic, {})
+    valid_methods = acceptance_records_mod.ACCEPTANCE_METHODS
+    for criterion_id, criterion_content in result_sections:
+        record = records.get(criterion_id)
+        if record is None or not acceptance_records_mod.record_is_current(record, state):
+            return False, f"{rel_path} 的 {criterion_id} 缺少当前有效的程序验收记录"
+        method = _field(criterion_content, "验收方式")
+        if method not in valid_methods or method != methods.get(criterion_id):
+            return False, f"{rel_path} 的 {criterion_id} 验收方式不合法"
+        for label in ("验收条件", "自动化依据", "实际结果", "验收证据", "程序记录"):
+            if not _has_real_text(_field(criterion_content, label)):
+                return False, f"{rel_path} 的 {criterion_id} 缺少具体“{label}”"
+        if _field(criterion_content, "判定") != "通过":
+            return False, f"{rel_path} 的 {criterion_id} 必须明确写“判定：通过”"
+        if _field(criterion_content, "实际结果") != record.actual_result:
+            return False, f"{rel_path} 的 {criterion_id} 实际结果与程序记录不一致"
+        if _field(criterion_content, "验收证据") != record.evidence:
+            return False, f"{rel_path} 的 {criterion_id} 验收证据与程序记录不一致"
+        if _field(criterion_content, "程序记录") != record.record_id:
+            return False, f"{rel_path} 的 {criterion_id} 程序记录编号不一致"
+
+        manual_confirmation = _field(criterion_content, "人工确认")
+        if method == "自动化测试":
+            if manual_confirmation != "不适用":
+                return False, f"{rel_path} 的 {criterion_id} 是纯自动化验收，人工确认必须写“不适用”"
+            for label in ("用户实际回答", "确认时间"):
+                if _field(criterion_content, label) != "不适用":
+                    return False, f"{rel_path} 的 {criterion_id} 的“{label}”必须写“不适用”"
+            if not all(test_id in (_field(criterion_content, "自动化依据") or "") for test_id in record.test_ids):
+                return False, f"{rel_path} 的 {criterion_id} 缺少对应自动化测试项"
+        else:
+            if manual_confirmation != "通过":
+                return False, f"{rel_path} 的 {criterion_id} 需要人工验收，人工确认必须写“通过”"
+            for label in (
+                "验收对象",
+                "开始前条件",
+                "观察内容",
+                "预期结果",
+                "用户需要回答",
+                "用户实际回答",
+                "确认时间",
+            ):
+                if not _has_real_text(_field(criterion_content, label)):
+                    return False, f"{rel_path} 的 {criterion_id} 人工验收步骤缺少具体“{label}”"
+            if re.search(r"^\s*1\.\s+\S+", criterion_content, re.MULTILINE) is None:
+                return False, f"{rel_path} 的 {criterion_id} 人工验收步骤缺少具体操作"
+            if _field(criterion_content, "用户实际回答") != record.user_answer:
+                return False, f"{rel_path} 的 {criterion_id} 用户回答与程序记录不一致"
+            if _field(criterion_content, "确认时间") != record.confirmed_at:
+                return False, f"{rel_path} 的 {criterion_id} 确认时间与程序记录不一致"
+            automated_basis = _field(criterion_content, "自动化依据") or ""
+            if method == "人工验收" and automated_basis != "不适用":
+                return False, f"{rel_path} 的 {criterion_id} 是纯人工验收，自动化依据必须写“不适用”"
+            if method == "自动化测试 + 人工验收" and not all(
+                test_id in automated_basis for test_id in record.test_ids
+            ):
+                return False, f"{rel_path} 的 {criterion_id} 缺少混合验收使用的自动化测试项"
+
+    required_links = [
+        f"./{topic}_plan.md",
+        f"../impl/{topic}.md",
+        "../traceability.md",
+    ]
+    if any(method != "人工验收" for method in methods.values()):
+        required_links.append(f"../qa/{topic}_result.md")
+    elif "无自动化测试项" not in content:
+        return False, f"{rel_path} 是纯人工验收主题，必须明确写“无自动化测试项”"
+    for required_link in required_links:
+        if required_link not in content:
+            return False, f"{rel_path} 缺少上下游链接: {required_link}"
+    return True, ""
+
+
 def _test_result_sections(content: str) -> dict[str, str]:
     result_content = _section(content, "3. 测试项结果")
     if result_content is None:
@@ -763,18 +905,18 @@ def validate_test_execution_results(
     if stage_state is None:
         # 兼容旧的单元测试夹具和旧工作流快照；新的 test_execution 状态一旦存在，
         # 必须严格检查当前执行记录，不能再只看文档里的“通过”。
-        legacy_failures = []
+        compatibility_failures = []
         for topic in automated:
-            legacy_ok, legacy_detail = _validate_topic_result_file(
+            compatibility_ok, compatibility_detail = _validate_topic_result_file(
                 project_root,
                 os.path.join("qa", f"{topic}_result.md"),
                 workflow_id,
                 "测试结果",
             )
-            if not legacy_ok:
-                legacy_failures.append(legacy_detail)
-        if legacy_failures:
-            return False, "；".join(legacy_failures)
+            if not compatibility_ok:
+                compatibility_failures.append(compatibility_detail)
+        if compatibility_failures:
+            return False, "；".join(compatibility_failures)
         return True, f"兼容旧状态：主题测试结果都明确通过: {automated}"
     for topic in automated:
         topic_items = [item for item in automated_items if item.topic == topic]
@@ -805,11 +947,10 @@ def validate_topic_acceptance_results(
     """主题验收阶段只校验主题验收结果，测试前置由调用方先检查。"""
     failures = []
     for topic in topics:
-        acceptance_ok, acceptance_detail = _validate_topic_result_file(
+        acceptance_ok, acceptance_detail = _validate_topic_acceptance_result(
             project_root,
-            os.path.join("acceptance", f"{topic}_result.md"),
             workflow_id,
-            "验收结果",
+            topic,
         )
         if not acceptance_ok:
             failures.append(acceptance_detail)
