@@ -189,7 +189,7 @@ CODE_SUFFIXES = {
     ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
 }
 CONFIG_NAMES = {
-    "pyproject.toml", "package.json", "package-lock.json", "yarn.lock",
+    "pyproject.toml", "uv.lock", "package.json", "package-lock.json", "yarn.lock",
     "pnpm-lock.yaml", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
     "CMakeLists.txt", "CMakePresets.json", "Makefile", "justfile",
     "setup.py", "setup.cfg", "requirements.txt",
