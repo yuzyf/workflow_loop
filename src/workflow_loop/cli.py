@@ -2993,8 +2993,22 @@ def cmd_internal_install_project(args) -> None:
     sys.exit(code)
 
 
+# Windows 下 stdout/stderr 被脚本捕获时可能退回本地西文编码，统一改成 UTF-8。
+def _configure_utf8_output() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+
+
 # CLI 入口：解析参数、分发到对应 handler
 def main() -> None:
+    _configure_utf8_output()
     # 创建 argparse 解析器
     parser = argparse.ArgumentParser(
         description="workflow_loop 工作流管理 CLI",
