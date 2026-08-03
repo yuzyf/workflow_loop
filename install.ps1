@@ -1,4 +1,4 @@
-# workflow_loop 官方安装脚本（Windows PowerShell 5.1 / PowerShell 7）
+﻿# workflow_loop 官方安装脚本（Windows PowerShell 5.1 / PowerShell 7）
 # 职责：终端确认、无写入预检、固定版本 uv 下载校验、全局命令安装、用户 PATH 处理，
 # 以及通过一次性事务调用包内项目安装入口。项目文件写入全部由 Python 内部入口完成。
 # 本脚本不调用 Bash；ExecutionPolicy Bypass 只作用于本次进程，不修改用户或机器策略。
