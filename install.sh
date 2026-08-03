@@ -33,6 +33,7 @@ TMP_DIR=""
 INSTALLED_GLOBAL="no"
 SHELL_CONFIG_BACKUP=""
 SHELL_CONFIG_FILE=""
+SHELL_CONFIG_ORIGIN=""
 
 cleanup() {
     if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
@@ -54,9 +55,12 @@ rollback_global() {
         rm -rf "${UV_TOOL_DIR}/${PRODUCT_NAME}"
         rm -f "${UV_TOOL_BIN_DIR}/workflow"
     fi
-    if [ -n "${SHELL_CONFIG_BACKUP}" ] && [ -f "${SHELL_CONFIG_BACKUP}" ]; then
+    if [ "${SHELL_CONFIG_ORIGIN}" = "existing" ] && [ -f "${SHELL_CONFIG_BACKUP}" ]; then
         echo "恢复本次修改的终端配置 ${SHELL_CONFIG_FILE}..."
         cp "${SHELL_CONFIG_BACKUP}" "${SHELL_CONFIG_FILE}"
+    elif [ "${SHELL_CONFIG_ORIGIN}" = "missing" ]; then
+        echo "删除本次新建的终端配置 ${SHELL_CONFIG_FILE}..."
+        rm -f "${SHELL_CONFIG_FILE}"
     fi
 }
 
@@ -260,13 +264,28 @@ if [ "${GLOBAL_NEEDED}" = "yes" ]; then
     fi
     echo "全局命令已安装：${WORKFLOW_BIN}（${INSTALLED_IDENTITY}）"
 
-    # PATH 处理：先备份将修改的终端配置，失败可恢复
+    # PATH 处理：写入预检时已经确定的配置文件，不再让安装工具二次猜测 Shell。
     if [ "${PATH_CHANGE_NEEDED}" = "yes" ]; then
         if [ -f "${SHELL_CONFIG_FILE}" ]; then
             SHELL_CONFIG_BACKUP="${TMP_DIR}/shell_config.bak"
             cp "${SHELL_CONFIG_FILE}" "${SHELL_CONFIG_BACKUP}"
+            SHELL_CONFIG_ORIGIN="existing"
+        else
+            SHELL_CONFIG_ORIGIN="missing"
         fi
-        if ! "${UV_BIN}" tool update-shell; then
+
+        case "${SHELL_CONFIG_FILE}" in
+            */config.fish)
+                FISH_BIN_DIR="${UV_TOOL_BIN_DIR//\\/\\\\}"
+                FISH_BIN_DIR="${FISH_BIN_DIR//\'/\\\'}"
+                PATH_CONFIG_LINE="fish_add_path '${FISH_BIN_DIR}'"
+                ;;
+            *)
+                printf -v QUOTED_BIN_DIR '%q' "${UV_TOOL_BIN_DIR}"
+                PATH_CONFIG_LINE="export PATH=${QUOTED_BIN_DIR}:\"\$PATH\""
+                ;;
+        esac
+        if ! printf '\n# workflow-loop %s\n%s\n' "${PRODUCT_VERSION}" "${PATH_CONFIG_LINE}" >>"${SHELL_CONFIG_FILE}"; then
             rollback_global
             fail "PATH 更新失败。已回滚本次全局安装，项目保持未修改。"
         fi

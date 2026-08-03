@@ -109,29 +109,58 @@ jobs:
           UV_TOOL_DIR: ${{ runner.temp }}/workflow-loop-linux-tools
         run: |
           set -euo pipefail
+          run_installer() {
+            INSTALL_ANSWER="$1" python - <<'PY'
+          import os
+          import pty
+
+          answer = os.environ["INSTALL_ANSWER"].encode() + b"\n"
+          observed = bytearray()
+          sent = False
+
+          def read_installer_output(fd):
+              global sent
+              data = os.read(fd, 1024)
+              observed.extend(data)
+              if not sent and b"[y/N]" in observed:
+                  os.write(fd, answer)
+                  sent = True
+              if len(observed) > 64:
+                  del observed[:-64]
+              return data
+
+          status = pty.spawn(
+              ["bash", "install.sh"],
+              master_read=read_installer_output,
+              stdin_read=lambda _fd: b"",
+          )
+          raise SystemExit(os.waitstatus_to_exitcode(status))
+          PY
+          }
           proj="$(mktemp -d)"
           cp install.sh "$proj/"
           # 取消路径：输入 n，必须零写入
-          (cd "$proj" && printf 'n\n' | script -qec "bash install.sh" /dev/null)
+          (cd "$proj" && run_installer "$(printf 'n\n')")
           [ ! -d "$proj/.workflow_loop" ] || { echo "取消后仍产生写入"; exit 1; }
           # 确认路径：输入 y，必须得到完整骨架
-          (cd "$proj" && printf 'y\n' | script -qec "bash install.sh" /dev/null)
+          (cd "$proj" && run_installer "$(printf 'y\n')")
           [ -f "$proj/.workflow_loop/project.json" ] || { echo "安装后缺少项目标记"; exit 1; }
           [ -f "$proj/AGENTS.md" ] || { echo "安装后缺少 AGENTS.md"; exit 1; }
           identity="$("${UV_TOOL_BIN_DIR}/workflow" --version)"
           [ "$identity" = "workflow-loop ${PRODUCT_VERSION}" ] || { echo "身份核对失败：$identity"; exit 1; }
           export PATH="${UV_TOOL_BIN_DIR}:${PATH}"
           # 重复安装路径：两侧均已安装，零修改退出
-          (cd "$proj" && printf 'y\n' | script -qec "bash install.sh" /dev/null | grep -q "两侧均已安装")
+          repeat_output="$(cd "$proj" && run_installer "$(printf 'y\n')")"
+          printf '%s\n' "$repeat_output" | grep -q "两侧均已安装"
           # 只缺项目侧：复用全局命令，为新项目补骨架
           project_only="$(mktemp -d)"
           cp install.sh "$project_only/"
-          (cd "$project_only" && printf 'y\n' | script -qec "bash install.sh" /dev/null)
+          (cd "$project_only" && run_installer "$(printf 'y\n')")
           [ -f "$project_only/.workflow_loop/project.json" ] || { echo "只缺项目侧时没有补齐骨架"; exit 1; }
           # 只缺电脑侧：删除工具后重装，已存在项目内容不能变化
           cp "$proj/AGENTS.md" "${RUNNER_TEMP}/linux-AGENTS.before"
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
-          (cd "$proj" && printf 'y\n' | script -qec "bash install.sh" /dev/null)
+          (cd "$proj" && run_installer "$(printf 'y\n')")
           cmp "$proj/AGENTS.md" "${RUNNER_TEMP}/linux-AGENTS.before"
       - name: 安装脚本冒烟：确认、取消与安装（macOS）
         if: runner.os == 'macOS'
@@ -141,24 +170,53 @@ jobs:
           UV_TOOL_DIR: ${{ runner.temp }}/workflow-loop-macos-tools
         run: |
           set -euo pipefail
+          run_installer() {
+            INSTALL_ANSWER="$1" python - <<'PY'
+          import os
+          import pty
+
+          answer = os.environ["INSTALL_ANSWER"].encode() + b"\n"
+          observed = bytearray()
+          sent = False
+
+          def read_installer_output(fd):
+              global sent
+              data = os.read(fd, 1024)
+              observed.extend(data)
+              if not sent and b"[y/N]" in observed:
+                  os.write(fd, answer)
+                  sent = True
+              if len(observed) > 64:
+                  del observed[:-64]
+              return data
+
+          status = pty.spawn(
+              ["bash", "install.sh"],
+              master_read=read_installer_output,
+              stdin_read=lambda _fd: b"",
+          )
+          raise SystemExit(os.waitstatus_to_exitcode(status))
+          PY
+          }
           proj="$(mktemp -d)"
           cp install.sh "$proj/"
-          (cd "$proj" && printf 'n\n' | script -q /dev/null bash install.sh)
+          (cd "$proj" && run_installer "$(printf 'n\n')")
           [ ! -d "$proj/.workflow_loop" ] || { echo "取消后仍产生写入"; exit 1; }
-          (cd "$proj" && printf 'y\n' | script -q /dev/null bash install.sh)
+          (cd "$proj" && run_installer "$(printf 'y\n')")
           [ -f "$proj/.workflow_loop/project.json" ] || { echo "安装后缺少项目标记"; exit 1; }
           [ -f "$proj/AGENTS.md" ] || { echo "安装后缺少 AGENTS.md"; exit 1; }
           identity="$("${UV_TOOL_BIN_DIR}/workflow" --version)"
           [ "$identity" = "workflow-loop ${PRODUCT_VERSION}" ] || { echo "身份核对失败：$identity"; exit 1; }
           export PATH="${UV_TOOL_BIN_DIR}:${PATH}"
-          (cd "$proj" && printf 'y\n' | script -q /dev/null bash install.sh | grep -q "两侧均已安装")
+          repeat_output="$(cd "$proj" && run_installer "$(printf 'y\n')")"
+          printf '%s\n' "$repeat_output" | grep -q "两侧均已安装"
           project_only="$(mktemp -d)"
           cp install.sh "$project_only/"
-          (cd "$project_only" && printf 'y\n' | script -q /dev/null bash install.sh)
+          (cd "$project_only" && run_installer "$(printf 'y\n')")
           [ -f "$project_only/.workflow_loop/project.json" ] || { echo "只缺项目侧时没有补齐骨架"; exit 1; }
           cp "$proj/AGENTS.md" "${RUNNER_TEMP}/macos-AGENTS.before"
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
-          (cd "$proj" && printf 'y\n' | script -q /dev/null bash install.sh)
+          (cd "$proj" && run_installer "$(printf 'y\n')")
           cmp "$proj/AGENTS.md" "${RUNNER_TEMP}/macos-AGENTS.before"
       - name: 安装脚本冒烟：PowerShell 7（Windows）
         if: runner.os == 'Windows'
