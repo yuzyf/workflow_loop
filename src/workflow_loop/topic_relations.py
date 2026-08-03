@@ -6,6 +6,9 @@ from dataclasses import dataclass
 import os
 import re
 
+from . import artifact_paths as artifact_paths_mod
+from .project import load_project
+
 
 BASE_INDEX_HEADERS = ["展示顺序", "验收主题", "前置主题"]
 
@@ -108,14 +111,20 @@ def read_topic_index(
         plan_path = link_cells.get("验收计划")
         if plan_path is None:
             raise ValueError(f"{relative_path} 缺少验收计划链接列")
-        plan_match = re.fullmatch(r"(?:.*/)?([^/]+)_plan\.md", plan_path)
-        if plan_match is None:
-            raise ValueError(f"{relative_path} 验收计划链接必须指向主题的 *_plan.md 文件")
-        topic = plan_match.group(1)
-        displayed_topic = cells[1].strip()
-        if displayed_topic != topic:
+        # 验收主题以显示名称列为准；文件标识只用于核对链接路径，
+        # 不再从文件名反推业务名称（显示名称与文件标识分离）。
+        topic = cells[1].strip()
+        if not topic:
+            raise ValueError(f"{relative_path} 验收主题不能为空")
+        project = load_project(project_root)
+        expected_key = artifact_paths_mod.resolve_key_for(project, "topic", topic)
+        expected_plan_name = os.path.basename(
+            artifact_paths_mod.topic_acceptance_plan(expected_key)
+        )
+        if os.path.basename(plan_path) != expected_plan_name:
             raise ValueError(
-                f"{relative_path} 显示的验收主题“{displayed_topic}”与验收计划链接“{topic}”不一致"
+                f"{relative_path} 主题“{topic}”的验收计划链接应指向 {expected_plan_name}，"
+                f"实际是 {plan_path}"
             )
         relations.append(
             TopicRelation(
@@ -191,21 +200,3 @@ def relation_signature(
         (relation.order, relation.topic, relation.prerequisites)
         for relation in relations
     ]
-
-
-def expand_dependents(
-    relations: list[TopicRelation],
-    topics: list[str],
-) -> list[str]:
-    """把受影响主题扩展为它们的全部直接和间接后置主题。"""
-    affected = set(topics)
-    changed = True
-    while changed:
-        changed = False
-        for relation in relations:
-            if relation.topic in affected:
-                continue
-            if any(prerequisite in affected for prerequisite in relation.prerequisites):
-                affected.add(relation.topic)
-                changed = True
-    return [relation.topic for relation in relations if relation.topic in affected]

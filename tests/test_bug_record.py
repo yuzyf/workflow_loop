@@ -10,7 +10,7 @@ from workflow_loop.bug_record import (
 
 WORKFLOW_ID = "2026-07-24-1200-bugfix"
 TOPIC = "上传真实文件后成功完成处理"
-BUG_FILE = "2026-07-24_1200-上传失败.md"
+BUG_FILE = "缺陷_上传失败.md"
 
 
 def _write(path: Path, content: str) -> None:
@@ -34,7 +34,7 @@ def _setup(tmp_path: Path) -> str:
 """
     _write(tmp_path / "bug" / BUG_FILE, original)
     _write(
-        tmp_path / "bug" / "index.md",
+        tmp_path / "bug" / "索引.md",
         f"| 缺陷 | 状态 |\n|---|---|\n| [上传失败](./{BUG_FILE}) | 根因已确认 |\n",
     )
     _write(tmp_path / "impl" / "上传处理实施记录.md", "# 上传处理实施记录\n")
@@ -43,9 +43,9 @@ def _setup(tmp_path: Path) -> str:
 
 def test_topic_acceptance_keeps_bug_open_until_full_regression(tmp_path):
     """Workflow-Test
-    主题：修复缺陷经过主题验收和全量回归后关闭
-    测试项：TC-02 主题验收通过后保留待回归状态
-    验收条件：AC-02 主题验收通过后保留待回归状态
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-05 整体验收和缺陷关闭只接受用户决定
+    验收条件：AC-05 整体验收由用户决定
     测试方式：自动化测试
     测试层级：模块测试
     测试目标：主题验收通过后只追加结果链接并把缺陷标记为待全量回归
@@ -58,16 +58,16 @@ def test_topic_acceptance_keeps_bug_open_until_full_regression(tmp_path):
     after_topic = (tmp_path / "bug" / BUG_FILE).read_text(encoding="utf-8")
     assert after_topic.startswith(original)
     assert "主题验收通过，待全量回归" in after_topic
-    assert "../impl/上传处理实施记录.md" in after_topic
-    assert "../qa/上传真实文件后成功完成处理_result.md" in after_topic
-    assert "主题验收通过，待全量回归" in (tmp_path / "bug" / "index.md").read_text(encoding="utf-8")
+    assert f"../impl/{TOPIC}_实施记录.md" in after_topic
+    assert f"../qa/{TOPIC}_测试结果.md" in after_topic
+    assert "主题验收通过，待全量回归" in (tmp_path / "bug" / "索引.md").read_text(encoding="utf-8")
 
 
 def test_regression_failure_reopens_bug_without_rewriting_reproduction(tmp_path):
     """Workflow-Test
-    主题：修复缺陷经过主题验收和全量回归后关闭
-    测试项：TC-03 回归和整体验收共同决定缺陷关闭
-    验收条件：AC-03 只有最终整体验收通过后才能关闭缺陷
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-05 整体验收和缺陷关闭只接受用户决定
+    验收条件：AC-05 整体验收由用户决定
     测试方式：自动化测试
     测试层级：模块测试
     测试目标：最终全量回归失败后缺陷恢复为处理中，且不能被提前关闭
@@ -83,6 +83,16 @@ def test_regression_failure_reopens_bug_without_rewriting_reproduction(tmp_path)
 
 
 def test_regression_pass_waits_for_overall_acceptance(tmp_path):
+    """Workflow-Test
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-05 整体验收和缺陷关闭只接受用户决定
+    验收条件：AC-05 整体验收由用户决定
+    测试方式：自动化测试
+    测试层级：模块测试
+    测试目标：全量回归通过只进入待整体验收状态而不能自行关闭缺陷
+    测试入口：tests/test_bug_record.py::test_regression_pass_waits_for_overall_acceptance
+    代码入口：workflow_loop.bug_record.record_regression_pass
+    """
     original = _setup(tmp_path)
 
     record_regression_pass(str(tmp_path), WORKFLOW_ID, [TOPIC])
@@ -95,9 +105,9 @@ def test_regression_pass_waits_for_overall_acceptance(tmp_path):
 
 def test_overall_acceptance_closes_bug_and_preserves_reproduction(tmp_path):
     """Workflow-Test
-    主题：修复缺陷经过主题验收和全量回归后关闭
-    测试项：TC-03 回归和整体验收共同决定缺陷关闭
-    验收条件：AC-03 只有最终整体验收通过后才能关闭缺陷
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-05 整体验收和缺陷关闭只接受用户决定
+    验收条件：AC-05 整体验收由用户决定
     测试方式：自动化测试
     测试层级：模块测试
     测试目标：整体验收通过后缺陷才关闭，并且原复现事实和根因保持不变
@@ -117,6 +127,16 @@ def test_overall_acceptance_closes_bug_and_preserves_reproduction(tmp_path):
 
 
 def test_bug_status_update_is_idempotent(tmp_path):
+    """Workflow-Test
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-05 整体验收和缺陷关闭只接受用户决定
+    验收条件：AC-05 整体验收由用户决定
+    测试方式：自动化测试
+    测试层级：模块测试
+    测试目标：同一用户决定重复登记不会重复追加状态或结果链接
+    测试入口：tests/test_bug_record.py::test_bug_status_update_is_idempotent
+    代码入口：workflow_loop.bug_record.record_topic_acceptance_pass
+    """
     _setup(tmp_path)
 
     record_topic_acceptance_pass(str(tmp_path), WORKFLOW_ID, [TOPIC])

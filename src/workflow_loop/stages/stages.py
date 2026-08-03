@@ -1,4 +1,3 @@
-import glob
 import os
 import re
 
@@ -16,9 +15,14 @@ from ..artifact_validation import (
     validate_test_plan_documents,
     validate_test_execution_results,
     validate_topic_acceptance_results,
+    validate_topic_execution_results,
 )
+from .. import artifact_paths as artifact_paths_mod
 from ..spike_validation import validate_spike_stage
 from .. import test_execution as test_execution_mod
+from .. import test_runner as test_runner_mod
+from .. import test_entry as test_entry_mod
+from ..project import load_project
 from ..state import load_state
 from ..test_mapping import (
     automated_test_items,
@@ -28,55 +32,66 @@ from ..test_mapping import (
 from ..topic import (
     candidate_topics,
     current_workflow_topics,
-    list_acceptance_plan_topics,
-    missing_topic_files,
+    missing_topic_documents,
+    topic_paths,
 )
 from ..verification import (
     compute_code_snapshot_hash,
     compute_non_test_code_snapshot_hash,
     compute_test_code_snapshot_hash,
+    get_linked_product_design_paths,
 )
 from .. import rollback as rollback_mod
 from .base import StageStrategy, clean_spike_tmp
 
 
-# 产品设计 stage：工作流第一个环节，产出 spec/product.md + spec/feature_*.md
-# 把用户需求拆成产品说明书 + 功能路由，后续 stage 都基于这里定的功能
+# 产品设计 stage：工作流第一个环节，产出 spec/产品总说明.md + spec/功能_*.md
+# 把用户需求拆成产品说明书 + 功能清单，后续 stage 都基于这里定的功能
 class SpecStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "spec"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
     def artifact_paths(self) -> list[str]:
-        return ["spec/product.md"]
+        return [artifact_paths_mod.PRODUCT_OVERVIEW_DOC]
 
-    # 角色文档路径（相对 .workflow_loop/），spec 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/spec/spec.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/spec/spec.md"
 
     # 门禁的代码侧校验（第 2 道闸）
-    # 检查 spec/product.md 存在 + spec/ 下至少有一个 feature_*.md
+    # 检查产品总说明存在 + 当前链接的功能文档存在且属于本阶段修改
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 spec/product.md 的完整路径
-        product_md = os.path.join(project_root, "spec", "product.md")
-        # product.md 不存在 → 直接判失败
-        if not os.path.exists(product_md):
-            return (False, "spec/product.md 不存在")
-        # 用 glob 找 spec/ 下所有 feature_*.md 文件
-        func_files = glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
-        # 没有任何 feature_*.md → 判失败
-        if not func_files:
-            return (False, "spec/ 下没有 feature_*.md 文件")
+        overview_rel = artifact_paths_mod.PRODUCT_OVERVIEW_DOC
+        overview_path = os.path.join(project_root, overview_rel)
+        if not os.path.exists(overview_path):
+            return (False, f"{overview_rel} 不存在")
+        # 当前有效产品功能只以产品总说明仍然链接的功能文档为准
+        linked_paths = [
+            path
+            for path in get_linked_product_design_paths(project_root)
+            if path != overview_rel
+        ]
+        if not linked_paths:
+            return (False, f"{overview_rel} 没有链接任何 功能_*.md 功能文档")
+        missing_features = [
+            path
+            for path in linked_paths
+            if not os.path.isfile(os.path.join(project_root, path))
+        ]
+        if missing_features:
+            return (False, f"产品总说明链接的功能文档不存在: {missing_features}")
+        # 功能文档标题保留完整显示名称
+        for path in linked_paths:
+            with open(os.path.join(project_root, path), "r", encoding="utf-8") as stream:
+                first_line = stream.readline().strip()
+            if not first_line.startswith("# 【功能】") or len(first_line) <= len("# 【功能】"):
+                return (False, f"{path} 的一级标题必须是“# 【功能】<功能名称>”")
+
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
             self.name(),
@@ -88,145 +103,113 @@ class SpecStage(StageStrategy):
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
-        product_path = os.path.join("spec", "product.md")
-        product_changed = product_path in changed_paths
+        normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
+        product_changed = overview_rel in normalized_changed
         feature_changed = any(
-            path.startswith(os.path.join("spec", "feature_"))
-            for path in changed_paths
+            path.startswith("spec/功能_") for path in normalized_changed
         )
         if state.intent == "from_scratch" and (not product_changed or not feature_changed):
-            return (False, "从零创建产品时，product.md 和至少一份功能文档都必须在本阶段新建")
-        if state.intent == "product_change" and (not product_changed or not feature_changed):
+            return (False, "从零创建产品时，产品总说明和至少一份功能文档都必须在本阶段新建")
+        if state.intent == "product_change" and not product_changed:
             return (
                 False,
-                "修改产品时，product.md 必须更新，并且至少一份功能文档必须新增、修改或删除",
+                "修改产品时，产品总说明必须更新并记录本轮变化",
             )
         return (
             True,
-            f"产品设计文档存在并且属于本阶段修改: product.md + {[os.path.basename(f) for f in func_files]}",
+            f"产品设计文档存在并且属于本阶段修改: 产品总说明 + {[os.path.basename(p) for p in linked_paths]}",
         )
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
-        feature_paths = [
-            os.path.relpath(path, project_root)
-            for path in glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
-        ]
-        return [os.path.join("spec", "product.md"), *feature_paths]
+        return get_linked_product_design_paths(project_root)
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "产品设计阶段：产出 spec/product.md（产品设计说明书 + 功能路由）+ spec/feature_*.md（功能拆分）"
+        return (
+            "产品设计阶段：产出 spec/产品总说明.md（产品设计说明书 + 功能清单）"
+            "和 spec/功能_<功能文件标识>.md（功能拆分）；文档标题写完整功能名称"
+        )
 
 
 # 初步代码架构 stage：从已确认产品设计推导代码设计
-# 产出 spec/architecture_code_design.md，后续 spike、验收计划和实施阶段基于这个设计
 class CodeDesignStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "code_design"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
     def artifact_paths(self) -> list[str]:
-        return ["spec/architecture_code_design.md"]
+        return [artifact_paths_mod.CODE_DESIGN_DOC]
 
-    # 角色文档路径（相对 .workflow_loop/），code_design 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/code_design/code_design.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/code_design/code_design.md"
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "初步代码架构阶段：从已确认产品设计推导代码分层、关键节点和功能代码过程，产出 spec/architecture_code_design.md"
+        return (
+            "初步代码架构阶段：从已确认产品设计推导代码分层、关键节点和功能代码过程，"
+            f"产出 {artifact_paths_mod.CODE_DESIGN_DOC}"
+        )
 
 
 # 穿刺 stage：识别并验证真实场景中的技术不确定性
-# 正常执行时写清单和结论文档；需要临时代码时放入 spike_tmp，推进时自动清理
 class SpikeStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "spike"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # 清单是正常穿刺的固定入口；选择全部跳过时由 gate spike --skip 绕过
     def artifact_paths(self) -> list[str]:
-        return ["spec/spike_index.md"]
+        return [artifact_paths_mod.SPIKE_INDEX_DOC]
 
-    # 角色文档路径（相对 .workflow_loop/），spike 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/spike/spike.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/spike/spike.md"
 
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查清单、每份结论文档、固定字段、阻塞状态和设计文档哈希
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         return validate_spike_stage(project_root)
 
-    # stage 推进时的钩子（gate --confirmed 通过后、推进到下一 stage 前调用）
-    # spike stage 重写：删除 .workflow_loop/spike_tmp/ 下所有临时内容
     def on_advance(self, project_root: str) -> list[str]:
         return clean_spike_tmp(project_root)
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
         return (
             "穿刺阶段：先查产品设计、代码设计、相关代码和运行事实，识别真实场景中的技术不确定性；"
-            "用户决定执行清单或全部跳过。正常执行时写 spec/spike_index.md 和每项结论文档，"
+            f"用户决定执行清单或全部跳过。正常执行时写 {artifact_paths_mod.SPIKE_INDEX_DOC} 和每项结论文档，"
             "需要临时代码时放入 .workflow_loop/spike_tmp/，并在进入验收计划前同步受影响的设计文档。"
         )
 
 
 # 验收计划 stage：制定什么算完成的验收计划
-# 产出 traceability.md + acceptance/<topic>_plan.md
 class AcceptancePlanStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "acceptance_plan"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # traceability.md 是跨阶段追踪入口；acceptance/ 下保存每个主题的验收计划
     def artifact_paths(self) -> list[str]:
-        return ["traceability.md", "acceptance/index.md", "acceptance/"]
+        return [
+            artifact_paths_mod.TRACEABILITY_DOC,
+            artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
+            "acceptance/",
+        ]
 
-    # 角色文档路径（相对 .workflow_loop/），acceptance_plan 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/acceptance/acceptance_plan.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/acceptance/acceptance_plan.md"
 
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 acceptance/ 目录存在 + 本次至少新增一个未使用过的主题计划
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 acceptance/ 目录的完整路径
         acc_dir = os.path.join(project_root, "acceptance")
-        # acceptance/ 目录不存在 → 直接判失败
         if not os.path.exists(acc_dir):
             return (False, "acceptance/ 目录不存在")
-        # 列出 acceptance/ 下所有 *_plan.md 文件
-        plan_files = [f for f in os.listdir(acc_dir) if f.endswith("_plan.md")]
-        # 没有任何 *_plan.md → 判失败
-        if not plan_files:
-            return (False, "acceptance/ 下没有 *_plan.md 文件")
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
@@ -235,18 +218,12 @@ class AcceptancePlanStage(StageStrategy):
             topics = current_workflow_topics(project_root)
             if not topics:
                 return (False, "修 bug 的验收主题必须先在缺陷复现阶段确定")
-            plan_topics = list_acceptance_plan_topics(project_root)
-            if sorted(plan_topics) != sorted(topics):
-                return (
-                    False,
-                    f"修 bug 的验收计划主题必须与缺陷记录一致；缺陷主题 {topics}，计划主题 {plan_topics}",
-                )
         else:
             # 当前 Run 已记录主题时复核这些主题；否则从历史中排除旧主题，找本次新增主题。
-            topics = candidate_topics(project_root)
+            topics = current_workflow_topics(project_root) or candidate_topics(project_root)
         if not topics:
             return (False, "没有找到本次新增的验收主题；主题名称不能复用项目历史中的名称")
-        missing = missing_topic_files(project_root, "acceptance", "_plan.md", topics)
+        missing = missing_topic_documents(project_root, "acceptance_plan", topics)
         if missing:
             return (False, f"缺少验收计划文档: {missing}")
         return validate_acceptance_plan_documents(
@@ -255,70 +232,46 @@ class AcceptancePlanStage(StageStrategy):
             topics,
         )
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
         return (
             "验收计划阶段：从零开发和修改产品先确定本次需求的全部验收主题；"
             "修 bug 复用缺陷复现阶段已经确认的主题。为每个主题写清什么算完成，"
-            "确认主题关系，产出 traceability.md + acceptance/index.md + acceptance/<topic>_plan.md。"
+            f"确认主题关系，产出 {artifact_paths_mod.TRACEABILITY_DOC}、"
+            f"{artifact_paths_mod.ACCEPTANCE_INDEX_DOC} 和 acceptance/<主题文件标识>_验收计划.md。"
         )
 
 
-# 测试计划 stage：把验收条件转换为可执行测试范围
-# 产出 qa/<topic>_plan.md + 更新 qa/index.md，后续 test stage 按这个执行
+# 测试计划 stage：对验收条件做测试覆盖审查，登记项目全量入口
 class TestPlanStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "test_plan"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
     def artifact_paths(self) -> list[str]:
-        return ["qa/index.md"]
+        return [artifact_paths_mod.QA_INDEX_DOC]
 
-    # 角色文档路径（相对 .workflow_loop/），test_plan 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/qa/test_plan.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/qa/test_plan.md"
 
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 qa/ 目录存在 + 每个已确认主题都有同名测试计划
+    # 门禁的代码侧校验（第 2 道闸）：结构、环境和入口检查，不执行任何测试
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 qa/ 目录的完整路径
         qa_dir = os.path.join(project_root, "qa")
-        # qa/ 目录不存在 → 直接判失败
         if not os.path.exists(qa_dir):
             return (False, "qa/ 目录不存在")
-        index_md = os.path.join(qa_dir, "index.md")
+        index_md = os.path.join(project_root, artifact_paths_mod.QA_INDEX_DOC)
         if not os.path.isfile(index_md):
-            return (False, "qa/index.md 不存在")
-        # 列出 qa/ 下所有 *_plan.md 文件
-        plan_files = [f for f in os.listdir(qa_dir) if f.endswith("_plan.md")]
-        # 没有任何 *_plan.md → 判失败
-        if not plan_files:
-            return (False, "qa/ 下没有 *_plan.md 文件")
+            return (False, f"{artifact_paths_mod.QA_INDEX_DOC} 不存在")
         topics = current_workflow_topics(project_root)
         if not topics:
             return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan")
-        missing = missing_topic_files(project_root, "qa", "_plan.md", topics)
+        missing = missing_topic_documents(project_root, "test_plan", topics)
         if missing:
             return (False, f"缺少测试计划文档: {missing}")
-        with open(index_md, "r", encoding="utf-8") as f:
-            index_content = f.read()
-        missing_index_links = [
-            f"{topic}_plan.md"
-            for topic in topics
-            if f"{topic}_plan.md" not in index_content
-        ]
-        if missing_index_links:
-            return (False, f"qa/index.md 缺少主题测试计划链接: {missing_index_links}")
         state = load_state(project_root)
         if state is None:
             return (False, "找不到当前工作流状态")
@@ -329,37 +282,67 @@ class TestPlanStage(StageStrategy):
         )
         if not trace_ok:
             return (False, trace_detail)
-        return validate_test_plan_documents(
+        plan_ok, plan_detail = validate_test_plan_documents(
             project_root,
             state.workflow_id,
             topics,
         )
+        if not plan_ok:
+            return (False, plan_detail)
+        # 当前操作系统必须有可用的项目全量入口参数数组；只检查配置，不执行入口
+        argv, entry_detail = test_runner_mod.resolve_regression_entry(project_root)
+        if argv is None:
+            return (False, f"项目全量测试入口未就绪：{entry_detail}")
+        # 声明的入口脚本必须真实存在
+        for part in argv:
+            if ("/" in part or "\\" in part) and not part.startswith("-"):
+                script_path = os.path.join(project_root, part)
+                if not os.path.isfile(script_path):
+                    return (False, f"项目全量测试入口脚本不存在: {part}")
+        project = load_project(project_root)
+        configured_scripts = test_entry_mod.referenced_project_scripts(
+            project.test_entry if project is not None and isinstance(project.test_entry, dict) else {}
+        )
+        if configured_scripts:
+            start_manifest = rollback_mod.read_start_baseline(
+                project_root,
+                state.workflow_id,
+            )
+            entries = start_manifest.get("entries", {}) if isinstance(start_manifest, dict) else {}
+            missing_backups = [
+                script for script in configured_scripts if script not in entries
+            ]
+            if missing_backups:
+                return (
+                    False,
+                    "项目全量测试入口脚本没有在修改前登记回退依据: "
+                    f"{missing_backups}",
+                )
+        return (True, f"{plan_detail}；当前平台全量入口: {argv}（本阶段不执行）")
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "测试计划阶段：把验收条件转换为可执行测试范围，产出 qa/<topic>_plan.md + 更新 qa/index.md"
+        return (
+            "测试计划阶段：对已确认验收条件做测试覆盖审查，"
+            "调查项目真实测试工具链并用 workflow test entry 登记按操作系统的全量入口参数数组；"
+            f"产出 qa/<主题文件标识>_测试计划.md + {artifact_paths_mod.QA_INDEX_DOC}；"
+            "本阶段不执行修改前全量测试"
+        )
 
 
 # 实施 stage：按验收主题承接实施前计划和真实代码实施。
 class ImplStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "impl"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # 目录下的每个主题文档由 code_validate 继续检查
     def artifact_paths(self) -> list[str]:
-        return ["impl/index.md"]
+        return [artifact_paths_mod.IMPL_INDEX_DOC]
 
-    # 角色文档路径（相对 .workflow_loop/），impl 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/impl/impl.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/impl/impl.md"
 
@@ -381,31 +364,31 @@ class ImplStage(StageStrategy):
             project_root,
             workflow_state.workflow_id,
             topics,
-            os.path.join("qa", "index.md"),
+            artifact_paths_mod.QA_INDEX_DOC,
             ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
             {
-                "验收计划": "../acceptance/{topic}_plan.md",
-                "测试计划": "./{topic}_plan.md",
-                "测试结果": "./{topic}_result.md",
+                "验收计划": "../acceptance/{key}_验收计划.md",
+                "测试计划": "./{key}_测试计划.md",
+                "测试结果": "./{key}_测试结果.md",
             },
+            {"测试结果": {"无自动化测试项"}},
         )
         if not qa_ok:
             return (False, qa_detail, topics)
 
-        impl_dir = os.path.join(project_root, "impl")
-        index_path = os.path.join(impl_dir, "index.md")
+        index_path = os.path.join(project_root, artifact_paths_mod.IMPL_INDEX_DOC)
         if not os.path.isfile(index_path):
-            return (False, "impl/index.md 不存在", topics)
+            return (False, f"{artifact_paths_mod.IMPL_INDEX_DOC} 不存在", topics)
         index_ok, index_detail = validate_inherited_topic_index(
             project_root,
             workflow_state.workflow_id,
             topics,
-            os.path.join("impl", "index.md"),
+            artifact_paths_mod.IMPL_INDEX_DOC,
             ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "实施文档"],
             {
-                "验收计划": "../acceptance/{topic}_plan.md",
-                "测试计划": "../qa/{topic}_plan.md",
-                "实施文档": "./{topic}.md",
+                "验收计划": "../acceptance/{key}_验收计划.md",
+                "测试计划": "../qa/{key}_测试计划.md",
+                "实施文档": "./{key}_实施记录.md",
             },
         )
         if not index_ok:
@@ -413,37 +396,40 @@ class ImplStage(StageStrategy):
 
         missing_topics = []
         for topic in topics:
-            topic_path = os.path.join(impl_dir, f"{topic}.md")
+            topic_rel = topic_paths(project_root, topic)["impl_doc"]
+            topic_path = os.path.join(project_root, topic_rel)
             if not os.path.isfile(topic_path):
-                missing_topics.append(f"impl/{topic}.md")
+                missing_topics.append(topic_rel)
                 continue
             with open(topic_path, "r", encoding="utf-8") as stream:
                 topic_content = stream.read()
             if f"- 工作流编号：{workflow_state.workflow_id}" not in topic_content:
-                return (False, f"impl/{topic}.md 的工作流编号与当前工作流不一致", topics)
+                return (False, f"{topic_rel} 的工作流编号与当前工作流不一致", topics)
+            if f"- 验收主题：{topic}" not in topic_content:
+                return (False, f"{topic_rel} 的验收主题显示名称必须是“{topic}”", topics)
             if "## 1. 实施依据" not in topic_content:
-                return (False, f"impl/{topic}.md 缺少“实施依据”", topics)
+                return (False, f"{topic_rel} 缺少“实施依据”", topics)
             if "## 2. 实施前计划" not in topic_content:
-                return (False, f"impl/{topic}.md 缺少“实施前计划”", topics)
+                return (False, f"{topic_rel} 缺少“实施前计划”", topics)
             if "## 4. 计划与实际的差异" in topic_content:
-                return (False, f"impl/{topic}.md 不得包含“计划与实际的差异”章节", topics)
+                return (False, f"{topic_rel} 不得包含“计划与实际的差异”章节", topics)
             if "## 4. 上下游文档" not in topic_content:
-                return (False, f"impl/{topic}.md 缺少“上下游文档”", topics)
+                return (False, f"{topic_rel} 缺少“上下游文档”", topics)
             unresolved = self._subsection_text(topic_content, "2.4 未决问题")
             if unresolved is None:
-                return (False, f"impl/{topic}.md 缺少“2.4 未决问题”", topics)
+                return (False, f"{topic_rel} 缺少“2.4 未决问题”", topics)
             if self._has_unresolved_content(unresolved):
-                return (False, f"impl/{topic}.md 仍有未决问题，不能进入代码实施", topics)
+                return (False, f"{topic_rel} 仍有未决问题，不能进入代码实施", topics)
             if require_execution_record:
                 if "## 3. 实施后记录" not in topic_content:
-                    return (False, f"impl/{topic}.md 缺少“实施后记录”", topics)
-                if "## 3.3 未完成内容" not in topic_content:
-                    return (False, f"impl/{topic}.md 缺少“3.3 未完成内容”", topics)
+                    return (False, f"{topic_rel} 缺少“实施后记录”", topics)
+                if "### 3.3 未完成内容" not in topic_content and "## 3.3 未完成内容" not in topic_content:
+                    return (False, f"{topic_rel} 缺少“3.3 未完成内容”", topics)
                 unfinished = self._subsection_text(topic_content, "3.3 未完成内容")
                 if unfinished is None or self._has_unresolved_content(unfinished):
-                    return (False, f"impl/{topic}.md 仍有未完成内容，不能通过实施门禁", topics)
+                    return (False, f"{topic_rel} 仍有未完成内容，不能通过实施门禁", topics)
             if "测试结果：通过" in topic_content or "测试结果：失败" in topic_content:
-                return (False, f"impl/{topic}.md 不能提前填写正式测试结果", topics)
+                return (False, f"{topic_rel} 不能提前填写正式测试结果", topics)
 
         if missing_topics:
             return (False, f"缺少主题实施文档: {missing_topics}", topics)
@@ -486,7 +472,7 @@ class ImplStage(StageStrategy):
         return (True, "实施文档和需求交付追踪关系完整", topics)
 
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
-        # 第一道门确认的是全部实施前计划；此时不允许代码快照先发生变化。
+        # 第一道门确认的是全部实施前计划。
         valid, detail, _ = self._validate_topic_documents(
             project_root,
             workflow_state,
@@ -499,12 +485,38 @@ class ImplStage(StageStrategy):
         if stage_state is None or stage_state.code_baseline_hash is None:
             return (False, "缺少进入 impl 时的代码基线，不能确认计划前没有修改代码")
         current_hash = compute_non_test_code_snapshot_hash(project_root)
-        if current_hash != stage_state.code_baseline_hash:
-            return (False, "实施计划确认前代码已经变化，不能通过 impl 的第一道门")
-        return (True, "全部验收主题的实施前计划已就绪，代码尚未修改")
+        if current_hash == stage_state.code_baseline_hash:
+            return (True, "全部验收主题的实施前计划已就绪，代码尚未修改")
+        # 实施中重新确认计划：已经保存首次原内容且全部实际变化都在计划内时，
+        # 允许在代码已变化的情况下重新通过讨论门（不覆盖首次副本）。
+        prepared_ok, prepared_detail, manifest = rollback_mod.validate_prepared(
+            project_root,
+            workflow_state,
+            require_current_plan=False,
+        )
+        if prepared_ok and manifest is not None:
+            try:
+                changed = rollback_mod.changed_paths_since_prepare(project_root, manifest)
+            except ValueError as exc:
+                return (False, str(exc))
+            planned = set()
+            try:
+                planned = set(rollback_mod.planned_code_paths(project_root, workflow_state.topics))
+            except ValueError as exc:
+                return (False, str(exc))
+            unexpected = sorted(set(changed) - planned - set(manifest.get("entries", {})))
+            if unexpected:
+                return (
+                    False,
+                    f"实施计划确认前存在计划外的代码变化，不能通过 impl 的第一道门: {unexpected}",
+                )
+            return (
+                True,
+                "实施计划重新确认：首次原内容已保存，当前变化均在计划内",
+            )
+        return (False, "实施计划确认前代码已经变化，不能通过 impl 的第一道门")
 
     # 门禁的代码侧校验（第 2 道闸）
-    # 检查每个主题的实施记录，并确认计划确认后确实修改了代码。
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
@@ -561,188 +573,10 @@ class ImplStage(StageStrategy):
             f"{len(topics)} 个验收主题的实施计划和实施记录完整；{changes_detail}",
         )
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
         return (
             "实施阶段：依据全部验收主题的验收计划和测试计划，先写完实施前计划；"
-            "用户确认后再修改真实代码，并在同一份 impl/<主题>.md 中追加实施后记录"
-        )
-
-
-# 旧测试阶段实现只保留给旧状态迁移参考；正式路径使用 TestExecutionStage。
-class _LegacyTestStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
-    def name(self) -> str:
-        return "test"
-
-    # 期望产出的文件路径列表（相对项目根）
-    # 这里只列 qa/ 目录，code_validate 会查 *_result.md
-    def artifact_paths(self) -> list[str]:
-        return ["qa/"]
-
-    # 角色文档路径（相对 .workflow_loop/），test 无角色文档返回 None
-    def role_doc_path(self) -> str | None:
-        return None
-
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/qa/test.md"
-
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/qa/test.md"
-
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 qa/ 目录存在 + 至少有一个 *_result.md 测试结果文件
-    def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 qa/ 目录的完整路径
-        qa_dir = os.path.join(project_root, "qa")
-        # qa/ 目录不存在 → 直接判失败
-        if not os.path.exists(qa_dir):
-            return (False, "qa/ 目录不存在")
-        # 最终全量回归有独立文件，不得冒充主题测试结果。
-        result_files = [
-            f for f in os.listdir(qa_dir)
-            if f.endswith("_result.md")
-        ]
-        # 没有任何 *_result.md → 判失败
-        if not result_files:
-            return (False, "qa/ 下没有 *_result.md 文件")
-        topics = current_workflow_topics(project_root)
-        if topics:
-            missing = missing_topic_files(project_root, "qa", "_result.md", topics)
-            if missing:
-                return (False, f"缺少主题测试结果: {missing}")
-        return (True, f"主题测试结果存在: {result_files}")
-
-    # 该 stage 的指令文本，打印给 AI 看
-    def instruction(self) -> str:
-        return "测试执行阶段：按照 qa/<topic>_plan.md 执行全部必要测试并记录证据，产出 qa/<topic>_result.md"
-
-
-# 旧验收阶段实现只保留给旧状态迁移参考；正式路径使用 TopicAcceptanceStage。
-class _DeprecatedAcceptanceStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
-    def name(self) -> str:
-        return "acceptance"
-
-    # 期望产出的文件路径列表（相对项目根）
-    # 这里只列 acceptance/ 目录，code_validate 会查 *_result.md
-    def artifact_paths(self) -> list[str]:
-        return ["acceptance/"]
-
-    # 角色文档路径（相对 .workflow_loop/），acceptance 无角色文档返回 None
-    def role_doc_path(self) -> str | None:
-        return None
-
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def prompt_doc_path(self) -> str | None:
-        return "Template_Repository/acceptance/acceptance_result.md"
-
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
-    def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/acceptance/acceptance.md"
-
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 acceptance/ 目录存在 + 至少有一个 *_result.md 验收结果文件
-    def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 acceptance/ 目录的完整路径
-        acc_dir = os.path.join(project_root, "acceptance")
-        # acceptance/ 目录不存在 → 直接判失败
-        if not os.path.exists(acc_dir):
-            return (False, "acceptance/ 目录不存在")
-        result_files = [
-            f for f in os.listdir(acc_dir)
-            if f.endswith("_result.md")
-        ]
-        # 没有任何 *_result.md → 判失败
-        if not result_files:
-            return (False, "acceptance/ 下没有 *_result.md 文件")
-        topics = current_workflow_topics(project_root)
-        if topics:
-            missing = missing_topic_files(project_root, "acceptance", "_result.md", topics)
-            if missing:
-                return (False, f"缺少主题验收结果: {missing}")
-        return (True, f"主题验收结果存在: {result_files}")
-
-    # 该 stage 的指令文本，打印给 AI 看
-    def instruction(self) -> str:
-        return "主题验收阶段：每个主题测试通过后，按照 acceptance/<topic>_plan.md 执行该主题验收，产出 acceptance/<topic>_result.md"
-
-
-class _DeprecatedTopicExecutionStage(StageStrategy):
-    """旧状态兼容实现；不加入任何正式阶段路径。"""
-
-    def name(self) -> str:
-        return "topic_execution"
-
-    def artifact_paths(self) -> list[str]:
-        return ["impl/", "qa/", "acceptance/"]
-
-    def role_doc_path(self) -> str | None:
-        return None
-
-    def prompt_doc_path(self) -> str | None:
-        return None
-
-    def standard_doc_path(self) -> str | None:
-        return None
-
-    def additional_doc_paths(self) -> list[tuple[str, str]]:
-        return [
-            (
-                "Template_Repository/acceptance/acceptance_result.md",
-                "Standardized_Repository/acceptance/acceptance.md",
-            ),
-        ]
-
-    def code_validate(self, project_root: str) -> tuple[bool, str]:
-        topics = current_workflow_topics(project_root)
-        if not topics:
-            return (False, "当前工作流还没有确认验收主题")
-
-        impl_dir = os.path.join(project_root, "impl")
-        if not os.path.isdir(impl_dir):
-            return (False, "impl/ 目录不存在")
-        missing_impl = missing_topic_files(project_root, "impl", ".md", topics)
-        if missing_impl:
-            return (False, f"缺少主题实施文档: {missing_impl}")
-
-        missing_tests = missing_topic_files(project_root, "qa", "_result.md", topics)
-        missing_acceptance = missing_topic_files(
-            project_root,
-            "acceptance",
-            "_result.md",
-            topics,
-        )
-        if missing_tests or missing_acceptance:
-            return (
-                False,
-                f"主题执行结果不完整: 测试缺失={missing_tests}, 验收缺失={missing_acceptance}",
-            )
-        state = load_state(project_root)
-        if state is None:
-            return (False, "找不到当前工作流状态")
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not trace_ok:
-            return (False, trace_detail)
-        result_ok, result_detail = validate_topic_execution_results(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not result_ok:
-            return (False, result_detail)
-        return (True, f"全部主题已经分别完成实施、测试和验收: {topics}")
-
-    def instruction(self) -> str:
-        return (
-            "按主题执行阶段：实施代码已经完成后，按主题执行正式测试和主题验收；"
-            "独立主题可以分别推进，全部主题完成后才能通过本阶段"
+            "用户确认后再修改真实代码，并在同一份 impl/<主题文件标识>_实施记录.md 中追加实施后记录"
         )
 
 
@@ -772,7 +606,8 @@ def _test_code_paths(project_root: str) -> list[str]:
     return sorted(paths)
 
 
-# 测试代码编写阶段：调查真实代码并写测试代码；只做静态检查，不运行测试命令。
+# 测试代码编写阶段：调查真实代码并写测试代码。
+# 可以运行与当前修改直接相关的局部测试作为开发反馈，但不产出正式测试结果。
 class TestCodeStage(StageStrategy):
     def name(self) -> str:
         return "test_code"
@@ -861,8 +696,8 @@ class TestCodeStage(StageStrategy):
     def instruction(self) -> str:
         return (
             "测试代码阶段：先读取验收计划、测试计划、实施记录和真实代码，和用户确认每个测试项的代码落点；"
-            "再编写带 Workflow-Test 标识的测试代码。只允许静态检查、语法检查、类型检查和 lint，"
-            "不运行任何测试命令，不写 qa/<topic>_result.md，也不写主题验收结果"
+            "再编写带 Workflow-Test 标识的测试代码。可以运行与当前编写内容直接相关的单个测试作为开发反馈，"
+            "但不生成正式机器记录、不写主题测试结果，也不写主题验收结果；正式执行只发生在 test_execution 阶段"
         )
 
 
@@ -902,7 +737,7 @@ class TestExecutionStage(StageStrategy):
             test_topics = automated_topics(project_root, topics)
         except ValueError as exc:
             return (False, str(exc))
-        missing = missing_topic_files(project_root, "qa", "_result.md", test_topics)
+        missing = missing_topic_documents(project_root, "test_result", test_topics)
         if missing:
             return (False, f"缺少主题测试结果: {missing}；先执行测试并记录正式结果")
         trace_ok, trace_detail = validate_downstream_traceability(
@@ -916,9 +751,9 @@ class TestExecutionStage(StageStrategy):
 
     def instruction(self) -> str:
         return (
-            "测试执行阶段：先和用户逐项确认测试入口、前置测试项、真实命令、运行环境和超时时间；"
+            "测试执行阶段：先和用户逐项确认测试入口、前置测试项、真实命令、工作目录、运行环境和超时时间；"
             "确认后用 workflow test prepare 登记，再用 workflow test run 执行。"
-            "执行失败不生成正式 qa/<topic>_result.md，先定位问题并按规则返回对应阶段。"
+            "执行失败不生成正式主题测试结果，先定位问题并按规则返回对应阶段。"
         )
 
 
@@ -953,7 +788,7 @@ class TopicAcceptanceStage(StageStrategy):
         )
         if not test_ok:
             return (False, f"主题测试未全部通过，不能开始主题验收: {test_detail}")
-        missing = missing_topic_files(project_root, "acceptance", "_result.md", topics)
+        missing = missing_topic_documents(project_root, "acceptance_result", topics)
         if missing:
             return (False, f"缺少主题验收结果: {missing}")
         trace_ok, trace_detail = validate_downstream_traceability(
@@ -967,10 +802,10 @@ class TopicAcceptanceStage(StageStrategy):
 
     def instruction(self) -> str:
         return (
-            "主题验收阶段：先确认对应主题的测试结果已经通过，再按 acceptance/<topic>_plan.md 逐条核对用户结果；"
-            "只有全部验收条件通过后才产出 acceptance/<topic>_result.md；任一条件未通过、无法验证或阻塞时不生成正式结果，"
-            "调查原因后返回对应阶段；只取消一个功能时退回 spec 并定向删除对应代码，"
-            "只有整个工作流不再继续时才执行 workflow abort"
+            "主题验收阶段：先确认对应主题的测试结果已经通过，再按主题验收计划逐条核对用户结果；"
+            "只有全部验收条件通过后才产出 acceptance/<主题文件标识>_验收结果.md；"
+            "任一条件未通过、无法验证或阻塞时不生成正式结果，调查原因后返回对应阶段；"
+            "只取消一个功能时退回 spec 并定向删除对应代码，只有整个工作流不再继续时才执行 workflow abort"
         )
 
 
@@ -997,6 +832,21 @@ class RegressionTestStage(StageStrategy):
     def standard_doc_path(self) -> str | None:
         return None
 
+    def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
+        """第一道门只确认全部主题通过、当前系统入口和运行条件，不执行回归。"""
+        topics = current_workflow_topics(project_root)
+        acceptance_ok, acceptance_detail = validate_topic_acceptance_results(
+            project_root,
+            workflow_state.workflow_id,
+            topics,
+        )
+        if not acceptance_ok:
+            return (False, f"主题验收尚未全部通过，不能进入最终全量回归: {acceptance_detail}")
+        argv, entry_detail = test_runner_mod.resolve_regression_entry(project_root)
+        if argv is None:
+            return (False, f"项目全量测试入口未就绪：{entry_detail}")
+        return (True, f"全部主题已通过，当前平台全量入口就绪: {argv}")
+
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
@@ -1013,8 +863,8 @@ class RegressionTestStage(StageStrategy):
 
     def instruction(self) -> str:
         return (
-            "最终全量回归阶段：全部主题完成后，程序自动执行项目配置的统一测试入口；"
-            "退出码为 0 才算回归通过，状态写入 state.json、journal 和 traceability.md。"
+            "最终全量回归阶段：全部主题完成后，程序在最新完整代码上执行一次项目配置的统一测试入口；"
+            "退出码为 0 才算回归通过，完整机器事实写入 state.json、journal 和需求交付追踪表。"
         )
 
 
@@ -1057,37 +907,31 @@ class OverallAcceptanceStage(StageStrategy):
     def instruction(self) -> str:
         return (
             "整体验收阶段：代码复核全部主题验收和最终全量回归已经通过，"
-            "再由用户确认整个需求是否完成；本阶段不生成新的结果文档。"
+            "再由用户确认全部主题组合后是否完成需求；本阶段不生成新的结果文档。"
         )
 
 
 # 最终设计同步 stage：核对产品、功能、架构和真实代码，并更新最终架构文档
 class UpdateCodeDesignStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "update_code_design"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
     def artifact_paths(self) -> list[str]:
-        return ["spec/architecture_code_design.md"]
+        return [artifact_paths_mod.CODE_DESIGN_DOC]
 
-    # 角色文档路径（相对 .workflow_loop/），update_code_design 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/code_design/code_design.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/code_design/update_code_design.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        architecture_path = os.path.join(project_root, "spec", "architecture_code_design.md")
-        if not os.path.isfile(architecture_path):
-            return (False, "spec/architecture_code_design.md 不存在")
+        architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC
+        if not os.path.isfile(os.path.join(project_root, architecture_rel)):
+            return (False, f"{architecture_rel} 不存在")
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
             self.name(),
@@ -1095,11 +939,12 @@ class UpdateCodeDesignStage(StageStrategy):
         )
         if not changed_ok:
             return (False, changed_detail)
+        normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
         changed_product_docs = [
             path
-            for path in changed_paths
-            if path == os.path.join("spec", "product.md")
-            or path.startswith(os.path.join("spec", "feature_"))
+            for path in normalized_changed
+            if path == artifact_paths_mod.PRODUCT_OVERVIEW_DOC
+            or path.startswith("spec/功能_")
         ]
         if changed_product_docs:
             return (
@@ -1107,10 +952,10 @@ class UpdateCodeDesignStage(StageStrategy):
                 "产品总说明或功能文档在 update_code_design 阶段发生变化："
                 f"{changed_product_docs}；功能变化必须返回 spec，不能在最终设计同步阶段直接修改",
             )
-        if os.path.join("spec", "architecture_code_design.md") not in changed_paths:
+        if architecture_rel not in normalized_changed:
             return (
                 False,
-                "最终设计同步没有更新 spec/architecture_code_design.md；"
+                f"最终设计同步没有更新 {architecture_rel}；"
                 "即使架构没有变化，也要写入本轮核对结论和真实代码映射",
             )
         state = load_state(project_root)
@@ -1133,88 +978,64 @@ class UpdateCodeDesignStage(StageStrategy):
         return (True, f"{document_detail}；追踪表已准备好记录最终代码设计")
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
-        feature_paths = [
-            os.path.relpath(path, project_root)
-            for path in glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
-        ]
         return [
-            os.path.join("spec", "architecture_code_design.md"),
-            os.path.join("spec", "product.md"),
-            *feature_paths,
+            artifact_paths_mod.CODE_DESIGN_DOC,
+            *get_linked_product_design_paths(project_root),
         ]
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
         return (
-            "最终设计同步：核对产品设计、功能文档、架构设计和真实代码；"
+            "最终设计同步：逐项核对所有当前产品功能、真实代码符号和验证依据；"
             "架构有变化时更新架构和功能到代码的映射，架构无变化时记录核对结论；"
             "发现功能变化返回 spec，发现代码未实现返回 impl；确认无未处理差异后，"
-            "写入/更新 spec/architecture_code_design.md"
+            f"写入/更新 {artifact_paths_mod.CODE_DESIGN_DOC}"
         )
 
 
 # 项目设计架构初始化 stage：根据现有代码及可运行行为一次建立设计文档
-# 一次性产出 spec/product.md + spec/feature_*.md + spec/architecture_code_design.md
-# 用于已有代码项目接入 workflow_loop 时的初始化
 class ProjectDesignInitStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "project_design_init"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
     def artifact_paths(self) -> list[str]:
         return [
-            "spec/product.md",
-            "spec/architecture_code_design.md",
+            artifact_paths_mod.PRODUCT_OVERVIEW_DOC,
+            artifact_paths_mod.CODE_DESIGN_DOC,
             PROJECT_INIT_EVIDENCE_PATH,
         ]
 
-    # 角色文档路径（相对 .workflow_loop/），project_design_init 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/code_design/project_design_init_evidence.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/code_design/project_design_init.md"
 
-    # 附加提示词/规范路径列表（discuss 命令额外加载）
-    # project_design_init 重写：加载 spec + code_design 两组文档
     def additional_doc_paths(self) -> list[tuple[str, str]]:
         return [
-            # spec 阶段的提示词 + 规范词，让 AI 知道怎么写产品文档
             ("Template_Repository/spec/spec.md", "Standardized_Repository/spec/spec.md"),
-            # code_design 阶段的提示词 + 规范词，让 AI 知道怎么写架构文档
             ("Template_Repository/code_design/code_design.md", "Standardized_Repository/code_design/code_design.md"),
         ]
 
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 product.md + architecture_code_design.md + feature_*.md 三类产物都就绪
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 spec/product.md 的完整路径
-        product_md = os.path.join(project_root, "spec", "product.md")
-        # 拼出 spec/architecture_code_design.md 的完整路径
-        arch_md = os.path.join(project_root, "spec", "architecture_code_design.md")
-        # 收集不存在的文件
+        overview_rel = artifact_paths_mod.PRODUCT_OVERVIEW_DOC
+        architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC
         missing = []
-        # product.md 不存在 → 加入 missing
-        if not os.path.exists(product_md):
-            missing.append("spec/product.md")
-        # architecture_code_design.md 不存在 → 加入 missing
-        if not os.path.exists(arch_md):
-            missing.append("spec/architecture_code_design.md")
-        # 用 glob 找 spec/ 下所有 feature_*.md 文件
-        func_files = glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
-        # 没有任何 feature_*.md → 加入 missing
-        if not func_files:
-            missing.append("spec/feature_*.md")
+        if not os.path.exists(os.path.join(project_root, overview_rel)):
+            missing.append(overview_rel)
+        if not os.path.exists(os.path.join(project_root, architecture_rel)):
+            missing.append(architecture_rel)
+        linked_features = [
+            path
+            for path in get_linked_product_design_paths(project_root)
+            if path != overview_rel
+        ]
+        if not linked_features:
+            missing.append("spec/功能_*.md")
         if not os.path.exists(os.path.join(project_root, PROJECT_INIT_EVIDENCE_PATH)):
             missing.append(PROJECT_INIT_EVIDENCE_PATH)
-        # 有缺失 → 判失败，列出缺失项
         if missing:
             return (False, f"产物未就绪: {missing}")
 
@@ -1226,13 +1047,13 @@ class ProjectDesignInitStage(StageStrategy):
         if not changed_ok:
             return (False, changed_detail)
 
+        normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
         product_changed = any(
-            path == os.path.join("spec", "product.md")
-            or path.startswith(os.path.join("spec", "feature_"))
-            for path in changed_paths
+            path == overview_rel or path.startswith("spec/功能_")
+            for path in normalized_changed
         )
-        architecture_changed = os.path.join("spec", "architecture_code_design.md") in changed_paths
-        evidence_changed = PROJECT_INIT_EVIDENCE_PATH in changed_paths
+        architecture_changed = architecture_rel in normalized_changed
+        evidence_changed = PROJECT_INIT_EVIDENCE_PATH.replace(os.sep, "/") in normalized_changed
         if not product_changed or not architecture_changed or not evidence_changed:
             return (
                 False,
@@ -1252,58 +1073,45 @@ class ProjectDesignInitStage(StageStrategy):
         return (
             True,
             "项目设计初始化产物和调查证据有效: "
-            f"product.md + architecture_code_design.md + {[os.path.basename(f) for f in func_files]}; "
+            f"产品总说明 + 代码架构设计 + {[os.path.basename(f) for f in linked_features]}; "
             f"{evidence_detail}",
         )
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
-        feature_paths = [
-            os.path.relpath(path, project_root)
-            for path in glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
-        ]
         return [
-            os.path.join("spec", "product.md"),
-            os.path.join("spec", "architecture_code_design.md"),
+            artifact_paths_mod.CODE_DESIGN_DOC,
             PROJECT_INIT_EVIDENCE_PATH,
-            *feature_paths,
+            *get_linked_product_design_paths(project_root),
         ]
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
         return (
             "已有项目设计初始化：必须查看代码和测试，具备安全条件时实际运行；"
-            "一次建立相互一致的产品文档、代码架构文档和 spec/project_design_init_evidence.md 调查证据"
+            f"一次建立相互一致的产品文档、代码架构文档和 {PROJECT_INIT_EVIDENCE_PATH} 调查证据"
         )
 
 
-# 设计期架构修订 stage：按变更后的产品设计改 spec/architecture_code_design.md
-# 产品设计变更后同步修订架构，保持设计和实际代码一致
+# 设计期架构修订 stage：按变更后的产品设计改代码架构设计
 class ReviseCodeDesignStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "revise_code_design"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # code_validate 检查这些文件存在
     def artifact_paths(self) -> list[str]:
-        return ["spec/architecture_code_design.md"]
+        return [artifact_paths_mod.CODE_DESIGN_DOC]
 
-    # 角色文档路径（相对 .workflow_loop/），revise_code_design 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/code_design/code_design.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/code_design/revise_code_design.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        architecture_path = os.path.join("spec", "architecture_code_design.md")
-        if not os.path.isfile(os.path.join(project_root, architecture_path)):
-            return (False, f"{architecture_path} 不存在")
+        architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC
+        if not os.path.isfile(os.path.join(project_root, architecture_rel)):
+            return (False, f"{architecture_rel} 不存在")
         changed_ok, changed_detail, _ = changed_stage_paths(
             project_root,
             self.name(),
@@ -1311,56 +1119,46 @@ class ReviseCodeDesignStage(StageStrategy):
         )
         if not changed_ok:
             return (False, changed_detail)
-        return (True, f"{architecture_path} 已按本阶段产品设计修改")
+        return (True, f"{architecture_rel} 已按本阶段产品设计修改")
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
-        return [os.path.join("spec", "architecture_code_design.md")]
+        return [artifact_paths_mod.CODE_DESIGN_DOC]
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
-        return "设计期架构修订：按变更后的产品设计改 spec/architecture_code_design.md"
+        return f"设计期架构修订：按变更后的产品设计改 {artifact_paths_mod.CODE_DESIGN_DOC}"
 
 
 # 复现 stage：和用户讨论 bug 现象、复现步骤
-# 产出 bug/<YYYY-MM-DD_HHmm-<bug描述>>.md + 更新 bug/index.md，后续 acceptance_plan 复用其中已确认的验收主题
 class ReproduceStage(StageStrategy):
-    # stage 标识名，存到 state.json 的 stage_path
     def name(self) -> str:
         return "reproduce"
 
-    # 期望产出的文件路径列表（相对项目根）
-    # 这里只列 bug/ 目录，code_validate 会查 .md 文件
     def artifact_paths(self) -> list[str]:
-        return ["bug/index.md", "bug/"]
+        return [artifact_paths_mod.BUG_INDEX_DOC, "bug/"]
 
-    # 角色文档路径（相对 .workflow_loop/），reproduce 无角色文档返回 None
     def role_doc_path(self) -> str | None:
         return None
 
-    # 提示词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def prompt_doc_path(self) -> str | None:
         return "Template_Repository/reproduce/reproduce.md"
 
-    # 规范词文档路径，discuss 命令加载这个文档内容打印给 AI 用
     def standard_doc_path(self) -> str | None:
         return "Standardized_Repository/reproduce/reproduce.md"
 
-    # 门禁的代码侧校验（第 2 道闸）
-    # 检查 bug/ 目录存在 + 至少有一个非 index.md 的 bug 记录文件
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        # 拼出 bug/ 目录的完整路径
         bug_dir = os.path.join(project_root, "bug")
-        # bug/ 目录不存在 → 直接判失败
         if not os.path.exists(bug_dir):
             return (False, "bug/ 目录不存在")
-        index_path = os.path.join(bug_dir, "index.md")
+        index_path = os.path.join(project_root, artifact_paths_mod.BUG_INDEX_DOC)
         if not os.path.isfile(index_path):
-            return (False, "bug/index.md 不存在")
-        # 列出 bug/ 下所有 .md 文件（排除 index.md 索引文件）
-        md_files = [f for f in os.listdir(bug_dir) if f.endswith(".md") and f != "index.md"]
-        # 没有任何 bug 记录 → 判失败
+            return (False, f"{artifact_paths_mod.BUG_INDEX_DOC} 不存在")
+        md_files = [
+            f
+            for f in os.listdir(bug_dir)
+            if f.endswith(".md") and f != "索引.md"
+        ]
         if not md_files:
-            return (False, "bug/ 下没有 bug 记录 .md 文件（非 index.md）")
+            return (False, "bug/ 下没有缺陷记录文档")
 
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
@@ -1382,13 +1180,12 @@ class ReproduceStage(StageStrategy):
             bug_paths = [
                 os.path.join("bug", filename)
                 for filename in os.listdir(bug_dir)
-                if filename.endswith(".md") and filename != "index.md"
+                if filename.endswith(".md") and filename != "索引.md"
             ]
-        return [os.path.join("bug", "index.md"), *bug_paths]
+        return [artifact_paths_mod.BUG_INDEX_DOC, *bug_paths]
 
-    # 该 stage 的指令文本，打印给 AI 看
     def instruction(self) -> str:
         return (
             "缺陷复现阶段：使用真实环境和真实输入复现缺陷并确认根因，"
-            "产出 bug/<YYYY-MM-DD_HHmm-缺陷描述>.md 并更新 bug/index.md"
+            f"产出 bug/缺陷_<缺陷文件标识>.md 并更新 {artifact_paths_mod.BUG_INDEX_DOC}"
         )

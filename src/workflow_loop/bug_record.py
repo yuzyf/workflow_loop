@@ -5,17 +5,21 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import artifact_paths as artifact_paths_mod
 from .state import load_state
+from .topic import topic_paths
 
 
 BUG_DIR = "bug"
-BUG_INDEX = "bug/index.md"
+BUG_INDEX = artifact_paths_mod.BUG_INDEX_DOC
 WORKFLOW_RE = re.compile(r"^-\s*工作流编号：\s*(.+?)\s*$", re.MULTILINE)
 TOPIC_RE = re.compile(r"^-\s*验收主题：\s*(.+?)\s*$", re.MULTILINE)
 RESULT_SECTION_RE = re.compile(
     r"^##\s+8\.\s*修复与验收结果\s*$\n(.*?)(?=^##\s+|\Z)",
     re.MULTILINE | re.DOTALL,
 )
+# 索引文件不是缺陷记录正文
+INDEX_FILENAMES = {"索引.md"}
 
 
 def _records_for_workflow(project_root: str, workflow_id: str, topics: list[str]):
@@ -25,7 +29,7 @@ def _records_for_workflow(project_root: str, workflow_id: str, topics: list[str]
 
     records: list[tuple[Path, str]] = []
     for path in sorted(bug_dir.glob("*.md")):
-        if path.name == "index.md":
+        if path.name in INDEX_FILENAMES:
             continue
         content = path.read_text(encoding="utf-8")
         workflow_match = WORKFLOW_RE.search(content)
@@ -75,7 +79,7 @@ def _replace_result_update(content: str, stage_label: str, workflow_id: str, bod
 def _update_index_status(project_root: str, filename: str, status: str) -> None:
     index_path = Path(project_root) / BUG_INDEX
     if not index_path.is_file():
-        raise ValueError("bug/index.md 不存在，无法更新缺陷索引")
+        raise ValueError(f"{BUG_INDEX} 不存在，无法更新缺陷索引")
 
     content = index_path.read_text(encoding="utf-8")
     lines = content.splitlines()
@@ -92,7 +96,7 @@ def _update_index_status(project_root: str, filename: str, status: str) -> None:
         found = True
         break
     if not found:
-        raise ValueError(f"bug/index.md 没有链接缺陷记录: {filename}")
+        raise ValueError(f"{BUG_INDEX} 没有链接缺陷记录: {filename}")
     index_path.write_text("\n".join(lines) + ("\n" if content.endswith("\n") else ""), encoding="utf-8")
 
 
@@ -105,11 +109,22 @@ def update_status(
     status: str,
     details: list[str],
 ) -> str:
-    """更新当前工作流缺陷记录和 bug 索引，重复执行同一阶段不会重复追加。"""
+    """更新当前工作流缺陷记录和缺陷索引，重复执行同一阶段不会重复追加。
+
+    details 中的 {topic_test_result} 和 {topic_acceptance_result} 会替换为该主题的
+    中文正式结果路径；始终只追加结论，不改写原始复现条件、实际结果、期望和根因。
+    """
     records = _records_for_workflow(project_root, workflow_id, topics)
     updated = []
     for path, topic in records:
-        topic_details = [detail.replace("{topic}", topic) for detail in details]
+        paths = topic_paths(project_root, topic)
+        topic_details = [
+            detail
+            .replace("{topic_test_result}", f"../{paths['test_result']}")
+            .replace("{topic_acceptance_result}", f"../{paths['acceptance_result']}")
+            .replace("{topic_impl_doc}", f"../{paths['impl_doc']}")
+            for detail in details
+        ]
         body = "\n".join([f"- 最终状态：{status}", *topic_details])
         content = path.read_text(encoding="utf-8")
         updated_content = _replace_result_update(content, stage_label, workflow_id, body)
@@ -120,15 +135,6 @@ def update_status(
     return f"已更新缺陷状态“{status}”: {updated}"
 
 
-def _implementation_record_detail(project_root: str) -> str:
-    impl_dir = Path(project_root) / "impl"
-    files = sorted(impl_dir.glob("*.md")) if impl_dir.is_dir() else []
-    if not files:
-        raise ValueError("impl/ 下没有实施记录，无法写入缺陷修复结果")
-    links = [f"[{path.name}](../impl/{path.name})" for path in files]
-    return "- 实施记录：" + "<br>".join(links)
-
-
 def record_topic_acceptance_pass(project_root: str, workflow_id: str, topics: list[str]) -> str:
     return update_status(
         project_root,
@@ -137,9 +143,9 @@ def record_topic_acceptance_pass(project_root: str, workflow_id: str, topics: li
         stage_label="主题验收结果",
         status="主题验收通过，待全量回归",
         details=[
-            _implementation_record_detail(project_root),
-            "- 主题测试结果：[测试结果](../qa/{topic}_result.md)",
-            "- 主题验收结果：[验收结果](../acceptance/{topic}_result.md)",
+            "- 实施记录：[实施记录]({topic_impl_doc})",
+            "- 主题测试结果：[测试结果]({topic_test_result})",
+            "- 主题验收结果：[验收结果]({topic_acceptance_result})",
             "- 最终全量回归：待执行",
         ],
     )
@@ -153,7 +159,7 @@ def record_regression_failure(project_root: str, workflow_id: str, topics: list[
         stage_label="最终全量回归结果",
         status="回归失败，重新处理中",
         details=[
-            "- 回归结果：统一测试入口执行失败，详情见当前工作流 state.json 和 journal",
+            "- 回归结果：统一测试入口执行失败、超时或无法启动，详情见当前工作流 state.json 和 journal",
             "- 处理要求：修复后重新执行测试代码、主题测试、主题验收、最终全量回归和整体验收",
         ],
     )
@@ -174,11 +180,12 @@ def record_regression_pass(project_root: str, workflow_id: str, topics: list[str
 
 
 def has_explicit_regression_failure(project_root: str, workflow_id: str) -> bool:
+    """执行失败、超时和无法启动都算未通过，不只有退出码非零一种情况。"""
     state = load_state(project_root)
     return (
         state is not None
         and state.workflow_id == workflow_id
-        and state.regression_test.status == "failed"
+        and state.regression_test.status in ("failed", "timeout", "error", "unavailable")
     )
 
 

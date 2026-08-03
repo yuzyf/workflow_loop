@@ -1,0 +1,298 @@
+# workflow-loop v0.1.0 正式发布任务
+# 手动触发只执行：版本身份核对 → 全量测试 → 构建 → 三平台安装验证。
+# 标签 v0.1.0 在同一验证通过后才把原样构建包发布到 PyPI，并公开 GitHub Release。
+# 任一步失败都不能上传未经验证的包；不保存长期 PyPI 密码或上传令牌。
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v0.1.0"
+
+env:
+  PRODUCT_VERSION: "0.1.0"
+
+jobs:
+  # 版本身份核对 + 全量测试：所有位置都必须严格等于 0.1.0
+  verify-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 核对全部版本身份
+        run: |
+          set -euo pipefail
+          fail=0
+          grep -q 'version = "0.1.0"' pyproject.toml || { echo "pyproject.toml 版本不是 0.1.0"; fail=1; }
+          grep -q '__version__ = "0.1.0"' src/workflow_loop/__init__.py || { echo "__init__.py 版本不是 0.1.0"; fail=1; }
+          grep -q 'PRODUCT_VERSION="0.1.0"' install.sh || { echo "install.sh 版本不是 0.1.0"; fail=1; }
+          grep -q '\$ProductVersion = "0.1.0"' install.ps1 || { echo "install.ps1 版本不是 0.1.0"; fail=1; }
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            [ "${GITHUB_REF_NAME}" = "v0.1.0" ] || { echo "标签不是 v0.1.0"; fail=1; }
+          fi
+          exit $fail
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 运行完整测试
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest -q
+
+  # 构建 wheel（二进制分发包）和 source distribution（源码分发包）
+  build:
+    needs: verify-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 构建分发包
+        run: |
+          python -m pip install build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # PyPI 可信发布：检测到 PyPI 已存在 0.1.0 时只能停止，不能删除、覆盖或重发
+  publish-pypi:
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.0'
+    needs: prepublish-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      # PyPI Trusted Publishing（可信发布）使用 OIDC 身份，不保存长期令牌
+      id-token: write
+    steps:
+      - name: 检查 PyPI 是否已存在 0.1.0
+        run: |
+          set -euo pipefail
+          status=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/workflow-loop/${PRODUCT_VERSION}/json")
+          if [ "$status" = "200" ]; then
+            echo "PyPI 已存在 workflow-loop ${PRODUCT_VERSION}，发布任务停止；不能删除、覆盖或重发。"
+            exit 1
+          fi
+          echo "PyPI 尚无 workflow-loop ${PRODUCT_VERSION}，可以发布。"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: 上传到 PyPI（Trusted Publishing）
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # 发布前三平台冒烟：安装脚本通过 UV_FIND_LINKS 使用本次构建的同一份 0.1.0 包
+  prepublish-smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: 安装脚本冒烟：确认、取消与安装（Linux）
+        if: runner.os == 'Linux'
+        env:
+          UV_FIND_LINKS: ${{ github.workspace }}/dist
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/workflow-loop-linux-bin
+          UV_TOOL_DIR: ${{ runner.temp }}/workflow-loop-linux-tools
+        run: |
+          set -euo pipefail
+          run_installer() {
+            INSTALL_ANSWER="$1" python - <<'PY'
+          import os
+          import pty
+
+          answer = os.environ["INSTALL_ANSWER"].encode() + b"\n"
+          observed = bytearray()
+          sent = False
+
+          def read_installer_output(fd):
+              global sent
+              data = os.read(fd, 1024)
+              observed.extend(data)
+              if not sent and b"[y/N]" in observed:
+                  os.write(fd, answer)
+                  sent = True
+              if len(observed) > 64:
+                  del observed[:-64]
+              return data
+
+          status = pty.spawn(
+              ["bash", "install.sh"],
+              master_read=read_installer_output,
+              stdin_read=lambda _fd: b"",
+          )
+          raise SystemExit(os.waitstatus_to_exitcode(status))
+          PY
+          }
+          proj="$(mktemp -d)"
+          cp install.sh "$proj/"
+          # 取消路径：输入 n，必须零写入
+          (cd "$proj" && run_installer "$(printf 'n\n')")
+          [ ! -d "$proj/.workflow_loop" ] || { echo "取消后仍产生写入"; exit 1; }
+          # 确认路径：输入 y，必须得到完整骨架
+          (cd "$proj" && run_installer "$(printf 'y\n')")
+          [ -f "$proj/.workflow_loop/project.json" ] || { echo "安装后缺少项目标记"; exit 1; }
+          [ -f "$proj/AGENTS.md" ] || { echo "安装后缺少 AGENTS.md"; exit 1; }
+          identity="$("${UV_TOOL_BIN_DIR}/workflow" --version)"
+          [ "$identity" = "workflow-loop ${PRODUCT_VERSION}" ] || { echo "身份核对失败：$identity"; exit 1; }
+          export PATH="${UV_TOOL_BIN_DIR}:${PATH}"
+          # 重复安装路径：两侧均已安装，零修改退出
+          repeat_output="$(cd "$proj" && run_installer "$(printf 'y\n')")"
+          printf '%s\n' "$repeat_output" | grep -q "当前项目已经安装，未修改任何文件"
+          # 只缺项目侧：复用全局命令，为新项目补骨架
+          project_only="$(mktemp -d)"
+          cp install.sh "$project_only/"
+          (cd "$project_only" && run_installer "$(printf 'y\n')")
+          [ -f "$project_only/.workflow_loop/project.json" ] || { echo "只缺项目侧时没有补齐骨架"; exit 1; }
+          # 只缺电脑侧：删除工具后重装，已存在项目内容不能变化
+          cp "$proj/AGENTS.md" "${RUNNER_TEMP}/linux-AGENTS.before"
+          rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
+          (cd "$proj" && run_installer "$(printf 'y\n')")
+          cmp "$proj/AGENTS.md" "${RUNNER_TEMP}/linux-AGENTS.before"
+      - name: 安装脚本冒烟：确认、取消与安装（macOS）
+        if: runner.os == 'macOS'
+        env:
+          UV_FIND_LINKS: ${{ github.workspace }}/dist
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/workflow-loop-macos-bin
+          UV_TOOL_DIR: ${{ runner.temp }}/workflow-loop-macos-tools
+        run: |
+          set -euo pipefail
+          run_installer() {
+            INSTALL_ANSWER="$1" python - <<'PY'
+          import os
+          import pty
+
+          answer = os.environ["INSTALL_ANSWER"].encode() + b"\n"
+          observed = bytearray()
+          sent = False
+
+          def read_installer_output(fd):
+              global sent
+              data = os.read(fd, 1024)
+              observed.extend(data)
+              if not sent and b"[y/N]" in observed:
+                  os.write(fd, answer)
+                  sent = True
+              if len(observed) > 64:
+                  del observed[:-64]
+              return data
+
+          status = pty.spawn(
+              ["bash", "install.sh"],
+              master_read=read_installer_output,
+              stdin_read=lambda _fd: b"",
+          )
+          raise SystemExit(os.waitstatus_to_exitcode(status))
+          PY
+          }
+          proj="$(mktemp -d)"
+          cp install.sh "$proj/"
+          (cd "$proj" && run_installer "$(printf 'n\n')")
+          [ ! -d "$proj/.workflow_loop" ] || { echo "取消后仍产生写入"; exit 1; }
+          (cd "$proj" && run_installer "$(printf 'y\n')")
+          [ -f "$proj/.workflow_loop/project.json" ] || { echo "安装后缺少项目标记"; exit 1; }
+          [ -f "$proj/AGENTS.md" ] || { echo "安装后缺少 AGENTS.md"; exit 1; }
+          identity="$("${UV_TOOL_BIN_DIR}/workflow" --version)"
+          [ "$identity" = "workflow-loop ${PRODUCT_VERSION}" ] || { echo "身份核对失败：$identity"; exit 1; }
+          export PATH="${UV_TOOL_BIN_DIR}:${PATH}"
+          repeat_output="$(cd "$proj" && run_installer "$(printf 'y\n')")"
+          printf '%s\n' "$repeat_output" | grep -q "当前项目已经安装，未修改任何文件"
+          project_only="$(mktemp -d)"
+          cp install.sh "$project_only/"
+          (cd "$project_only" && run_installer "$(printf 'y\n')")
+          [ -f "$project_only/.workflow_loop/project.json" ] || { echo "只缺项目侧时没有补齐骨架"; exit 1; }
+          cp "$proj/AGENTS.md" "${RUNNER_TEMP}/macos-AGENTS.before"
+          rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
+          (cd "$proj" && run_installer "$(printf 'y\n')")
+          cmp "$proj/AGENTS.md" "${RUNNER_TEMP}/macos-AGENTS.before"
+      - name: 安装脚本冒烟：PowerShell 7（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          UV_FIND_LINKS: ${{ github.workspace }}\dist
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}\workflow-loop-pwsh-bin
+          UV_TOOL_DIR: ${{ runner.temp }}\workflow-loop-pwsh-tools
+        run: |
+          $proj = Join-Path $env:RUNNER_TEMP "smoke_pwsh"
+          New-Item -ItemType Directory -Path $proj | Out-Null
+          Copy-Item install.ps1 $proj
+          Push-Location $proj
+          "n" | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if (Test-Path ".workflow_loop") { Write-Error "取消后仍产生写入"; exit 1 }
+          "y" | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if (-not (Test-Path ".workflow_loop/project.json")) { Write-Error "安装后缺少项目标记"; exit 1 }
+          if (-not (Test-Path "AGENTS.md")) { Write-Error "安装后缺少 AGENTS.md"; exit 1 }
+          $workflow = Join-Path $env:UV_TOOL_BIN_DIR "workflow.exe"
+          $identity = (& $workflow --version | Out-String).Trim()
+          if ($identity -ne "workflow-loop $env:PRODUCT_VERSION") { Write-Error "身份核对失败：$identity"; exit 1 }
+          $env:Path = "$env:UV_TOOL_BIN_DIR;$env:Path"
+          $repeat = ("y" | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1 | Out-String)
+          if ($repeat -notmatch "当前项目已经安装，未修改任何文件") { Write-Error "完整重复安装没有零修改退出"; exit 1 }
+          Pop-Location
+          $projectOnly = Join-Path $env:RUNNER_TEMP "smoke_pwsh_project_only"
+          New-Item -ItemType Directory -Path $projectOnly | Out-Null
+          Copy-Item install.ps1 $projectOnly
+          Push-Location $projectOnly
+          "y" | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if (-not (Test-Path ".workflow_loop/project.json")) { Write-Error "只缺项目侧时没有补齐骨架"; exit 1 }
+          Pop-Location
+          $before = (Get-FileHash (Join-Path $proj "AGENTS.md") -Algorithm SHA256).Hash
+          Remove-Item -Recurse -Force $env:UV_TOOL_DIR, $env:UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue
+          Push-Location $proj
+          "y" | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          $after = (Get-FileHash "AGENTS.md" -Algorithm SHA256).Hash
+          if ($after -ne $before) { Write-Error "只缺电脑侧时改写了现有项目内容"; exit 1 }
+          Pop-Location
+      - name: 安装脚本冒烟：Windows PowerShell 5.1（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          UV_FIND_LINKS: ${{ github.workspace }}\dist
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}\workflow-loop-ps51-bin
+          UV_TOOL_DIR: ${{ runner.temp }}\workflow-loop-ps51-tools
+        run: |
+          $env:Path = (($env:Path -split ";" | Where-Object { $_ -notlike "$env:RUNNER_TEMP\workflow-loop-*" }) -join ";")
+          $proj = Join-Path $env:RUNNER_TEMP "smoke_ps51"
+          New-Item -ItemType Directory -Path $proj | Out-Null
+          Copy-Item install.ps1 $proj
+          Push-Location $proj
+          "n" | powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if (Test-Path ".workflow_loop") { Write-Error "取消后仍产生写入"; exit 1 }
+          "y" | powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if (-not (Test-Path ".workflow_loop/project.json")) { Write-Error "安装后缺少项目标记"; exit 1 }
+          $workflow = Join-Path $env:UV_TOOL_BIN_DIR "workflow.exe"
+          $identity = (& $workflow --version | Out-String).Trim()
+          if ($identity -ne "workflow-loop $env:PRODUCT_VERSION") { Write-Error "身份核对失败：$identity"; exit 1 }
+          $env:Path = "$env:UV_TOOL_BIN_DIR;$env:Path"
+          $repeat = ("y" | powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 | Out-String)
+          if ($repeat -notmatch "当前项目已经安装，未修改任何文件") { Write-Error "完整重复安装没有零修改退出"; exit 1 }
+          Pop-Location
+
+  # 全部通过后才创建带两个安装脚本的公开 GitHub Release
+  github-release:
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.0'
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: 创建 v0.1.0 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0
+          name: workflow-loop 0.1.0
+          files: |
+            install.sh
+            install.ps1

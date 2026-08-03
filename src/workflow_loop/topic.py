@@ -1,30 +1,38 @@
 import os
 import re
 
+from . import artifact_paths as artifact_paths_mod
 from .project import load_project
 from .state import load_state
 from .topic_relations import read_topic_index
 
 
-def list_acceptance_plan_topics(project_root: str) -> list[str]:
-    """从 acceptance/<topic>_plan.md 文件名读取全部主题名称。"""
-    acceptance_dir = os.path.join(project_root, "acceptance")
-    if not os.path.isdir(acceptance_dir):
-        return []
+def topic_file_key(project_root: str, topic: str) -> str:
+    """取得验收主题的稳定文件标识：优先项目映射，缺少时确定性生成（不保存）。
 
-    suffix = "_plan.md"
-    return sorted(
-        filename[: -len(suffix)]
-        for filename in os.listdir(acceptance_dir)
-        if filename.endswith(suffix) and filename != suffix
-    )
+    主题名称是业务标识；文件标识只用于拼路径。文件名清理不改变主题显示名称。
+    """
+    project = load_project(project_root)
+    return artifact_paths_mod.resolve_key_for(project, "topic", topic)
+
+
+def topic_paths(project_root: str, topic: str) -> dict[str, str]:
+    """按统一路径规则返回一个主题的全部正式文档路径（相对项目根）。"""
+    file_key = topic_file_key(project_root, topic)
+    return {
+        "acceptance_plan": artifact_paths_mod.topic_acceptance_plan(file_key),
+        "acceptance_result": artifact_paths_mod.topic_acceptance_result(file_key),
+        "test_plan": artifact_paths_mod.topic_test_plan(file_key),
+        "test_result": artifact_paths_mod.topic_test_result(file_key),
+        "impl_doc": artifact_paths_mod.topic_impl_doc(file_key),
+    }
 
 
 def list_acceptance_index_topics(
     project_root: str,
     workflow_id: str | None = None,
 ) -> list[str]:
-    """按 acceptance/index.md 的展示顺序读取验收主题。"""
+    """按 acceptance/索引.md 的展示顺序读取验收主题完整显示名称。"""
 
     state = load_state(project_root)
     effective_workflow_id = workflow_id or (state.workflow_id if state is not None else None)
@@ -33,7 +41,7 @@ def list_acceptance_index_topics(
     try:
         relations = read_topic_index(
             project_root,
-            os.path.join("acceptance", "index.md"),
+            artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
             effective_workflow_id,
         )
     except ValueError:
@@ -49,7 +57,10 @@ def list_reproduce_topics(project_root: str, workflow_id: str | None = None) -> 
 
     topics: list[str] = []
     for filename in sorted(os.listdir(bug_dir)):
-        if not filename.endswith(".md") or filename == "index.md":
+        if (
+            not filename.endswith(".md")
+            or filename == os.path.basename(artifact_paths_mod.BUG_INDEX_DOC)
+        ):
             continue
         with open(os.path.join(bug_dir, filename), "r", encoding="utf-8") as f:
             content = f.read()
@@ -79,8 +90,6 @@ def candidate_topics(project_root: str) -> list[str]:
     project = load_project(project_root)
     history = set(project.topic_history if project is not None else [])
     topics = list_acceptance_index_topics(project_root)
-    if not topics:
-        topics = list_acceptance_plan_topics(project_root)
     return [
         topic
         for topic in topics
@@ -88,15 +97,18 @@ def candidate_topics(project_root: str) -> list[str]:
     ]
 
 
-def missing_topic_files(
+def missing_topic_documents(
     project_root: str,
-    directory: str,
-    suffix: str,
+    kind: str,
     topics: list[str],
 ) -> list[str]:
-    """返回缺失的按主题命名文件，例如 qa/<topic>_plan.md。"""
-    return [
-        os.path.join(directory, f"{topic}{suffix}")
-        for topic in topics
-        if not os.path.isfile(os.path.join(project_root, directory, f"{topic}{suffix}"))
-    ]
+    """返回缺失的主题正式文档路径。
+
+    kind 取值：acceptance_plan / acceptance_result / test_plan / test_result / impl_doc。
+    """
+    missing: list[str] = []
+    for topic in topics:
+        relative_path = topic_paths(project_root, topic)[kind]
+        if not os.path.isfile(os.path.join(project_root, relative_path)):
+            missing.append(relative_path)
+    return missing

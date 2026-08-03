@@ -9,7 +9,7 @@ dependencies = []
 workflow = "workflow_loop.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "PyYAML>=6.0"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
@@ -27,3 +27,8 @@ workflow_loop = ["data/**/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[dependency-groups]
+dev = [
+    "pyyaml>=6.0",
+]

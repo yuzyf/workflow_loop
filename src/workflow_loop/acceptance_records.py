@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from dataclasses import asdict
 
+from . import artifact_paths as artifact_paths_mod
 from . import state as state_mod
 from .test_mapping import TestPlanItem, parse_test_plan_items
+from .topic import topic_paths
 from .topic_relations import read_topic_index
 
 
@@ -70,36 +71,63 @@ def record_is_current(
     上游全局哈希只用于发现变化和触发清理，不能直接拿来让所有主题一起失效。
     用户只退回一个主题时，程序已经清理该主题及其依赖主题；没有被清理的独立
     主题应继续保留当前验收记录。
+
+    自动化或混合记录还必须逐项指向当前任务的精确机器记录编号；
+    执行记录被替换后，旧验收记录不能继续通过。旧记录缺少编号时同样失效。
     """
-    return (
-        record.result == "passed"
-        and record.record_id == compute_record_id(record)
-    )
+    if record.result != "passed" or record.record_id != compute_record_id(record):
+        return False
+    if record.method in ("自动化测试", "自动化测试 + 人工验收") and record.test_ids:
+        tasks = wf_state.stages.get(
+            "test_execution",
+            state_mod.StageState(),
+        ).test_tasks.get(record.topic, {})
+        current_ids: list[str] = []
+        for test_id in record.test_ids:
+            task = tasks.get(test_id)
+            if (
+                task is None
+                or task.current_record is None
+                or task.current_record.status != "passed"
+                or not task.current_record.record_id
+            ):
+                return False
+            current_ids.append(task.current_record.record_id)
+        if not record.test_record_ids:
+            return False
+        if sorted(current_ids) != sorted(record.test_record_ids):
+            return False
+    return True
 
 
 def _automated_items_are_current(
     wf_state: state_mod.WorkflowState,
     topic: str,
     test_ids: list[str],
-) -> tuple[bool, str]:
+) -> tuple[bool, str, list[str]]:
+    """核对每个测试项当前机器记录有效，并返回精确记录编号列表。"""
     stage_state = wf_state.stages.get("test_execution")
     if stage_state is None:
-        return False, "缺少 test_execution（测试执行阶段）状态"
+        return False, "缺少 test_execution（测试执行阶段）状态", []
     tasks = stage_state.test_tasks.get(topic, {})
+    record_ids: list[str] = []
     for test_id in test_ids:
         task = tasks.get(test_id)
         if task is None or task.status != "passed" or task.current_record is None:
-            return False, f"{topic} / {test_id} 没有当前有效的通过记录"
+            return False, f"{topic} / {test_id} 没有当前有效的通过记录", []
         record = task.current_record
         if record.status != "passed" or record.exit_code != 0:
-            return False, f"{topic} / {test_id} 当前测试记录不是通过状态"
-    return True, ""
+            return False, f"{topic} / {test_id} 当前测试记录不是通过状态", []
+        if not record.record_id:
+            return False, f"{topic} / {test_id} 的执行记录缺少机器记录编号，必须重新执行", []
+        record_ids.append(record.record_id)
+    return True, "", record_ids
 
 
 def _topic_relations(project_root: str, wf_state: state_mod.WorkflowState):
     return read_topic_index(
         project_root,
-        os.path.join("acceptance", "index.md"),
+        artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
         wf_state.workflow_id,
         ["展示顺序", "验收主题", "前置主题", "验收计划", "主题验收结果"],
     )
@@ -159,7 +187,7 @@ def ensure_automated_records(
             if existing is not None and record_is_current(existing, wf_state):
                 continue
             test_ids = automated_test_ids(project_root, relation.topic, criterion_id)
-            current, detail = _automated_items_are_current(
+            current, detail, machine_record_ids = _automated_items_are_current(
                 wf_state,
                 relation.topic,
                 test_ids,
@@ -173,12 +201,13 @@ def ensure_automated_records(
                 result="passed",
                 actual_result=f"对应自动化测试项均有当前有效通过记录：{', '.join(test_ids)}",
                 user_answer=None,
-                evidence=f"qa/{relation.topic}_result.md",
+                evidence=topic_paths(project_root, relation.topic)["test_result"],
                 confirmed_at=state_mod.now_iso(),
                 acceptance_plan_hash=wf_state.verification.acceptance_plan_hash,
                 impl_hash=wf_state.verification.impl_hash,
                 test_result_hash=wf_state.verification.test_result_hash,
                 test_ids=test_ids,
+                test_record_ids=machine_record_ids,
             )
             record.record_id = compute_record_id(record)
             topic_records[criterion_id] = record
@@ -211,8 +240,13 @@ def record_user_result(
     if prerequisites:
         raise ValueError(f"前置主题尚未验收通过：{prerequisites}")
     test_ids = automated_test_ids(project_root, topic, criterion_id)
+    machine_record_ids: list[str] = []
     if method == "自动化测试 + 人工验收":
-        current, detail = _automated_items_are_current(wf_state, topic, test_ids)
+        current, detail, machine_record_ids = _automated_items_are_current(
+            wf_state,
+            topic,
+            test_ids,
+        )
         if not current:
             raise ValueError(detail)
     if not actual_result.strip():
@@ -233,6 +267,7 @@ def record_user_result(
         impl_hash=wf_state.verification.impl_hash,
         test_result_hash=wf_state.verification.test_result_hash,
         test_ids=test_ids,
+        test_record_ids=machine_record_ids,
     )
     record.record_id = compute_record_id(record)
     stage_state = wf_state.stages["topic_acceptance"]
@@ -240,7 +275,10 @@ def record_user_result(
         stage_state.acceptance_records.setdefault(topic, {})[criterion_id] = record
     else:
         stage_state.acceptance_records.pop(topic, None)
-        result_path = os.path.join(project_root, "acceptance", f"{topic}_result.md")
+        result_path = os.path.join(
+            project_root,
+            topic_paths(project_root, topic)["acceptance_result"],
+        )
         if os.path.isfile(result_path):
             os.remove(result_path)
     return record
@@ -256,7 +294,10 @@ def clear_topic_records(
         for topic in topics:
             stage_state.acceptance_records.pop(topic, None)
     for topic in topics:
-        result_path = os.path.join(project_root, "acceptance", f"{topic}_result.md")
+        result_path = os.path.join(
+            project_root,
+            topic_paths(project_root, topic)["acceptance_result"],
+        )
         if os.path.isfile(result_path):
             os.remove(result_path)
 

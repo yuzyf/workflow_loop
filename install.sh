@@ -1,119 +1,325 @@
 #!/usr/bin/env bash
-# 启用严格模式：命令失败即退出（-e）、未定义变量报错（-u）、管道任一环节失败即失败（-o pipefail）
+# workflow_loop 官方安装脚本（macOS / Linux）
+# 职责：终端确认、无写入预检、固定版本 uv 下载校验、全局命令安装、PATH 处理，
+# 以及通过一次性事务调用包内项目安装入口。项目文件写入全部由 Python 内部入口完成。
 set -euo pipefail
 
-# 记录当前工作目录作为项目根目录，后续所有路径都基于此变量派生
+# ─── 固定版本与固定资产（不可变发布，不使用 latest） ───
+PRODUCT_NAME="workflow-loop"
+PRODUCT_VERSION="0.1.0"
+PRODUCT_IDENTITY="${PRODUCT_NAME} ${PRODUCT_VERSION}"
+# 经过发布测试的安装工具版本；脚本内置各平台官方资产的 SHA-256 预期摘要
+UV_VERSION="0.11.33"
+UV_BASE_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"
+# 各平台资产的固定摘要（来自官方不可变发布；macOS ARM64 已在穿刺中实际校验）
+SHA_DARWIN_ARM64="d75e3d2bfc203d17388edaabd3aa37958edbcbfc36219e3ee0d31bb080b4baa2"
+SHA_DARWIN_X64="f1b919f740bd6be1d014ff58c4271b0779a32198adfb19ad9c5d1c4d9b2b4301"
+SHA_LINUX_X64="aa9fca823c03289fb6e3460b3dc864f3ea895cafaf9b99247701a67b17d1b018"
+SHA_LINUX_ARM64="9ed88a9a42de3102f9704d021ab186fdf8a69a7ad9a1d3f3486ac6b1e55d6141"
+
+# ─── 基本路径 ───
 PROJECT_ROOT="$(pwd)"
-# 拼接出 workflow_loop 的运行骨架目录绝对路径，用于存放状态机和会话数据
 WF_DIR="${PROJECT_ROOT}/.workflow_loop"
-# 拼接出 AGENTS.md 的绝对路径，这是智能体读取的契约文件
 AGENTS_MD="${PROJECT_ROOT}/AGENTS.md"
 
-# 打印安装脚本标题横幅，让用户清楚知道当前运行的是哪个安装器
-echo "═══ workflow_loop 安装脚本 ═══"
-# 打印空行作为视觉分隔，提升可读性
-echo ""
-# 提示即将输出项目根目录信息
-echo "当前项目根目录："
-# 打印实际的项目根目录绝对路径，供用户核对是否在正确目录运行
-echo "  ${PROJECT_ROOT}"
-# 打印空行作为视觉分隔
-echo ""
-# 提示即将列出会被检查或修改的文件清单
-echo "将检查或修改的文件："
-# 说明 AGENTS.md 的处理策略：存在则整份覆盖，不做合并不做备份，避免用户误以为旧内容会保留
-echo "  ${AGENTS_MD}（存在则整份覆盖，不合并不备份）"
-# 说明 .workflow_loop/ 目录的用途：创建运行骨架，承载状态机和会话数据
-echo "  ${WF_DIR}/（创建运行骨架）"
-# 打印空行作为视觉分隔
+# 工具环境与命令目录：显式固定并导出，保证确认时披露的位置就是实际写入位置
+UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
+UV_TOOL_DIR="${UV_TOOL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/uv/tools}"
+export UV_TOOL_BIN_DIR UV_TOOL_DIR
+
+# 临时目录（确认后才创建和使用；结束时删除）
+TMP_DIR=""
+# 本次是否新装了全局命令 / 修改了 Shell 配置（失败回滚范围）
+INSTALLED_GLOBAL="no"
+SHELL_CONFIG_BACKUP=""
+SHELL_CONFIG_FILE=""
+SHELL_CONFIG_ORIGIN=""
+
+cleanup() {
+    if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
+        rm -rf "${TMP_DIR}"
+    fi
+}
+trap cleanup EXIT
+
+fail() {
+    echo "错误：$1" >&2
+    exit 1
+}
+
+# 全局命令回滚：删除本次新装的工具环境和命令入口，恢复本次修改的 Shell 配置。
+# 安装前已经存在的内容不删除。
+rollback_global() {
+    if [ "${INSTALLED_GLOBAL}" = "yes" ]; then
+        echo "回滚本次新装的全局命令..."
+        rm -rf "${UV_TOOL_DIR}/${PRODUCT_NAME}"
+        rm -f "${UV_TOOL_BIN_DIR}/workflow"
+    fi
+    if [ "${SHELL_CONFIG_ORIGIN}" = "existing" ] && [ -f "${SHELL_CONFIG_BACKUP}" ]; then
+        echo "恢复本次修改的终端配置 ${SHELL_CONFIG_FILE}..."
+        cp "${SHELL_CONFIG_BACKUP}" "${SHELL_CONFIG_FILE}"
+    elif [ "${SHELL_CONFIG_ORIGIN}" = "missing" ]; then
+        echo "删除本次新建的终端配置 ${SHELL_CONFIG_FILE}..."
+        rm -f "${SHELL_CONFIG_FILE}"
+    fi
+}
+
+echo "═══ ${PRODUCT_NAME} ${PRODUCT_VERSION} 安装脚本 ═══"
 echo ""
 
-# 读取用户输入以确认当前目录确实是项目根目录，-r 防止反斜杠转义，-p 直接输出提示语
-read -r -p "确认当前目录是项目根目录？[y/N] " response
-# 根据用户响应进入不同分支，决定继续安装还是中止
-case "$response" in
-    # 匹配 yes/y（大小写不敏感），表示用户确认目录正确
-    [yY][eE][sS]|[yY])
-        # 确认通过，告知用户即将继续后续安装步骤
-        echo "目录确认通过，继续安装..."
-        # 结束 case 的确认分支
-        ;;
-    # 匹配其他任意输入，视为用户取消安装
-    *)
-        # 告知用户已取消，且未修改任何文件，避免用户担心副作用
-        echo "已取消。未修改任何文件。"
-        # 以成功状态码退出脚本，因为取消是用户主动行为而非错误
-        exit 0
-        # 结束 case 的取消分支
-        ;;
-# 结束 case 语句
-esac
+# ─────────────────────────────────────────────
+# 无写入预检：以下检查不修改任何文件
+# ─────────────────────────────────────────────
 
-# 打印空行作为视觉分隔
-echo ""
-# 打印阶段分隔横幅，进入"检查全局 workflow 命令"阶段
-echo "─── 检查全局 workflow 命令 ───"
-# 检测 workflow 命令是否已在 PATH 中可用，输出重定向到 /dev/null 并屏蔽错误，仅用于判断存在性
+# 1. 兼容 Python：安装动作和项目写入前必须确认 Python 3.11+；没有时只说明，不代装
+PYTHON_BIN=""
+for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+        if "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+            PYTHON_BIN="$(command -v "${candidate}")"
+            break
+        fi
+    fi
+done
+if [ -z "${PYTHON_BIN}" ]; then
+    echo "错误：没有找到 Python 3.11 或更高版本。" >&2
+    echo "workflow 命令需要兼容的 Python 运行。请先自行安装，例如：" >&2
+    echo "  macOS:  brew install python@3.12" >&2
+    echo "  Debian/Ubuntu:  sudo apt install python3.12" >&2
+    echo "安装脚本不会自动替你安装 Python。本次未修改任何文件。" >&2
+    exit 1
+fi
+PYTHON_VERSION="$("${PYTHON_BIN}" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
+
+# 2. 已有同名命令身份核对：只有兼容的 Workflow Loop 才能复用
+EXISTING_WORKFLOW=""
+GLOBAL_NEEDED="yes"
 if command -v workflow >/dev/null 2>&1; then
-    # 告知用户 workflow 全局命令已存在，将直接复用，避免重复安装
-    echo "workflow 全局命令已存在，复用。"
-    # 将 workflow 命令名赋值给变量，后续统一通过变量调用，便于维护
-    WORKFLOW_CMD="workflow"
-# 进入 else 分支：workflow 命令不存在，需要安装
-else
-    # 告知用户 workflow 全局命令不存在，即将开始安装流程
-    echo "workflow 全局命令不存在，开始安装..."
-    # 优先检测 pipx 是否可用，pipx 是 Python CLI 工具的推荐安装方式，能隔离依赖避免污染系统环境
-    if command -v pipx >/dev/null 2>&1; then
-        # 告知用户选择 pipx 作为安装工具
-        echo "使用 pipx 安装..."
-        # 通过 pipx 安装 workflow-loop 包，pipx 会将其放入隔离虚拟环境并暴露 workflow 命令到 PATH
-        pipx install workflow-loop
-    # 若 pipx 不可用，退而检测 uv 是否可用，uv 是更快的 Python 工具链管理器
-    elif command -v uv >/dev/null 2>&1; then
-        # 告知用户选择 uv 作为安装工具
-        echo "使用 uv tool 安装..."
-        # 通过 uv tool 安装 workflow-loop 包，uv 会将其放入隔离环境并暴露 workflow 命令
-        uv tool install workflow-loop
-    # pipx 和 uv 都不可用，无法继续安装
+    EXISTING_WORKFLOW="$(command -v workflow)"
+    EXISTING_IDENTITY="$("${EXISTING_WORKFLOW}" --version 2>/dev/null || true)"
+    if [ "${EXISTING_IDENTITY}" = "${PRODUCT_IDENTITY}" ]; then
+        GLOBAL_NEEDED="no"
     else
-        # 打印错误信息：找不到任一可用的安装工具，需要用户先安装前置依赖
-        echo "错误：找不到 pipx 或 uv，请先安装 pipx（推荐）或 uv。"
-        # 给出安装 pipx 的具体命令，方便用户直接复制执行
-        echo "  安装 pipx: python3 -m pip install --user pipx && python3 -m pipx ensurepath"
-        # 给出安装 uv 的具体命令，作为 pipx 的替代方案
-        echo "  安装 uv:   curl -LsSf https://astral.sh/uv/install.sh | sh"
-        # 以失败状态码退出，因为缺少前置依赖无法继续
+        echo "错误：PATH 中已有名为 workflow 的其它命令，安装已停止。" >&2
+        echo "  命令位置：${EXISTING_WORKFLOW}" >&2
+        echo "  检测到的身份：${EXISTING_IDENTITY:-（无法取得版本输出）}" >&2
+        echo "  本安装器只接受身份严格为 \"${PRODUCT_IDENTITY}\" 的命令。" >&2
+        echo "处理方法：改名或移除该命令，或调整 PATH 后重新运行安装脚本。" >&2
+        echo "本次未修改任何文件。" >&2
         exit 1
-    # 结束安装工具选择 if
     fi
-    # 安装完成后将 workflow 命令名赋值给变量，统一后续调用入口
-    WORKFLOW_CMD="workflow"
-    # 再次检测 workflow 命令是否真正可用，因为某些情况下安装后 PATH 尚未刷新
-    if ! command -v workflow >/dev/null 2>&1; then
-        # 警告用户：安装已完成但命令不在 PATH 中，需要重新加载 shell 或手动添加 PATH
-        echo "警告：安装完成但 workflow 命令不在 PATH 中。请重新打开终端或手动添加 PATH。"
-        # 提示 pipx ensurepath 可能需要重新加载 shell 才能生效，帮助用户排查
-        echo "  pipx ensurepath 可能需要重新加载 shell。"
-        # 以失败状态码退出，因为命令不可用则后续步骤无法执行
-        exit 1
-    # 结束 PATH 检查 if
-    fi
-# 结束 workflow 命令存在性检查 if
 fi
 
-# 打印空行作为视觉分隔
-echo ""
-# 打印阶段分隔横幅，进入"安装当前项目"阶段
-echo "─── 安装当前项目 ───"
-# 调用 workflow install-project 在当前项目下创建 .workflow_loop/ 运行骨架并写入 AGENTS.md 契约
-"${WORKFLOW_CMD}" install-project
+# 3. 平台资产选择（全局命令需要安装时才用到）
+UV_ASSET=""
+UV_SHA=""
+OS_NAME="$(uname -s)"
+ARCH_NAME="$(uname -m)"
+case "${OS_NAME}-${ARCH_NAME}" in
+    Darwin-arm64)  UV_ASSET="uv-aarch64-apple-darwin.tar.gz";      UV_SHA="${SHA_DARWIN_ARM64}" ;;
+    Darwin-x86_64) UV_ASSET="uv-x86_64-apple-darwin.tar.gz";       UV_SHA="${SHA_DARWIN_X64}" ;;
+    Linux-x86_64)  UV_ASSET="uv-x86_64-unknown-linux-gnu.tar.gz";  UV_SHA="${SHA_LINUX_X64}" ;;
+    Linux-aarch64) UV_ASSET="uv-aarch64-unknown-linux-gnu.tar.gz"; UV_SHA="${SHA_LINUX_ARM64}" ;;
+    *)
+        if [ "${GLOBAL_NEEDED}" = "yes" ]; then
+            fail "暂不支持的平台组合：${OS_NAME} ${ARCH_NAME}。本次未修改任何文件。"
+        fi
+        ;;
+esac
 
-# 打印空行作为视觉分隔
+# 4. SHA-256 校验工具
+SHA_CMD=""
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA_CMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    SHA_CMD="shasum -a 256"
+else
+    [ "${GLOBAL_NEEDED}" = "yes" ] && fail "找不到 sha256sum 或 shasum，无法校验下载文件。本次未修改任何文件。"
+fi
+
+# 5. 已有兼容 uv 检测（版本完全相同才复用；不覆盖用户已有的其它 uv）
+REUSE_UV=""
+if command -v uv >/dev/null 2>&1; then
+    if [ "$(uv --version 2>/dev/null | awk '{print $2}')" = "${UV_VERSION}" ]; then
+        REUSE_UV="$(command -v uv)"
+    fi
+fi
+
+# 6. PATH 与终端配置：确定写入前的实际持久修改位置
+PATH_CHANGE_NEEDED="no"
+case ":${PATH}:" in
+    *":${UV_TOOL_BIN_DIR}:"*) ;;
+    *) [ "${GLOBAL_NEEDED}" = "yes" ] && PATH_CHANGE_NEEDED="yes" ;;
+esac
+if [ "${PATH_CHANGE_NEEDED}" = "yes" ]; then
+    case "${SHELL:-}" in
+        */zsh)  SHELL_CONFIG_FILE="${HOME}/.zshrc" ;;
+        */bash) SHELL_CONFIG_FILE="${HOME}/.bashrc" ;;
+        */fish) SHELL_CONFIG_FILE="${HOME}/.config/fish/config.fish" ;;
+        *)
+            fail "无法确定你的 Shell 启动配置文件（SHELL=${SHELL:-未设置}），不能在写入前确定 PATH 修改位置。本次未修改任何文件。"
+            ;;
+    esac
+fi
+
+# ─────────────────────────────────────────────
+# 完整写入范围披露 + 一次确认
+# ─────────────────────────────────────────────
+echo "当前项目根目录（安装器严格使用当前目录，不向上猜测）："
+echo "  ${PROJECT_ROOT}"
 echo ""
-# 打印安装完成横幅，告知用户整个安装流程已结束
+echo "本机 Python：${PYTHON_BIN}（${PYTHON_VERSION}）"
+echo ""
+echo "本次安装的检查与可能写入范围："
+echo "  项目侧由安装包内的 Python 入口统一检查，不由 Shell 根据目录或文字猜测："
+echo "    已完整安装 ${PRODUCT_VERSION}：项目文件零修改"
+echo "    干净未安装：写入以下固定范围"
+echo "      ${AGENTS_MD}（存在则整份覆盖，不合并；失败时由安装事务恢复）"
+echo "      ${WF_DIR}/（写入模板仓库、规范仓库和安装版本标记）"
+echo "      ${PROJECT_ROOT}/.workflow_loop_install_tx/（一次性安装事务目录，成功后删除）"
+echo "    骨架残缺或版本异常：在写入项目文件前停止"
+if [ "${GLOBAL_NEEDED}" = "yes" ]; then
+    echo "  电脑侧："
+    echo "    全局工具环境：${UV_TOOL_DIR}/${PRODUCT_NAME}/"
+    echo "    workflow 可执行文件：${UV_TOOL_BIN_DIR}/workflow"
+    if [ -n "${REUSE_UV}" ]; then
+        echo "    安装工具：复用本机已有的 uv ${UV_VERSION}（${REUSE_UV}）"
+    else
+        echo "    安装工具：下载固定版本 uv ${UV_VERSION}（${UV_ASSET}）到本次临时目录，校验后使用，结束时删除"
+    fi
+    if [ "${PATH_CHANGE_NEEDED}" = "yes" ]; then
+        echo "    PATH 修改：把 ${UV_TOOL_BIN_DIR} 加入 ${SHELL_CONFIG_FILE}"
+    else
+        echo "    PATH 修改：无需修改（命令目录已在 PATH 中）"
+    fi
+else
+    echo "  电脑侧：全局命令无修改（已存在兼容的 ${PRODUCT_IDENTITY}）"
+fi
+echo ""
+echo "临时下载目录只在确认后创建，安装结束时删除。"
+echo ""
+
+# 从当前终端读取确认；通过管道执行时不能读取承载脚本正文的标准输入
+if [ ! -e /dev/tty ] || [ ! -r /dev/tty ]; then
+    fail "无法取得交互终端（/dev/tty），不能读取安装确认。请在交互终端中运行安装命令。本次未修改任何文件。"
+fi
+printf "确认以上完整写入范围并开始安装？[y/N] "
+read -r response < /dev/tty
+case "${response}" in
+    [yY][eE][sS]|[yY]) echo "确认通过，开始安装..." ;;
+    *)
+        echo "已取消。未下载任何内容，未修改任何文件。"
+        exit 0
+        ;;
+esac
+echo ""
+
+# ─────────────────────────────────────────────
+# 确认后：准备临时目录与安装工具
+# ─────────────────────────────────────────────
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workflow_loop_install.XXXXXX")"
+
+UV_BIN=""
+if [ "${GLOBAL_NEEDED}" = "yes" ]; then
+    echo "─── 安装全局 workflow 命令 ───"
+    if [ -n "${REUSE_UV}" ]; then
+        UV_BIN="${REUSE_UV}"
+        echo "复用本机已有的 uv ${UV_VERSION}。"
+    else
+        echo "下载 uv ${UV_VERSION}（${UV_ASSET}）..."
+        curl -fsSL --proto '=https' -o "${TMP_DIR}/${UV_ASSET}" "${UV_BASE_URL}/${UV_ASSET}" \
+            || fail "uv 下载失败。已删除临时内容，本次未修改任何文件。"
+        echo "${UV_SHA}  ${UV_ASSET}" >"${TMP_DIR}/${UV_ASSET}.sha256"
+        (cd "${TMP_DIR}" && ${SHA_CMD} -c "${UV_ASSET}.sha256" >/dev/null 2>&1) \
+            || fail "uv 下载文件的 SHA-256 与脚本内置摘要不符。已删除临时内容，本次未修改任何文件。"
+        tar -xzf "${TMP_DIR}/${UV_ASSET}" -C "${TMP_DIR}" \
+            || fail "uv 解压失败。已删除临时内容，本次未修改任何文件。"
+        UV_BIN="$(find "${TMP_DIR}" -type f -name uv | head -1)"
+        [ -n "${UV_BIN}" ] || fail "解压后找不到 uv 可执行文件。已删除临时内容，本次未修改任何文件。"
+        ACTUAL_UV_VERSION="$("${UV_BIN}" --version | awk '{print $2}')"
+        [ "${ACTUAL_UV_VERSION}" = "${UV_VERSION}" ] \
+            || fail "下载的 uv 版本是 ${ACTUAL_UV_VERSION}，期望 ${UV_VERSION}。已删除临时内容，本次未修改任何文件。"
+    fi
+
+    # 显式使用已检查的本机 Python；禁止 uv 托管或下载 Python
+    echo "安装 ${PRODUCT_NAME}==${PRODUCT_VERSION}..."
+    if ! "${UV_BIN}" tool install "${PRODUCT_NAME}==${PRODUCT_VERSION}" \
+        --python "${PYTHON_BIN}" --no-managed-python --no-python-downloads; then
+        rollback_global
+        fail "全局命令安装失败。已删除临时内容，项目保持未修改。"
+    fi
+    INSTALLED_GLOBAL="yes"
+
+    # 从实际命令目录复核身份；不要求用户重开终端
+    ACTUAL_BIN_DIR="$("${UV_BIN}" tool dir --bin)"
+    if [ "${ACTUAL_BIN_DIR}" != "${UV_TOOL_BIN_DIR}" ]; then
+        rollback_global
+        fail "实际命令目录 ${ACTUAL_BIN_DIR} 与确认时披露的 ${UV_TOOL_BIN_DIR} 不一致。已回滚，项目保持未修改。"
+    fi
+    WORKFLOW_BIN="${UV_TOOL_BIN_DIR}/workflow"
+    INSTALLED_IDENTITY="$("${WORKFLOW_BIN}" --version 2>/dev/null || true)"
+    if [ "${INSTALLED_IDENTITY}" != "${PRODUCT_IDENTITY}" ]; then
+        rollback_global
+        fail "安装后的身份复核失败：得到 \"${INSTALLED_IDENTITY}\"，期望 \"${PRODUCT_IDENTITY}\"。已回滚，项目保持未修改。"
+    fi
+    echo "全局命令已安装：${WORKFLOW_BIN}（${INSTALLED_IDENTITY}）"
+
+    # PATH 处理：写入预检时已经确定的配置文件，不再让安装工具二次猜测 Shell。
+    if [ "${PATH_CHANGE_NEEDED}" = "yes" ]; then
+        if [ -f "${SHELL_CONFIG_FILE}" ]; then
+            SHELL_CONFIG_BACKUP="${TMP_DIR}/shell_config.bak"
+            cp "${SHELL_CONFIG_FILE}" "${SHELL_CONFIG_BACKUP}"
+            SHELL_CONFIG_ORIGIN="existing"
+        else
+            SHELL_CONFIG_ORIGIN="missing"
+        fi
+
+        case "${SHELL_CONFIG_FILE}" in
+            */config.fish)
+                FISH_BIN_DIR="${UV_TOOL_BIN_DIR//\\/\\\\}"
+                FISH_BIN_DIR="${FISH_BIN_DIR//\'/\\\'}"
+                PATH_CONFIG_LINE="fish_add_path '${FISH_BIN_DIR}'"
+                ;;
+            *)
+                printf -v QUOTED_BIN_DIR '%q' "${UV_TOOL_BIN_DIR}"
+                PATH_CONFIG_LINE="export PATH=${QUOTED_BIN_DIR}:\"\$PATH\""
+                ;;
+        esac
+        if ! printf '\n# workflow-loop %s\n%s\n' "${PRODUCT_VERSION}" "${PATH_CONFIG_LINE}" >>"${SHELL_CONFIG_FILE}"; then
+            rollback_global
+            fail "PATH 更新失败。已回滚本次全局安装，项目保持未修改。"
+        fi
+        echo "已把 ${UV_TOOL_BIN_DIR} 加入 ${SHELL_CONFIG_FILE}（对后续新终端生效）。"
+    fi
+else
+    WORKFLOW_BIN="${EXISTING_WORKFLOW}"
+    echo "─── 全局命令无修改 ───"
+    echo "复用已有命令：${WORKFLOW_BIN}"
+fi
+echo ""
+
+# ─────────────────────────────────────────────
+# 项目检查与安装：始终由一次性事务调用包内 Python 权威入口。
+# 重复安装时，该入口确认骨架完整后直接返回，项目文件保持零修改。
+# ─────────────────────────────────────────────
+echo "─── 检查并安装当前项目 ───"
+TX_FILE="${TMP_DIR}/install_transaction.json"
+cat >"${TX_FILE}" <<EOF
+{
+  "product": "${PRODUCT_NAME}",
+  "version": "${PRODUCT_VERSION}",
+  "project_root": "${PROJECT_ROOT}",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)",
+  "used": false,
+  "allowed_paths": ["AGENTS.md", ".workflow_loop"]
+}
+EOF
+if ! (cd "${PROJECT_ROOT}" && "${WORKFLOW_BIN}" _install-project --transaction "${TX_FILE}"); then
+    rollback_global
+    fail "项目检查或安装失败。本次电脑侧修改已回滚；项目侧由安装事务负责恢复。"
+fi
+
+echo ""
 echo "═══ 安装完成 ═══"
-# 提示用户下一步：启动 Codex 或 OpenCode 智能体并提出需求即可开始使用
 echo "启动 Codex / OpenCode 并提出需求即可。"
-# 说明智能体的工作原理：读取 AGENTS.md 契约后自动调用 workflow start 进入工作流循环
 echo "智能体会读取 AGENTS.md 并自动调用 workflow start。"

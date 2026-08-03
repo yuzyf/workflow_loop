@@ -1,10 +1,20 @@
 import os
 import shutil
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 # spike stage 的临时代码、样本和原始输出目录（相对项目根）
 # spike stage on_advance 时删除这个目录下的所有内容
 SPIKE_TMP_DIR = os.path.join(".workflow_loop", "spike_tmp")
+
+
+# 阶段材料说明：relative_path 相对 .workflow_loop/；None 表示该阶段没有这类材料，
+# missing_note 用直白话明示"无"，不打印不存在的伪路径。
+@dataclass
+class MaterialSpec:
+    relative_path: str | None
+    purpose: str
+    missing_note: str = ""
 
 
 # Stage 策略基类（ABC）
@@ -77,6 +87,49 @@ class StageStrategy(ABC):
     # 例如 impl 阶段在实施计划之外，还要加载代码开发规范。
     def additional_standard_doc_paths(self) -> list[str]:
         return []
+
+    # 统一阶段材料清单：按当前阶段配置生成模板、工作规范和附加材料的说明。
+    # 没有模板或规范时返回明示"无"的项，不创建伪路径。
+    # 所有环节共用这一个接口；新增环节不需要在命令入口复制拼接逻辑。
+    def materials(self) -> list[MaterialSpec]:
+        specs: list[MaterialSpec] = []
+        template_path = self.prompt_doc_path()
+        specs.append(
+            MaterialSpec(
+                relative_path=template_path,
+                purpose="当前阶段产物文档模板：规定最终文档应有的章节、字段和内容边界",
+                missing_note="" if template_path else "本阶段没有产物文档模板（不生成独立正式产物）",
+            )
+        )
+        standard_path = self.standard_doc_path()
+        specs.append(
+            MaterialSpec(
+                relative_path=standard_path,
+                purpose="当前阶段工作规范：规定 AI 怎样调查、讨论、执行和检查",
+                missing_note="" if standard_path else "本阶段没有阶段工作规范",
+            )
+        )
+        for extra_template, extra_standard in self.additional_doc_paths():
+            specs.append(
+                MaterialSpec(
+                    relative_path=extra_template,
+                    purpose="附加产物文档模板",
+                )
+            )
+            specs.append(
+                MaterialSpec(
+                    relative_path=extra_standard,
+                    purpose="附加阶段工作规范",
+                )
+            )
+        for extra_standard in self.additional_standard_doc_paths():
+            specs.append(
+                MaterialSpec(
+                    relative_path=extra_standard,
+                    purpose="附加开发规范：本阶段动手实现时必须遵守的代码写法",
+                )
+            )
+        return specs
 
     # 该 stage 的指令文本，打印给 AI 看
     @abstractmethod

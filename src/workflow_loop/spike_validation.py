@@ -2,6 +2,7 @@ import os
 import re
 from dataclasses import dataclass
 
+from . import artifact_paths as artifact_paths_mod
 from . import state as state_mod
 from . import verification as verification_mod
 
@@ -219,9 +220,11 @@ def _detail_path_from_link(project_root: str, value: str) -> tuple[str | None, s
 
     if rel_path.startswith(".."):
         return (None, "结论文档路径不能离开 spec/ 目录")
-    if not re.fullmatch(r"spec/spike_[a-z0-9_]+\.md", rel_path):
-        return (None, "结论文档文件名必须是 spec/spike_<english-name>.md")
-    if rel_path == os.path.join("spec", "spike_index.md"):
+    # 结论文档使用稳定中文文件标识：spec/穿刺_<穿刺项文件标识>.md
+    normalized = rel_path.replace(os.sep, "/")
+    if not re.fullmatch(r"spec/穿刺_[A-Za-z0-9_\-一-鿿㐀-䶿]+\.md", normalized):
+        return (None, "结论文档文件名必须是 spec/穿刺_<穿刺项文件标识>.md")
+    if normalized == artifact_paths_mod.SPIKE_INDEX_DOC:
         return (None, "穿刺清单不能作为结论文档")
     return (rel_path, None)
 
@@ -241,9 +244,9 @@ def validate_spike_stage(project_root: str) -> tuple[bool, str]:
     if state is None:
         return (False, "找不到当前工作流状态")
 
-    index_path = os.path.join(project_root, "spec", "spike_index.md")
+    index_path = os.path.join(project_root, artifact_paths_mod.SPIKE_INDEX_DOC)
     if not os.path.exists(index_path):
-        return (False, "spec/spike_index.md 不存在")
+        return (False, f"{artifact_paths_mod.SPIKE_INDEX_DOC} 不存在")
 
     workflow_id, items, errors = parse_spike_index(index_path)
     if workflow_id and workflow_id != state.workflow_id:

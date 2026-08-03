@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import os
 import re
 
+from .topic import topic_paths
+
 
 TEST_METHODS = {
     "自动化测试",
@@ -131,7 +133,7 @@ def _table_rows(content: str) -> tuple[list[str], list[list[str]]]:
 def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:
     """读取一个主题测试计划中的 AC、TC 和测试方式。"""
 
-    relative_path = os.path.join("qa", f"{topic}_plan.md")
+    relative_path = topic_paths(project_root, topic)["test_plan"]
     full_path = os.path.join(project_root, relative_path)
     if not os.path.isfile(full_path):
         raise ValueError(f"缺少测试计划文档: {relative_path}")
@@ -325,18 +327,61 @@ def _id_and_name(value: str, expected_prefix: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2).strip()
 
 
+# 各语言真实测试定义的识别模式：非 Python 语言的 Workflow-Test 注释必须紧邻
+# 其中之一，才算写在真实测试函数、测试类或测试场景上；游离注释一律拒绝。
+TEST_DEFINITION_PATTERNS = [
+    # C / C++ / Qt（GoogleTest、QtTest）
+    re.compile(r"\bTEST(?:_[A-Z]+)?\s*\("),
+    re.compile(r"\bvoid\s+(?:test|tst_)\w*\s*\("),
+    re.compile(r"\bQTEST_(?:MAIN|APPLESS_MAIN|GUILESS_MAIN)\b"),
+    # JavaScript / TypeScript（jest、vitest、mocha、playwright）
+    re.compile(r"\b(?:it|test|describe)(?:\.\w+)?\s*\("),
+    # Go
+    re.compile(r"\bfunc\s+Test\w+\s*\("),
+    # Rust
+    re.compile(r"#\[(?:tokio::)?test\]"),
+    # Java / Kotlin（JUnit）
+    re.compile(r"@Test\b"),
+    # Ruby（rspec / minitest）
+    re.compile(r"\b(?:it|describe|def\s+test_)\b"),
+    # Shell bats
+    re.compile(r"^@test\s"),
+]
+# 标识注释块之后向下查找真实测试定义的行数上限
+DEFINITION_LOOKAHEAD_LINES = 14
+
+
+def _near_test_definition(lines: list[str], marker_index: int) -> bool:
+    """判断标识注释块之后是否紧跟真实测试定义。"""
+    for line in lines[marker_index : marker_index + DEFINITION_LOOKAHEAD_LINES]:
+        for pattern in TEST_DEFINITION_PATTERNS:
+            if pattern.search(line):
+                return True
+    return False
+
+
 def _parse_marker_lines(
     lines: list[str],
     relative_path: str,
     *,
     line_offset: int = 0,
     require_comment: bool = False,
+    require_definition: bool = False,
+    errors: list[str] | None = None,
 ) -> list[WorkflowTestMarker]:
     markers: list[WorkflowTestMarker] = []
     for index, line in enumerate(lines):
         if "Workflow-Test" not in line:
             continue
-        if require_comment and re.match(r"^\s*(?:#|/{2,}|/\*+|\*+)", line) is None:
+        if require_comment and re.match(r"^\s*(?:#|/{2,}|/\*+|\*+|--|<!--)", line) is None:
+            # 字符串或普通代码中的 Workflow-Test 字样不是追踪标识
+            continue
+        if require_definition and not _near_test_definition(lines, index + 1):
+            if errors is not None:
+                errors.append(
+                    f"{relative_path}:{line_offset + index + 1} Workflow-Test 标识没有紧邻"
+                    "真实测试函数、测试类或测试场景（游离注释不能作为正式登记入口）"
+                )
             continue
         fields: dict[str, str] = {}
         for raw_line in lines[index + 1 : index + 12]:
@@ -351,6 +396,11 @@ def _parse_marker_lines(
         test_value = _id_and_name(fields.get("测试项", ""), "TC-")
         criterion_value = _id_and_name(fields.get("验收条件", ""), "AC-")
         if test_value is None or criterion_value is None:
+            if errors is not None:
+                errors.append(
+                    f"{relative_path}:{line_offset + index + 1} Workflow-Test 标识缺少"
+                    "完整的测试项（TC-xx 名称）或验收条件（AC-xx 名称）"
+                )
             continue
         markers.append(
             WorkflowTestMarker(
@@ -371,7 +421,11 @@ def _parse_marker_lines(
     return markers
 
 
-def _parse_python_markers(content: str, relative_path: str) -> list[WorkflowTestMarker]:
+def _parse_python_markers(
+    content: str,
+    relative_path: str,
+    errors: list[str] | None = None,
+) -> list[WorkflowTestMarker]:
     """Python 只接受真实测试函数或测试类的文档字符串。"""
     try:
         tree = ast.parse(content)
@@ -402,6 +456,7 @@ def _parse_python_markers(content: str, relative_path: str) -> list[WorkflowTest
             docstring.splitlines(),
             relative_path,
             line_offset=first_statement.lineno - 1,
+            errors=errors,
         )
         if len(parsed) > 1:
             raise ValueError(
@@ -411,14 +466,20 @@ def _parse_python_markers(content: str, relative_path: str) -> list[WorkflowTest
     return markers
 
 
-def _parse_markers_from_file(project_root: str, relative_path: str) -> list[WorkflowTestMarker]:
+def _parse_markers_from_file(
+    project_root: str,
+    relative_path: str,
+    errors: list[str] | None = None,
+) -> list[WorkflowTestMarker]:
     content = _read_text(project_root, relative_path)
     if relative_path.lower().endswith(".py"):
-        return _parse_python_markers(content, relative_path)
+        return _parse_python_markers(content, relative_path, errors)
     return _parse_marker_lines(
         content.splitlines(),
         relative_path,
         require_comment=True,
+        require_definition=True,
+        errors=errors,
     )
 
 
@@ -436,11 +497,26 @@ def validate_workflow_test_markers(
         return True, "当前工作流没有自动化测试项，无需 Workflow-Test 标识"
 
     markers: list[WorkflowTestMarker] = []
+    marker_errors: list[str] = []
     try:
         for relative_path in _test_source_paths(project_root):
-            markers.extend(_parse_markers_from_file(project_root, relative_path))
+            markers.extend(
+                _parse_markers_from_file(project_root, relative_path, marker_errors)
+            )
     except ValueError as exc:
         return False, str(exc)
+    if marker_errors:
+        return False, "；".join(marker_errors)
+
+    # 当前主题的每个标识都必须完整对应现有测试项；未知测试项和错误名称一律拒绝
+    expected_by_key = {(item.topic, item.test_id): item for item in expected_items}
+    for marker in markers:
+        if marker.topic in topics and (marker.topic, marker.test_id) not in expected_by_key:
+            return (
+                False,
+                f"{marker.path}:{marker.line} 标识引用了当前测试计划中不存在的测试项: "
+                f"{marker.topic} / {marker.test_id}",
+            )
 
     for item in expected_items:
         candidates = [
@@ -453,7 +529,6 @@ def validate_workflow_test_markers(
                 False,
                 f"测试代码缺少 Workflow-Test 标识: {item.topic} / {item.test_id} {item.test_name}",
             )
-        valid = []
         errors = []
         for marker in candidates:
             marker_errors = []
@@ -475,9 +550,8 @@ def validate_workflow_test_markers(
                 marker_errors.append("代码入口缺少具体内容")
             if marker_errors:
                 errors.append(f"{marker.path}:{marker.line} " + "；".join(marker_errors))
-            else:
-                valid.append(marker)
-        if not valid:
+        # 同一测试项的多个标识必须全部完整正确；部分有效的重复标识不能被忽略
+        if errors:
             return False, f"{item.topic} / {item.test_id} 的标识不完整: {'；'.join(errors)}"
 
     return True, f"{len(expected_items)} 个自动化测试项都有完整 Workflow-Test 标识"

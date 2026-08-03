@@ -80,11 +80,11 @@ def _detail_document(
 
 def _setup_valid_project(tmp_path, intent="from_scratch"):
     _write(
-        tmp_path / "spec" / "product.md",
-        "# Product\n\n[功能](./feature_example.md)\n",
+        tmp_path / "spec" / "产品总说明.md",
+        "# Product\n\n[功能](./功能_示例.md)\n",
     )
-    _write(tmp_path / "spec" / "feature_example.md", "# 【功能】Example\n")
-    _write(tmp_path / "spec" / "architecture_code_design.md", "# Architecture\n")
+    _write(tmp_path / "spec" / "功能_示例.md", "# 【功能】Example\n")
+    _write(tmp_path / "spec" / "代码架构设计.md", "# Architecture\n")
 
     product_hash, product_paths = compute_product_design_hash(str(tmp_path))
     state = WorkflowState(
@@ -102,7 +102,7 @@ def _setup_valid_project(tmp_path, intent="from_scratch"):
     )
     save_state(str(tmp_path), state)
     _write(
-        tmp_path / "spec" / "spike_index.md",
+        tmp_path / "spec" / "穿刺清单.md",
         """# 【穿刺】穿刺清单
 
 - 工作流编号：wf-1
@@ -112,7 +112,7 @@ def _setup_valid_project(tmp_path, intent="from_scratch"):
 - 真实场景：用户执行真实业务操作
 - 要验证的不确定性：接口实际返回哪些字段
 - 验证结果用于决定什么：决定接口解析和错误处理
-- 结论文档：[确认真实接口返回](./spike_real_api_response.md)
+- 结论文档：[确认真实接口返回](./穿刺_真实接口返回.md)
 - 穿刺状态：已确认
 - 是否阻塞后续：否
 - 产品设计影响：无需修改
@@ -121,13 +121,23 @@ def _setup_valid_project(tmp_path, intent="from_scratch"):
 """,
     )
     _write(
-        tmp_path / "spec" / "spike_real_api_response.md",
+        tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(),
     )
     return state
 
 
 def test_validate_spike_stage_accepts_complete_current_run(tmp_path):
+    """Workflow-Test
+    主题：产品和代码设计及缺陷穿刺结论保持真实一致
+    测试项：TC-05 穿刺候选执行和跳过符合真实场景
+    验收条件：AC-05 穿刺只验证真正未知的技术事实
+    测试方式：自动化测试 + 人工验收
+    测试层级：模块测试
+    测试目标：当前工作流的真实执行记录、观察结果和非阻塞结论完整时允许推进
+    测试入口：tests/test_spike_validation.py::test_validate_spike_stage_accepts_complete_current_run
+    代码入口：workflow_loop.spike_validation.validate_spike_stage
+    """
     _setup_valid_project(tmp_path)
 
     ok, detail = validate_spike_stage(str(tmp_path))
@@ -138,7 +148,7 @@ def test_validate_spike_stage_accepts_complete_current_run(tmp_path):
 
 def test_validate_spike_stage_rejects_old_workflow_document(tmp_path):
     _setup_valid_project(tmp_path)
-    index_path = tmp_path / "spec" / "spike_index.md"
+    index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(index_path.read_text().replace("工作流编号：wf-1", "工作流编号：old-wf"), encoding="utf-8")
 
     ok, detail = validate_spike_stage(str(tmp_path))
@@ -149,10 +159,10 @@ def test_validate_spike_stage_rejects_old_workflow_document(tmp_path):
 
 def test_validate_spike_stage_rejects_blocking_item(tmp_path):
     _setup_valid_project(tmp_path)
-    index_path = tmp_path / "spec" / "spike_index.md"
+    index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(index_path.read_text().replace("是否阻塞后续：否", "是否阻塞后续：是"), encoding="utf-8")
     _write(
-        tmp_path / "spec" / "spike_real_api_response.md",
+        tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(blocked="是"),
     )
 
@@ -163,14 +173,24 @@ def test_validate_spike_stage_rejects_blocking_item(tmp_path):
 
 
 def test_validate_spike_stage_requires_design_hash_change(tmp_path):
+    """Workflow-Test
+    主题：产品和代码设计及缺陷穿刺结论保持真实一致
+    测试项：TC-06 证据冲突阻止推进并同步设计
+    验收条件：AC-06 证据冲突时不能自行定论
+    测试方式：自动化测试 + 人工验收
+    测试层级：模块测试
+    测试目标：结论声称需要更新代码设计但文档哈希未变化时阻止推进
+    测试入口：tests/test_spike_validation.py::test_validate_spike_stage_requires_design_hash_change
+    代码入口：workflow_loop.spike_validation.validate_spike_stage
+    """
     _setup_valid_project(tmp_path)
-    index_path = tmp_path / "spec" / "spike_index.md"
+    index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(index_path.read_text().replace("代码设计影响：无需修改", "代码设计影响：需要修改"), encoding="utf-8")
     _write(
-        tmp_path / "spec" / "spike_real_api_response.md",
+        tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(
             code_impact="需要修改",
-            code_location="spec/architecture_code_design.md 第 6.2 节",
+            code_location="spec/代码架构设计.md 第 6.2 节",
         ),
     )
 
@@ -182,16 +202,16 @@ def test_validate_spike_stage_requires_design_hash_change(tmp_path):
 
 def test_validate_spike_stage_accepts_changed_code_design(tmp_path):
     _setup_valid_project(tmp_path)
-    index_path = tmp_path / "spec" / "spike_index.md"
+    index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(index_path.read_text().replace("代码设计影响：无需修改", "代码设计影响：需要修改"), encoding="utf-8")
     _write(
-        tmp_path / "spec" / "spike_real_api_response.md",
+        tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(
             code_impact="需要修改",
-            code_location="spec/architecture_code_design.md 第 6.2 节",
+            code_location="spec/代码架构设计.md 第 6.2 节",
         ),
     )
-    _write(tmp_path / "spec" / "architecture_code_design.md", "# Architecture changed\n")
+    _write(tmp_path / "spec" / "代码架构设计.md", "# Architecture changed\n")
 
     ok, detail = validate_spike_stage(str(tmp_path))
 
@@ -200,7 +220,7 @@ def test_validate_spike_stage_accepts_changed_code_design(tmp_path):
 
 def test_validate_spike_stage_requires_unresolved_risk_fields(tmp_path):
     _setup_valid_project(tmp_path)
-    index_path = tmp_path / "spec" / "spike_index.md"
+    index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(
         index_path.read_text()
         .replace("穿刺状态：已确认", "穿刺状态：仍未确认")
@@ -208,7 +228,7 @@ def test_validate_spike_stage_requires_unresolved_risk_fields(tmp_path):
         encoding="utf-8",
     )
     _write(
-        tmp_path / "spec" / "spike_real_api_response.md",
+        tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(
             result_status="仍未确认",
             unresolved="接口高并发限流阈值仍未知",
@@ -225,16 +245,16 @@ def test_validate_spike_stage_requires_unresolved_risk_fields(tmp_path):
 
 def test_validate_spike_stage_rejects_product_change_in_bugfix(tmp_path):
     _setup_valid_project(tmp_path, intent="bugfix")
-    index_path = tmp_path / "spec" / "spike_index.md"
+    index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(index_path.read_text().replace("产品设计影响：无需修改", "产品设计影响：需要修改"), encoding="utf-8")
     _write(
-        tmp_path / "spec" / "spike_real_api_response.md",
+        tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(
             product_impact="需要修改",
-            product_location="spec/feature_example.md 第 4 节",
+            product_location="spec/功能_示例.md 第 4 节",
         ),
     )
-    _write(tmp_path / "spec" / "feature_example.md", "# 【功能】Example changed\n")
+    _write(tmp_path / "spec" / "功能_示例.md", "# 【功能】Example changed\n")
 
     ok, detail = validate_spike_stage(str(tmp_path))
 
@@ -260,19 +280,19 @@ def test_validate_spike_stage_rejects_design_change_when_legacy_baseline_is_miss
     assert state is not None
     state.spike_baseline = SpikeBaselineState(legacy_unavailable=True)
     save_state(str(tmp_path), state)
-    index_path = tmp_path / "spec" / "spike_index.md"
+    index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(
         index_path.read_text().replace("代码设计影响：无需修改", "代码设计影响：需要修改"),
         encoding="utf-8",
     )
     _write(
-        tmp_path / "spec" / "spike_real_api_response.md",
+        tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(
             code_impact="需要修改",
-            code_location="spec/architecture_code_design.md 第 6.2 节",
+            code_location="spec/代码架构设计.md 第 6.2 节",
         ),
     )
-    _write(tmp_path / "spec" / "architecture_code_design.md", "# Architecture changed\n")
+    _write(tmp_path / "spec" / "代码架构设计.md", "# Architecture changed\n")
 
     ok, detail = validate_spike_stage(str(tmp_path))
 
