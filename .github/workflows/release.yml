@@ -88,7 +88,7 @@ jobs:
   prepublish-smoke:
     needs: build
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -151,7 +151,7 @@ jobs:
           export PATH="${UV_TOOL_BIN_DIR}:${PATH}"
           # 重复安装路径：两侧均已安装，零修改退出
           repeat_output="$(cd "$proj" && run_installer "$(printf 'y\n')")"
-          printf '%s\n' "$repeat_output" | grep -q "两侧均已安装"
+          printf '%s\n' "$repeat_output" | grep -q "当前项目已经安装，未修改任何文件"
           # 只缺项目侧：复用全局命令，为新项目补骨架
           project_only="$(mktemp -d)"
           cp install.sh "$project_only/"
@@ -209,7 +209,7 @@ jobs:
           [ "$identity" = "workflow-loop ${PRODUCT_VERSION}" ] || { echo "身份核对失败：$identity"; exit 1; }
           export PATH="${UV_TOOL_BIN_DIR}:${PATH}"
           repeat_output="$(cd "$proj" && run_installer "$(printf 'y\n')")"
-          printf '%s\n' "$repeat_output" | grep -q "两侧均已安装"
+          printf '%s\n' "$repeat_output" | grep -q "当前项目已经安装，未修改任何文件"
           project_only="$(mktemp -d)"
           cp install.sh "$project_only/"
           (cd "$project_only" && run_installer "$(printf 'y\n')")
@@ -240,7 +240,7 @@ jobs:
           if ($identity -ne "workflow-loop $env:PRODUCT_VERSION") { Write-Error "身份核对失败：$identity"; exit 1 }
           $env:Path = "$env:UV_TOOL_BIN_DIR;$env:Path"
           $repeat = ("y" | pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1 | Out-String)
-          if ($repeat -notmatch "两侧均已安装") { Write-Error "完整重复安装没有零修改退出"; exit 1 }
+          if ($repeat -notmatch "当前项目已经安装，未修改任何文件") { Write-Error "完整重复安装没有零修改退出"; exit 1 }
           Pop-Location
           $projectOnly = Join-Path $env:RUNNER_TEMP "smoke_pwsh_project_only"
           New-Item -ItemType Directory -Path $projectOnly | Out-Null
@@ -278,7 +278,7 @@ jobs:
           if ($identity -ne "workflow-loop $env:PRODUCT_VERSION") { Write-Error "身份核对失败：$identity"; exit 1 }
           $env:Path = "$env:UV_TOOL_BIN_DIR;$env:Path"
           $repeat = ("y" | powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 | Out-String)
-          if ($repeat -notmatch "两侧均已安装") { Write-Error "完整重复安装没有零修改退出"; exit 1 }
+          if ($repeat -notmatch "当前项目已经安装，未修改任何文件") { Write-Error "完整重复安装没有零修改退出"; exit 1 }
           Pop-Location
 
   # 全部通过后才创建带两个安装脚本的公开 GitHub Release
