@@ -7,8 +7,6 @@ name: release
 on:
   workflow_dispatch:
   push:
-    branches:
-      - "codex/three-platform-validation"
     tags:
       - "v0.1.0"
 
@@ -29,7 +27,7 @@ jobs:
           grep -q '__version__ = "0.1.0"' src/workflow_loop/__init__.py || { echo "__init__.py 版本不是 0.1.0"; fail=1; }
           grep -q 'PRODUCT_VERSION="0.1.0"' install.sh || { echo "install.sh 版本不是 0.1.0"; fail=1; }
           grep -q '\$ProductVersion = "0.1.0"' install.ps1 || { echo "install.ps1 版本不是 0.1.0"; fail=1; }
-          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             [ "${GITHUB_REF_NAME}" = "v0.1.0" ] || { echo "标签不是 v0.1.0"; fail=1; }
           fi
           exit $fail

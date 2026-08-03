@@ -584,6 +584,51 @@ def finalize_test_code_changes(
     return changed
 
 
+def accept_test_code_inventory(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> list[str]:
+    """在测试代码经用户确认时保存当时状态，供后续返回实施时区分旧修改。"""
+    valid, detail, manifest = validate_prepared(
+        project_root,
+        wf_state,
+        require_current_plan=False,
+    )
+    if not valid or manifest is None:
+        raise ValueError(detail)
+    before = manifest.get("test_code_inventory_before")
+    if not isinstance(before, dict):
+        raise ValueError("缺少 test_code 开始前的测试文件基线")
+    current = verification_mod.compute_test_related_file_hashes(project_root)
+    previous = manifest.get("test_code_inventory_after")
+    previous_paths = set(previous) if isinstance(previous, dict) else set()
+    all_paths = set(before) | set(current) | previous_paths
+    manifest["test_code_inventory_after"] = {
+        path: current.get(path)
+        for path in sorted(all_paths)
+    }
+    manifest["test_code_accepted_at"] = state_mod.now_iso()
+    _write_manifest(project_root, wf_state, manifest)
+    return sorted(all_paths)
+
+
+def _accepted_test_code_inventory(manifest: dict) -> dict[str, str | None]:
+    """读取最后确认的测试文件状态，并兼容确认时零变化的旧清单。"""
+    raw = manifest.get("test_code_inventory_after")
+    if not isinstance(raw, dict):
+        if manifest.get("test_code_changed_paths") != []:
+            return {}
+        raw = manifest.get("test_code_inventory_before")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        path: content_hash
+        for path, content_hash in raw.items()
+        if isinstance(path, str)
+        and (content_hash is None or isinstance(content_hash, str))
+    }
+
+
 def changed_paths_since_prepare(project_root: str, manifest: dict) -> list[str]:
     """实际变化始终和第一次项目清单比较，早期修改不会因再次准备消失。"""
     prepares = manifest.get("prepares", [])
@@ -627,13 +672,27 @@ def validate_implementation_changes(
     if not valid or manifest is None:
         return False, detail
     changed = changed_paths_since_prepare(project_root, manifest)
+    current = verification_mod.compute_project_file_hashes(project_root)
+    accepted_tests = _accepted_test_code_inventory(manifest)
+    unchanged_accepted_tests = {
+        path
+        for path in changed
+        if path in accepted_tests and current.get(path) == accepted_tests[path]
+    }
+    implementation_changes = sorted(set(changed) - unchanged_accepted_tests)
     planned = set(wf_state.rollback.planned_paths)
-    unexpected = sorted(set(changed) - planned)
+    unexpected = sorted(set(implementation_changes) - planned)
     if unexpected:
         return False, f"发现实施计划外的文件变化：{unexpected}"
-    if not changed:
+    if not implementation_changes:
         return False, "实施计划列出的文件没有相对回退基线发生变化"
-    return True, f"实施前回退副本完整，实际变化文件均在计划内：{changed}"
+    detail = f"实施前回退副本完整，实际变化文件均在计划内：{implementation_changes}"
+    if unchanged_accepted_tests:
+        detail += (
+            "；已确认且返回实施后未再变的测试文件已保留："
+            f"{sorted(unchanged_accepted_tests)}"
+        )
+    return True, detail
 
 
 def restore(project_root: str, wf_state: state_mod.WorkflowState) -> list[str]:

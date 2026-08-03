@@ -134,7 +134,7 @@ def test_final_architecture_rejects_missing_sync_conclusion(tmp_path):
     主题：主题验收、全量回归和最终同步完成后正式收工
     测试项：TC-06 最终代码设计映射真实实现
     验收条件：AC-06 最终代码设计反映真实交付
-    测试方式：自动化测试 + 人工验收
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：缺少最终同步结论的代码设计不能作为真实交付地图
     测试入口：tests/test_architecture_validation.py::test_final_architecture_rejects_missing_sync_conclusion
@@ -158,7 +158,7 @@ def test_update_code_design_rejects_product_document_change(tmp_path):
     主题：主题验收、全量回归和最终同步完成后正式收工
     测试项：TC-06 最终代码设计映射真实实现
     验收条件：AC-06 最终代码设计反映真实交付
-    测试方式：自动化测试 + 人工验收
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：最终同步发现产品文档变化时返回产品处理流程而不是自行改写结论
     测试入口：tests/test_architecture_validation.py::test_update_code_design_rejects_product_document_change

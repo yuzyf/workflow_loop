@@ -121,6 +121,80 @@ def test_adjusted_plan_keeps_first_backup_and_only_adds_trustworthy_paths(tmp_pa
     assert helper_backup.read_text(encoding="utf-8") == "old helper\n"
 
 
+def test_confirmed_test_inventory_keeps_first_backup(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-01 回退清单保存真实原内容和不存在记录
+    验收条件：AC-01 修改前保存真实恢复依据
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：另存已确认测试状态时不覆盖整轮作废所需的首次副本
+    测试入口：tests/test_rollback.py::test_confirmed_test_inventory_keeps_first_backup
+    代码入口：workflow_loop.rollback.accept_test_code_inventory
+    """
+    app = tmp_path / "src" / "app.py"
+    test_file = tmp_path / "tests" / "test_app.py"
+    _write(app, "old app\n")
+    _write(test_file, "old test\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    rollback.prepare_test_code_baseline(str(tmp_path), state)
+    manifest_path = tmp_path / state.rollback.manifest_path
+    before = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entry_before = before["entries"]["tests/test_app.py"].copy()
+    backup = manifest_path.parent / entry_before["backup_path"]
+    backup_hash = _sha256(backup)
+
+    test_file.write_text("confirmed test\n", encoding="utf-8")
+    rollback.finalize_test_code_changes(str(tmp_path), state)
+    rollback.accept_test_code_inventory(str(tmp_path), state)
+    after = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert after["entries"]["tests/test_app.py"] == entry_before
+    assert _sha256(backup) == backup_hash
+    assert backup.read_text(encoding="utf-8") == "old test\n"
+    assert after["test_code_inventory_after"]["tests/test_app.py"] == _sha256(
+        test_file
+    )
+
+
+def test_impl_reentry_allows_only_unchanged_confirmed_test_files(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-02 实施计划调整不覆盖最初副本
+    验收条件：AC-02 实施始终受当前确认计划约束
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：返回实施后保留未再变的已确认测试文件并拦截之后的新变化
+    测试入口：tests/test_rollback.py::test_impl_reentry_allows_only_unchanged_confirmed_test_files
+    代码入口：workflow_loop.rollback.validate_implementation_changes
+    """
+    app = tmp_path / "src" / "app.py"
+    test_file = tmp_path / "tests" / "test_app.py"
+    _write(app, "old app\n")
+    _write(test_file, "old test\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    rollback.prepare_test_code_baseline(str(tmp_path), state)
+
+    app.write_text("implemented\n", encoding="utf-8")
+    test_file.write_text("confirmed test\n", encoding="utf-8")
+    rollback.finalize_test_code_changes(str(tmp_path), state)
+    rollback.accept_test_code_inventory(str(tmp_path), state)
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+    assert valid is True, detail
+    assert "tests/test_app.py" in detail
+    assert "已确认且返回实施后未再变" in detail
+
+    test_file.write_text("changed after return\n", encoding="utf-8")
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is False
+    assert "实施计划外的文件变化" in detail
+    assert "tests/test_app.py" in detail
+
+
 def test_tampered_backup_blocks_restore_before_project_change(tmp_path):
     """Workflow-Test
     主题：项目修改可恢复且正式测试结果来自真实执行

@@ -2547,6 +2547,29 @@ def cmd_gate(args) -> None:
             topics=topics,
         )
 
+    # 只有测试代码的第三道门确认通过后，才保存可供后续实施复用的状态。
+    if stage_name == "test_code":
+        try:
+            accepted_test_paths = rollback_mod.accept_test_code_inventory(
+                project_root,
+                wf_state,
+            )
+        except ValueError as exc:
+            gate.user_confirmed = False
+            state_mod.save_state(project_root, wf_state)
+            print("═══ test_code 确认状态保存失败 ═══")
+            print(f"详情: {exc}")
+            print_next_step("修复测试代码回退记录后重新执行当前确认门")
+            return
+        journal_mod.append_entry(
+            project_root,
+            "已确认测试文件状态",
+            "user",
+            workflow_id=wf_state.workflow_id,
+            paths=accepted_test_paths,
+            manifest_hash=wf_state.rollback.manifest_hash,
+        )
+
     # 阶段确认前先写入固定的追踪表和缺陷状态；更新失败时不推进阶段。
     try:
         apply_stage_completion_updates(

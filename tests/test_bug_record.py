@@ -46,7 +46,7 @@ def test_topic_acceptance_keeps_bug_open_until_full_regression(tmp_path):
     主题：主题验收、全量回归和最终同步完成后正式收工
     测试项：TC-05 整体验收和缺陷关闭只接受用户决定
     验收条件：AC-05 整体验收由用户决定
-    测试方式：自动化测试 + 人工验收
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：主题验收通过后只追加结果链接并把缺陷标记为待全量回归
     测试入口：tests/test_bug_record.py::test_topic_acceptance_keeps_bug_open_until_full_regression
@@ -68,7 +68,7 @@ def test_regression_failure_reopens_bug_without_rewriting_reproduction(tmp_path)
     主题：主题验收、全量回归和最终同步完成后正式收工
     测试项：TC-05 整体验收和缺陷关闭只接受用户决定
     验收条件：AC-05 整体验收由用户决定
-    测试方式：自动化测试 + 人工验收
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：最终全量回归失败后缺陷恢复为处理中，且不能被提前关闭
     测试入口：tests/test_bug_record.py::test_regression_failure_reopens_bug_without_rewriting_reproduction
@@ -87,7 +87,7 @@ def test_regression_pass_waits_for_overall_acceptance(tmp_path):
     主题：主题验收、全量回归和最终同步完成后正式收工
     测试项：TC-05 整体验收和缺陷关闭只接受用户决定
     验收条件：AC-05 整体验收由用户决定
-    测试方式：自动化测试 + 人工验收
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：全量回归通过只进入待整体验收状态而不能自行关闭缺陷
     测试入口：tests/test_bug_record.py::test_regression_pass_waits_for_overall_acceptance
@@ -108,7 +108,7 @@ def test_overall_acceptance_closes_bug_and_preserves_reproduction(tmp_path):
     主题：主题验收、全量回归和最终同步完成后正式收工
     测试项：TC-05 整体验收和缺陷关闭只接受用户决定
     验收条件：AC-05 整体验收由用户决定
-    测试方式：自动化测试 + 人工验收
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：整体验收通过后缺陷才关闭，并且原复现事实和根因保持不变
     测试入口：tests/test_bug_record.py::test_overall_acceptance_closes_bug_and_preserves_reproduction
@@ -131,7 +131,7 @@ def test_bug_status_update_is_idempotent(tmp_path):
     主题：主题验收、全量回归和最终同步完成后正式收工
     测试项：TC-05 整体验收和缺陷关闭只接受用户决定
     验收条件：AC-05 整体验收由用户决定
-    测试方式：自动化测试 + 人工验收
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：同一用户决定重复登记不会重复追加状态或结果链接
     测试入口：tests/test_bug_record.py::test_bug_status_update_is_idempotent
