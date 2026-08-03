@@ -1,4 +1,4 @@
-import shlex
+import json
 import sys
 from pathlib import Path
 
@@ -25,14 +25,14 @@ def _pytest_command(entry: str) -> list[str]:
 def _write_test_documents(tmp_path, *, command_label="通过"):
     (tmp_path / "qa").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "qa" / f"{TOPIC}_plan.md").write_text(
+    (tmp_path / "qa" / f"{TOPIC}_测试计划.md").write_text(
         f"""# {TOPIC}测试计划
 
 ## 1. 验收条件覆盖
 
 | 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
 |---|---|---|---|---|---|---|
-| [AC-01：上传完成](../acceptance/{TOPIC}_plan.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证上传完成](#tc-01) | 无 | 自动化测试 | 检查上传结果 | 文件被保存 | 保留执行证据 |
+| [AC-01：上传完成](../acceptance/{TOPIC}_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证上传完成](#tc-01) | 无 | 自动化测试 | 检查上传结果 | 文件被保存 | 保留执行证据 |
 
 ## 2. 针对性回归范围
 
@@ -48,7 +48,7 @@ def _write_test_documents(tmp_path, *, command_label="通过"):
 
 ## 5. 上下游文档
 
-- 上游验收计划：[验收计划](../acceptance/{TOPIC}_plan.md)
+- 上游验收计划：[验收计划](../acceptance/{TOPIC}_验收计划.md)
 """,
         encoding="utf-8",
     )
@@ -68,7 +68,7 @@ def _write_test_documents(tmp_path, *, command_label="通过"):
 """,
         encoding="utf-8",
     )
-    (tmp_path / "qa" / "index.md").write_text(
+    (tmp_path / "qa" / "索引.md").write_text(
         f"""# 测试计划索引
 
 ## {WORKFLOW_ID}
@@ -77,7 +77,7 @@ def _write_test_documents(tmp_path, *, command_label="通过"):
 
 | 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
 |---|---|---|---|---|---|
-| 1 | {TOPIC} | 无 | [{TOPIC}验收计划](../acceptance/{TOPIC}_plan.md) | [{TOPIC}测试计划](./{TOPIC}_plan.md) | [{TOPIC}测试结果](./{TOPIC}_result.md) |
+| 1 | {TOPIC} | 无 | [{TOPIC}验收计划](../acceptance/{TOPIC}_验收计划.md) | [{TOPIC}测试计划](./{TOPIC}_测试计划.md) | [{TOPIC}测试结果](./{TOPIC}_测试结果.md) |
 """,
         encoding="utf-8",
     )
@@ -98,6 +98,16 @@ def _state(tmp_path):
 
 
 def test_prepare_registers_real_argv_and_plan_dependencies(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-04 正式任务按测试项独立登记
+    验收条件：AC-04 正式执行范围可以审查
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：测试项按参数数组、入口、依赖和超时独立登记
+    测试入口：tests/test_test_execution.py::test_prepare_registers_real_argv_and_plan_dependencies
+    代码入口：workflow_loop.test_execution.prepare_task
+    """
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
@@ -112,6 +122,16 @@ def test_prepare_registers_real_argv_and_plan_dependencies(tmp_path):
 
 
 def test_run_success_writes_current_record_but_not_formal_result(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-06 测试结果严格匹配当前机器记录
+    验收条件：AC-06 正式测试结果与机器记录一致
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：真实运行只产生机器事实而不由程序伪造正式结论文档
+    测试入口：tests/test_test_execution.py::test_run_success_writes_current_record_but_not_formal_result
+    代码入口：workflow_loop.test_execution.run_prepared_tasks
+    """
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
@@ -126,10 +146,20 @@ def test_run_success_writes_current_record_but_not_formal_result(tmp_path):
     assert task.current_record is not None
     assert task.current_record.exit_code == 0
     assert task.current_record.command == command
-    assert not (tmp_path / "qa" / f"{TOPIC}_result.md").exists()
+    assert not (tmp_path / "qa" / f"{TOPIC}_测试结果.md").exists()
 
 
 def test_rerun_keeps_current_success_without_executing_it_twice(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-04 正式任务按测试项独立登记
+    验收条件：AC-04 正式执行范围可以审查
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：已通过且未变化的登记任务不会被同一次阶段重复执行
+    测试入口：tests/test_test_execution.py::test_rerun_keeps_current_success_without_executing_it_twice
+    代码入口：workflow_loop.test_execution.run_prepared_tasks
+    """
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
@@ -142,12 +172,22 @@ def test_rerun_keeps_current_success_without_executing_it_twice(tmp_path):
 
 
 def test_failed_rerun_clears_previous_current_success_and_result(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-06 测试结果严格匹配当前机器记录
+    验收条件：AC-06 正式测试结果与机器记录一致
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：重新执行失败后旧通过记录和旧正式结果立即失效
+    测试入口：tests/test_test_execution.py::test_failed_rerun_clears_previous_current_success_and_result
+    代码入口：workflow_loop.test_execution.run_prepared_tasks
+    """
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     success_command = _pytest_command("tests/test_upload.py::test_upload")
     prepare_task(str(tmp_path), state, TOPIC, "TC-01", success_command)
     assert run_prepared_tasks(str(tmp_path), state, parallelism=1)[0].status == "passed"
-    (tmp_path / "qa" / f"{TOPIC}_result.md").write_text("旧的通过结果", encoding="utf-8")
+    (tmp_path / "qa" / f"{TOPIC}_测试结果.md").write_text("旧的通过结果", encoding="utf-8")
 
     test_path = tmp_path / "tests" / "test_upload.py"
     test_path.write_text(
@@ -163,10 +203,20 @@ def test_failed_rerun_clears_previous_current_success_and_result(tmp_path):
     assert attempts[0].status == "failed"
     assert task.status == "needs_action"
     assert task.current_record is None
-    assert not (tmp_path / "qa" / f"{TOPIC}_result.md").exists()
+    assert not (tmp_path / "qa" / f"{TOPIC}_测试结果.md").exists()
 
 
 def test_test_command_rejects_shell_operators():
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-04 正式任务按测试项独立登记
+    验收条件：AC-04 正式执行范围可以审查
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：拒绝把多条命令串成无法逐项审查的测试任务
+    测试入口：tests/test_test_execution.py::test_test_command_rejects_shell_operators
+    代码入口：workflow_loop.test_execution.validate_command
+    """
     assert validate_command(["pytest", "tests/test_upload.py"]) == (True, "")
     ok, detail = validate_command(["pytest", "tests", "&&", "echo", "bad"])
     assert ok is False
@@ -174,6 +224,16 @@ def test_test_command_rejects_shell_operators():
 
 
 def test_test_command_must_select_the_registered_test_entry():
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-04 正式任务按测试项独立登记
+    验收条件：AC-04 正式执行范围可以审查
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：实际命令必须精确选择登记入口且不能用临时代码冒充测试
+    测试入口：tests/test_test_execution.py::test_test_command_must_select_the_registered_test_entry
+    代码入口：workflow_loop.test_execution.validate_command_entries
+    """
     entry = "tests/test_upload.py::test_upload"
     ok, detail = validate_command_entries(
         [sys.executable, "-c", "raise SystemExit(0)"],
@@ -193,13 +253,29 @@ def test_test_command_must_select_the_registered_test_entry():
 
 
 def test_result_gate_matches_current_execution_record_and_command(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-06 测试结果严格匹配当前机器记录
+    验收条件：AC-06 正式测试结果与机器记录一致
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：正式结果逐字段匹配当前机器事实且篡改退出码会被门禁拒绝
+    测试入口：tests/test_test_execution.py::test_result_gate_matches_current_execution_record_and_command
+    代码入口：workflow_loop.artifact_validation.validate_test_execution_results
+    """
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
     prepare_task(str(tmp_path), state, TOPIC, "TC-01", command)
     assert run_prepared_tasks(str(tmp_path), state, parallelism=1)[0].status == "passed"
-    command_text = shlex.join(command)
-    (tmp_path / "qa" / f"{TOPIC}_result.md").write_text(
+    loaded = load_state(str(tmp_path))
+    record = loaded.stages["test_execution"].test_tasks[TOPIC]["TC-01"].current_record
+    assert record is not None
+    entry_text = json.dumps(record.test_entries, ensure_ascii=False, separators=(",", ":"))
+    command_text = json.dumps(record.command, ensure_ascii=False, separators=(",", ":"))
+    output_tail = json.dumps(record.output_tail, ensure_ascii=False)
+    environment = f"平台={record.platform}；可执行文件={record.executable}"
+    (tmp_path / "qa" / f"{TOPIC}_测试结果.md").write_text(
         f"""# 【主题测试结果】{TOPIC}
 
 - 工作流编号：{WORKFLOW_ID}
@@ -212,12 +288,24 @@ def test_result_gate_matches_current_execution_record_and_command(tmp_path):
 ### TC-01：验证上传完成
 
 - 对应验收条件：AC-01 上传完成
-- 测试入口：tests/test_upload.py::test_upload
+- 机器记录编号：{record.record_id}
+- 工作目录：项目根
+- 测试入口：{entry_text}
 - 执行命令：{command_text}
-- 退出码：0
+- 超时（秒）：{record.timeout_seconds}
+- 运行环境：{environment}
+- 开始时间：{record.started_at}
+- 结束时间：{record.finished_at}
+- 时长（秒）：{record.duration_seconds}
+- 退出码：{record.exit_code}
+- 输出摘要：{output_tail}
+- 输出哈希：{record.output_sha256}
+- 输出字节数：{record.output_bytes}
+- 产品代码哈希：{record.code_snapshot_hash}
+- 测试代码哈希：{record.test_code_hash}
 - 实际结果：命令退出码为 0，测试入口完成执行
 - 自动化测试结果：通过
-- 证据：State Snapshot 中的当前执行记录
+- 证据：机器记录 {record.record_id}
 """,
         encoding="utf-8",
     )
@@ -226,11 +314,11 @@ def test_result_gate_matches_current_execution_record_and_command(tmp_path):
 
     assert ok is True, detail
 
-    result_path = tmp_path / "qa" / f"{TOPIC}_result.md"
+    result_path = tmp_path / "qa" / f"{TOPIC}_测试结果.md"
     result_path.write_text(result_path.read_text(encoding="utf-8").replace("退出码：0", "退出码：1"), encoding="utf-8")
     ok, detail = validate_test_execution_results(str(tmp_path), WORKFLOW_ID, [TOPIC])
     assert ok is False
-    assert "退出码 0" in detail
+    assert "退出码" in detail
 
 
 def _write_dependency_topic(
@@ -242,14 +330,14 @@ def _write_dependency_topic(
 ) -> None:
     (tmp_path / "qa").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "qa" / f"{topic}_plan.md").write_text(
+    (tmp_path / "qa" / f"{topic}_测试计划.md").write_text(
         f"""# {topic}测试计划
 
 ## 1. 验收条件覆盖
 
 | 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
 |---|---|---|---|---|---|---|
-| [AC-01：{topic}完成](../acceptance/{topic}_plan.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证{topic}完成](#tc-01) | 无 | 自动化测试 | 检查{topic} | {topic}完成 | 保留执行证据 |
+| [AC-01：{topic}完成](../acceptance/{topic}_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证{topic}完成](#tc-01) | 无 | 自动化测试 | 检查{topic} | {topic}完成 | 保留执行证据 |
 """,
         encoding="utf-8",
     )
@@ -286,6 +374,16 @@ def _dependency_state(tmp_path: Path, topics: list[str]) -> WorkflowState:
 
 
 def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-04 正式任务按测试项独立登记
+    验收条件：AC-04 正式执行范围可以审查
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：并行执行时仍按主题前置关系先运行前置主题
+    测试入口：tests/test_test_execution.py::test_topic_dependencies_run_predecessor_before_dependent_topic
+    代码入口：workflow_loop.test_execution.run_prepared_tasks
+    """
     first = "准备上传环境"
     second = "上传文件"
     _write_dependency_topic(
@@ -306,7 +404,7 @@ def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
     with Path("order.txt").open("a", encoding="utf-8") as stream:
         stream.write("上传文件\\n")''',
     )
-    (tmp_path / "qa" / "index.md").write_text(
+    (tmp_path / "qa" / "索引.md").write_text(
         f"""# 测试计划索引
 
 ## {WORKFLOW_ID}
@@ -315,8 +413,8 @@ def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
 
 | 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
 |---|---|---|---|---|---|
-| 1 | {first} | 无 | [验收计划](../acceptance/{first}_plan.md) | [测试计划](./{first}_plan.md) | [测试结果](./{first}_result.md) |
-| 2 | {second} | {first} | [验收计划](../acceptance/{second}_plan.md) | [测试计划](./{second}_plan.md) | [测试结果](./{second}_result.md) |
+| 1 | {first} | 无 | [验收计划](../acceptance/{first}_验收计划.md) | [测试计划](./{first}_测试计划.md) | [测试结果](./{first}_测试结果.md) |
+| 2 | {second} | {first} | [验收计划](../acceptance/{second}_验收计划.md) | [测试计划](./{second}_测试计划.md) | [测试结果](./{second}_测试结果.md) |
 """,
         encoding="utf-8",
     )
@@ -344,11 +442,25 @@ def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
 
 
 def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-04 正式任务按测试项独立登记
+    验收条件：AC-04 正式执行范围可以审查
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：前置主题失败时依赖主题不执行并明确记录阻塞
+    测试入口：tests/test_test_execution.py::test_failed_predecessor_topic_blocks_dependent_topic
+    代码入口：workflow_loop.test_execution.run_prepared_tasks
+    """
     first = "准备上传环境"
     second = "上传文件"
+    third = "确认上传结果"
+    independent = "记录审计信息"
     _write_dependency_topic(tmp_path, first, "prepare_upload", body="    assert False")
     _write_dependency_topic(tmp_path, second, "upload_file")
-    (tmp_path / "qa" / "index.md").write_text(
+    _write_dependency_topic(tmp_path, third, "confirm_upload")
+    _write_dependency_topic(tmp_path, independent, "record_audit")
+    (tmp_path / "qa" / "索引.md").write_text(
         f"""# 测试计划索引
 
 ## {WORKFLOW_ID}
@@ -357,12 +469,14 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
 
 | 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
 |---|---|---|---|---|---|
-| 1 | {first} | 无 | [验收计划](../acceptance/{first}_plan.md) | [测试计划](./{first}_plan.md) | [测试结果](./{first}_result.md) |
-| 2 | {second} | {first} | [验收计划](../acceptance/{second}_plan.md) | [测试计划](./{second}_plan.md) | [测试结果](./{second}_result.md) |
+| 1 | {first} | 无 | [验收计划](../acceptance/{first}_验收计划.md) | [测试计划](./{first}_测试计划.md) | [测试结果](./{first}_测试结果.md) |
+| 2 | {second} | {first} | [验收计划](../acceptance/{second}_验收计划.md) | [测试计划](./{second}_测试计划.md) | [测试结果](./{second}_测试结果.md) |
+| 3 | {third} | {second} | [验收计划](../acceptance/{third}_验收计划.md) | [测试计划](./{third}_测试计划.md) | [测试结果](./{third}_测试结果.md) |
+| 4 | {independent} | 无 | [验收计划](../acceptance/{independent}_验收计划.md) | [测试计划](./{independent}_测试计划.md) | [测试结果](./{independent}_测试结果.md) |
 """,
         encoding="utf-8",
     )
-    state = _dependency_state(tmp_path, [first, second])
+    state = _dependency_state(tmp_path, [first, second, third, independent])
     prepare_task(
         str(tmp_path),
         state,
@@ -377,9 +491,31 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
         "TC-01",
         _pytest_command("tests/test_upload_file.py::test_upload_file"),
     )
+    prepare_task(
+        str(tmp_path),
+        state,
+        third,
+        "TC-01",
+        _pytest_command("tests/test_confirm_upload.py::test_confirm_upload"),
+    )
+    prepare_task(
+        str(tmp_path),
+        state,
+        independent,
+        "TC-01",
+        _pytest_command("tests/test_record_audit.py::test_record_audit"),
+    )
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=2)
     statuses = {(attempt.topic, attempt.test_id): attempt.status for attempt in attempts}
+    persisted = load_state(str(tmp_path))
+    persisted_tasks = persisted.stages["test_execution"].test_tasks
 
     assert statuses[(first, "TC-01")] == "failed"
     assert statuses[(second, "TC-01")] == "blocked"
+    assert statuses[(third, "TC-01")] == "blocked"
+    assert statuses[(independent, "TC-01")] == "passed"
+    assert persisted_tasks[first]["TC-01"].status == "needs_action"
+    assert persisted_tasks[second]["TC-01"].status == "blocked"
+    assert persisted_tasks[third]["TC-01"].status == "blocked"
+    assert persisted_tasks[independent]["TC-01"].status == "passed"

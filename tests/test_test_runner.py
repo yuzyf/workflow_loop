@@ -1,176 +1,174 @@
-from workflow_loop import cli as cli_mod
-from workflow_loop.cli import validate_stage_output
-from workflow_loop.state import WorkflowState, load_state, save_state
-from workflow_loop.test_runner import ensure_test_baseline, run_final_regression
+import sys
+
+import workflow_loop.test_runner as test_runner
+from workflow_loop.process_runner import ProcessResult
+from workflow_loop.project import create_project, register_test_entry
+from workflow_loop.state import WorkflowState
 
 
-def _state():
-    return WorkflowState(
-        workflow_id="2026-07-25-1200-test",
-        intent="from_scratch",
-        current_stage="test_plan",
-        stage_path=["test_plan"],
+TOPIC = "主题验收_全量回归和最终同步完成后正式收工"
+
+
+def _state() -> WorkflowState:
+    return WorkflowState(workflow_id="wf", intent="product_change", run_status="active")
+
+
+def _entry_for_current_platform() -> dict[str, list[str]]:
+    return {
+        "windows" if sys.platform.startswith("win") else (
+            "darwin" if sys.platform == "darwin" else "linux"
+        ): [sys.executable, "-m", "pytest", "-q"]
+    }
+
+
+def _result(status: str = "passed", exit_code: int | None = 0) -> ProcessResult:
+    return ProcessResult(
+        status=status,
+        exit_code=exit_code,
+        started_at="2026-08-03T01:00:00+00:00",
+        finished_at="2026-08-03T01:00:01+00:00",
+        duration_seconds=1.0,
+        output_tail="result output",
+        output_sha256="a" * 64,
+        output_bytes=13,
+        platform=sys.platform,
+        executable=sys.executable,
+        argv=[sys.executable, "-m", "pytest", "-q"],
+        cwd="/tmp/project",
     )
 
 
-def _write_entry(tmp_path, body):
-    path = tmp_path / "scripts" / "test_all.sh"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"#!/usr/bin/env bash\nset -eu\n{body}\n", encoding="utf-8")
-    path.chmod(0o755)
-    return path
+def test_final_regression_requires_current_platform_entry(tmp_path):
+    """Workflow-Test
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-03 最新完整代码执行项目全量测试
+    验收条件：AC-03 最终回归在最新完整代码上执行
+    测试方式：自动化测试
+    测试层级：模块测试
+    测试目标：没有当前系统全量入口时明确阻止最终回归
+    测试入口：tests/test_test_runner.py::test_final_regression_requires_current_platform_entry
+    代码入口：workflow_loop.test_runner.resolve_regression_entry
+    """
+    create_project(str(tmp_path))
+
+    entry, detail = test_runner.resolve_regression_entry(str(tmp_path))
+
+    assert entry is None
+    assert "没有可用的项目全量测试入口" in detail
 
 
-def test_test_baseline_requires_unified_entry(tmp_path):
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "test_existing.py").write_text("def test_existing():\n    assert True\n", encoding="utf-8")
-    state = _state()
-
-    result = ensure_test_baseline(str(tmp_path), state)
-
-    assert result.passed is False
-    assert state.test_baseline.status == "unavailable"
-    assert "找不到统一测试入口" in state.test_baseline.output_tail
-
-
-def test_test_baseline_allows_project_without_existing_tests(tmp_path):
-    state = _state()
-
-    result = ensure_test_baseline(str(tmp_path), state)
-
-    assert result.passed is True
-    assert result.ran is False
-    assert state.test_baseline.status == "not_applicable"
-    assert "没有已有测试" in state.test_baseline.output_tail
-
-
-def test_test_baseline_records_pass_and_reuses_unchanged_code(tmp_path):
-    _write_entry(tmp_path, "echo 'all unit tests passed'")
-    state = _state()
-
-    first = ensure_test_baseline(str(tmp_path), state)
-    second = ensure_test_baseline(str(tmp_path), state)
-
-    assert first.passed is True
-    assert first.ran is True
-    assert second.passed is True
-    assert second.ran is False
-    assert second.reused is True
-    assert state.test_baseline.status == "passed"
-    assert state.test_baseline.exit_code == 0
-
-
-def test_test_baseline_reruns_after_test_entry_changes(tmp_path):
-    entry = _write_entry(tmp_path, "echo 'version one'")
-    state = _state()
-
-    first = ensure_test_baseline(str(tmp_path), state)
-    entry.write_text(
-        "#!/usr/bin/env bash\nset -eu\necho 'version two'\n",
-        encoding="utf-8",
-    )
-    entry.chmod(0o755)
-    second = ensure_test_baseline(str(tmp_path), state)
-
-    assert first.passed is True
-    assert second.passed is True
-    assert second.ran is True
-    assert second.reused is False
-
-
-def test_test_baseline_failure_blocks_gate(tmp_path):
-    _write_entry(tmp_path, "echo 'unit test failed' >&2\nexit 7")
-    state = _state()
-
-    result = ensure_test_baseline(str(tmp_path), state)
-
-    assert result.passed is False
-    assert state.test_baseline.status == "failed"
-    assert state.test_baseline.exit_code == 7
-    assert "unit test failed" in state.test_baseline.output_tail
-
-
-def test_test_baseline_round_trips_through_state_json(tmp_path):
-    _write_entry(tmp_path, "echo ok")
-    state = _state()
-    ensure_test_baseline(str(tmp_path), state)
-    save_state(str(tmp_path), state)
-
-    loaded = load_state(str(tmp_path))
-
-    assert loaded is not None
-    assert loaded.test_baseline.entry == "scripts/test_all.sh"
-    assert loaded.test_baseline.status == "passed"
-    assert loaded.test_baseline.exit_code == 0
-
-
-def test_final_regression_runs_unified_entry_without_reusing_baseline(tmp_path):
-    _write_entry(tmp_path, "echo 'all tests passed'")
-    state = _state()
-
-    passed, detail = run_final_regression(str(tmp_path), state)
-
-    assert passed is True
-    assert "最终全量测试通过" in detail
-    assert state.regression_test.status == "passed"
-    assert state.regression_test.exit_code == 0
-
-
-def test_final_regression_failure_is_saved_in_state(tmp_path):
-    _write_entry(tmp_path, "echo 'unit test failed' >&2\nexit 7")
-    state = _state()
-
-    passed, detail = run_final_regression(str(tmp_path), state)
-
-    assert passed is False
-    assert state.regression_test.status == "failed"
-    assert state.regression_test.exit_code == 7
-    assert "unit test failed" in detail
-
-
-def test_validate_stage_output_runs_baseline_for_test_plan(tmp_path):
-    _write_entry(tmp_path, "echo ok")
-    state = _state()
-
-    class PassingStage:
-        def code_validate(self, _project_root):
-            return True, "测试计划结构通过"
-
-    passed, detail = validate_stage_output(
-        str(tmp_path),
-        state,
-        "test_plan",
-        PassingStage(),
-    )
-
-    assert passed is True
-    assert "修改前全量测试完成" in detail
-    assert state.test_baseline.status == "passed"
-
-
-def test_validate_stage_output_can_validate_regression_without_rerunning(tmp_path, monkeypatch):
-    state = _state()
+def test_final_regression_runs_registered_entry_and_records_machine_facts(
+    tmp_path, monkeypatch
+):
+    """Workflow-Test
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-03 最新完整代码执行项目全量测试
+    验收条件：AC-03 最终回归在最新完整代码上执行
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：最终回归执行当前系统入口并保存代码哈希和进程机器事实
+    测试入口：tests/test_test_runner.py::test_final_regression_runs_registered_entry_and_records_machine_facts
+    代码入口：workflow_loop.test_runner.run_final_regression
+    """
+    create_project(str(tmp_path))
+    entry = _entry_for_current_platform()
+    register_test_entry(str(tmp_path), entry)
     calls = []
 
-    def fail_if_called(_project_root, _workflow_state):
-        calls.append(True)
-        raise AssertionError("确认门不应该再次执行最终全量回归")
+    def fake_run(request):
+        calls.append(request)
+        result = _result()
+        result.cwd = request.cwd
+        result.argv = list(request.argv)
+        return result
 
-    monkeypatch.setattr(cli_mod.test_runner_mod, "run_final_regression", fail_if_called)
+    monkeypatch.setattr(test_runner.process_runner_mod, "run_process", fake_run)
+    state = _state()
 
-    class PassingStage:
-        def code_validate(self, _project_root):
-            return True, "已使用保存的最终回归结果"
+    ok, detail = test_runner.run_final_regression(str(tmp_path), state)
 
-    passed, detail = validate_stage_output(
-        str(tmp_path),
-        state,
-        "regression_test",
-        PassingStage(),
-        execute_regression=False,
+    assert ok is True
+    assert len(calls) == 1
+    assert calls[0].argv == next(iter(entry.values()))
+    assert calls[0].cwd == str(tmp_path)
+    assert state.regression_test.status == "passed"
+    assert state.regression_test.code_snapshot_hash
+    assert state.regression_test.output_sha256 == "a" * 64
+    assert state.regression_test.record_id.startswith("REG-")
+    assert "机器记录" in detail
+
+
+def test_failed_final_regression_replaces_previous_success(tmp_path, monkeypatch):
+    """Workflow-Test
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-03 最新完整代码执行项目全量测试
+    验收条件：AC-03 最终回归在最新完整代码上执行
+    测试方式：自动化测试
+    测试层级：模块测试
+    测试目标：最新一次非零退出覆盖旧成功记录并阻止后续验收
+    测试入口：tests/test_test_runner.py::test_failed_final_regression_replaces_previous_success
+    代码入口：workflow_loop.test_runner.run_final_regression
+    """
+    create_project(str(tmp_path))
+    register_test_entry(str(tmp_path), _entry_for_current_platform())
+    state = _state()
+    state.regression_test.status = "passed"
+    monkeypatch.setattr(
+        test_runner.process_runner_mod,
+        "run_process",
+        lambda _request: _result("failed", 2),
     )
 
-    assert passed is True
-    assert "保存的最终回归结果" in detail
-    assert calls == []
+    ok, detail = test_runner.run_final_regression(str(tmp_path), state)
+
+    assert ok is False
+    assert state.regression_test.status == "failed"
+    assert state.regression_test.exit_code == 2
+    assert "未通过" in detail
+
+
+def test_regression_confirmation_can_reuse_same_machine_record(tmp_path, monkeypatch):
+    """Workflow-Test
+    主题：主题验收、全量回归和最终同步完成后正式收工
+    测试项：TC-04 最终回归三道门只运行一次测试
+    验收条件：AC-04 最终回归三道门不重复运行测试
+    测试方式：自动化测试
+    测试层级：模块测试
+    测试目标：最终回归状态能完整序列化供确认门复核而无需再次启动入口
+    测试入口：tests/test_test_runner.py::test_regression_confirmation_can_reuse_same_machine_record
+    代码入口：workflow_loop.test_runner.regression_journal_fields
+    """
+    create_project(str(tmp_path))
+    register_test_entry(str(tmp_path), _entry_for_current_platform())
+    count = 0
+
+    def fake_run(_request):
+        nonlocal count
+        count += 1
+        return _result()
+
+    monkeypatch.setattr(test_runner.process_runner_mod, "run_process", fake_run)
+    state = _state()
+
+    assert test_runner.run_final_regression(str(tmp_path), state)[0] is True
+    journal = test_runner.regression_journal_fields(state)
+    repeated_journal = test_runner.regression_journal_fields(state)
+
+    assert count == 1
+    assert repeated_journal == journal
+    assert journal["record_id"] == state.regression_test.record_id
+    assert journal["status"] == "passed"
+
+
+def test_modification_before_regression_baseline_api_is_absent():
+    """Workflow-Test
+    主题：验收测试和实施计划按同一主题完整追踪
+    测试项：TC-05 项目专属全量入口按系统保存且不执行修改前回归
+    验收条件：AC-05 全量测试入口属于当前项目
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：测试计划和实施阶段不存在修改前全量回归调用入口
+    测试入口：tests/test_test_runner.py::test_modification_before_regression_baseline_api_is_absent
+    代码入口：workflow_loop.test_runner
+    """
+    assert not hasattr(test_runner, "ensure_test_baseline")

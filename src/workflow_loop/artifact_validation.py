@@ -1,23 +1,35 @@
-import glob
+import hashlib
+import json
 import os
 import re
-import shlex
+import sys
+from datetime import datetime
 
 from . import acceptance_records as acceptance_records_mod
+from . import artifact_paths as artifact_paths_mod
+from . import process_runner as process_runner_mod
+from . import test_runner as test_runner_mod
 from .state import load_state
 from .test_mapping import (
     automated_topics,
     automated_test_items,
     parse_test_plan_items,
 )
+from .topic import topic_file_key, topic_paths
 from .traceability import validate_structure as validate_traceability_structure
 from .topic_relations import relation_signature, read_topic_index
-from .verification import compute_code_snapshot_hash, compute_file_hashes
+from .verification import (
+    compute_code_snapshot_hash,
+    compute_file_hashes,
+    get_linked_product_design_paths,
+)
 
 
-PROJECT_INIT_EVIDENCE_PATH = os.path.join("spec", "project_design_init_evidence.md")
-TRACEABILITY_PATH = "traceability.md"
-BUG_FILENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}-.+\.md$")
+PROJECT_INIT_EVIDENCE_PATH = artifact_paths_mod.DESIGN_INIT_EVIDENCE_DOC
+TRACEABILITY_PATH = artifact_paths_mod.TRACEABILITY_DOC
+# 缺陷记录使用稳定中文文件标识：bug/缺陷_<缺陷文件标识>.md
+BUG_FILENAME_RE = re.compile(r"^缺陷_[A-Za-z0-9_\-一-鿿㐀-䶿]+\.md$")
+BUG_INDEX_FILENAMES = {"索引.md"}
 ACCEPTANCE_CRITERION_RE = re.compile(r"^###\s+(AC-\d{2,})：?.*$", re.MULTILINE)
 ACCEPTANCE_PLAN_SECTIONS = [
     "1. 本次需求与验收目标",
@@ -50,6 +62,11 @@ CODE_SUFFIXES = {
     ".py", ".pyi", ".go", ".rs", ".swift", ".m", ".mm", ".js", ".jsx",
     ".ts", ".tsx", ".vue", ".svelte", ".rb", ".php", ".cs", ".fs", ".ets",
 }
+# 最终架构文档不能把计划性表述写成最终事实
+FINAL_DESIGN_FORBIDDEN_WORDS = ("待实施", "待验证", "待补充", "尚未实现")
+MACHINE_RECORD_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:RUN|REG)-[^\s，,；;、|()\[\]{}<>`]+"
+)
 
 
 def _read_text(project_root: str, rel_path: str) -> str:
@@ -60,6 +77,32 @@ def _read_text(project_root: str, rel_path: str) -> str:
 def _field(content: str, label: str) -> str | None:
     match = re.search(rf"^-\s*{re.escape(label)}：\s*(.+?)\s*$", content, re.MULTILINE)
     return match.group(1).strip() if match else None
+
+
+def _argv_text(argv: list[str]) -> str:
+    """把参数数组编码成可读且可精确比对的单行 JSON。"""
+    return json.dumps(argv, ensure_ascii=False, separators=(",", ":"))
+
+
+def _environment_text(platform: str, executable: str) -> str:
+    """固定编码测试平台和实际可执行文件。"""
+    return f"平台={platform}；可执行文件={executable}"
+
+
+def _output_tail_text(output_tail: str) -> str:
+    """把可能含换行的输出摘要编码成单行 JSON 字符串。"""
+    return json.dumps(output_tail, ensure_ascii=False)
+
+
+def _topic_test_record_id(topic: str, test_id: str, record) -> str:
+    """按测试执行器的机器事实公式复算主题测试记录编号。"""
+    payload = (
+        f"{topic}|{test_id}|{record.started_at}|{record.finished_at}|"
+        f"{record.exit_code}|{record.output_sha256}"
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    compact_time = (record.started_at or "").replace(":", "").replace("-", "")
+    return f"RUN-{compact_time}-{digest}"
 
 
 def _section(content: str, heading: str) -> str | None:
@@ -119,6 +162,49 @@ def _markdown_table_rows(content: str) -> list[list[str]]:
     return rows
 
 
+def _markdown_tables(content: str) -> list[tuple[list[str], list[list[str]]]]:
+    """按表头、数据行拆出 Markdown 表格。"""
+    lines = content.splitlines()
+    tables: list[tuple[list[str], list[list[str]]]] = []
+    index = 0
+    while index + 1 < len(lines):
+        header_line = lines[index].strip()
+        separator_line = lines[index + 1].strip()
+        if not (
+            header_line.startswith("|")
+            and header_line.endswith("|")
+            and separator_line.startswith("|")
+            and separator_line.endswith("|")
+        ):
+            index += 1
+            continue
+
+        headers = [cell.strip() for cell in header_line.strip("|").split("|")]
+        separators = [
+            cell.strip() for cell in separator_line.strip("|").split("|")
+        ]
+        if (
+            len(headers) != len(separators)
+            or not headers
+            or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in separators)
+        ):
+            index += 1
+            continue
+
+        rows: list[list[str]] = []
+        index += 2
+        while index < len(lines):
+            row_line = lines[index].strip()
+            if not (row_line.startswith("|") and row_line.endswith("|")):
+                break
+            row = [cell.strip() for cell in row_line.strip("|").split("|")]
+            if len(row) == len(headers):
+                rows.append(row)
+            index += 1
+        tables.append((headers, rows))
+    return tables
+
+
 def _has_real_text(value: str | None, *, allow_none: bool = False) -> bool:
     if value is None:
         return False
@@ -136,37 +222,326 @@ def _has_real_text(value: str | None, *, allow_none: bool = False) -> bool:
 
 
 def _is_safe_topic_name(value: str | None) -> bool:
-    """主题会进入文件名和路径，不能包含路径分隔符或目录跳转。"""
+    """主题显示名称不能包含路径分隔符或目录跳转（文件名另用文件标识）。"""
     if not _has_real_text(value):
         return False
     normalized = value.strip()
     return normalized not in {".", ".."} and os.path.basename(normalized) == normalized
 
 
-def _existing_code_paths_in_text(project_root: str, content: str) -> list[str]:
-    """从 Markdown 代码标识和链接中找出项目内真实存在的代码文件。"""
-    candidates = set(re.findall(r"`([^`\n]+)`", content))
-    candidates.update(re.findall(r"\[[^\]]+\]\(([^)]+)\)", content))
+def _machine_record_ids(content: str | None) -> set[str]:
+    """从正式文档字段中解析机器测试和最终回归记录编号。"""
+    if not content:
+        return set()
+    trailing_punctuation = "。.!！?？：:；;，,）)]}>\"'”’"
+    return {
+        match.group(0).rstrip(trailing_punctuation)
+        for match in MACHINE_RECORD_TOKEN_RE.finditer(content)
+    }
+
+
+def _reference_parts(raw_reference: str) -> tuple[str, str | None, str | None]:
+    """拆出项目文件引用及其符号、锚点或行号目标。"""
+    value = raw_reference.strip()
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    value = value.replace("\\", "/")
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
+        return value, None, None
+
+    if "::" in value:
+        path, target = value.split("::", 1)
+        return path, "symbol", target
+    if "#" in value:
+        path, target = value.split("#", 1)
+        return path, "anchor", target
+    line_match = re.fullmatch(r"(.+):(\d+)", value)
+    if line_match:
+        return line_match.group(1), "line", line_match.group(2)
+    return value, None, None
+
+
+def _resolve_project_reference(
+    project_root: str,
+    raw_reference: str,
+) -> tuple[str, str | None, str | None] | None:
+    """把架构文档中的文件引用解析为项目根下真实文件。"""
+    path_text, target_kind, target = _reference_parts(raw_reference)
+    if (
+        not path_text
+        or os.path.isabs(path_text)
+        or re.match(r"^[A-Za-z]:/", path_text)
+        or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", path_text)
+    ):
+        return None
+
+    if path_text.startswith(("./", "../")):
+        relative_path = os.path.normpath(os.path.join("spec", path_text))
+    else:
+        relative_path = os.path.normpath(path_text)
     project_root_abs = os.path.abspath(project_root)
-    existing: list[str] = []
-    for raw_candidate in candidates:
-        candidate = raw_candidate.strip().split("#", 1)[0]
-        candidate = re.sub(r":\d+$", "", candidate)
-        if candidate.startswith(("./", "../")):
-            relative_path = os.path.normpath(os.path.join("spec", candidate))
-        else:
-            relative_path = os.path.normpath(candidate)
-        if os.path.isabs(relative_path):
-            continue
-        suffix = os.path.splitext(relative_path)[1].lower()
-        if suffix not in CODE_SUFFIXES:
-            continue
-        full_path = os.path.abspath(os.path.join(project_root_abs, relative_path))
+    full_path = os.path.abspath(os.path.join(project_root_abs, relative_path))
+    try:
         if os.path.commonpath([project_root_abs, full_path]) != project_root_abs:
-            continue
-        if os.path.isfile(full_path):
-            existing.append(relative_path)
-    return sorted(set(existing))
+            return None
+    except ValueError:
+        return None
+    if not os.path.isfile(full_path):
+        return None
+    return relative_path.replace(os.sep, "/"), target_kind, target
+
+
+def _looks_like_file_reference(raw_reference: str) -> bool:
+    """判断一个 Markdown 标识是否在声明文件路径，而不是代码符号。"""
+    path_text, _, _ = _reference_parts(raw_reference)
+    suffix = os.path.splitext(path_text)[1].lower()
+    known_non_code_suffixes = {
+        ".md", ".json", ".toml", ".yaml", ".yml", ".ini", ".cfg",
+        ".sh", ".ps1", ".bat", ".cmd", ".pro", ".pri", ".cmake",
+    }
+    return (
+        "/" in path_text
+        or "\\" in raw_reference
+        or suffix in CODE_SUFFIXES
+        or suffix in known_non_code_suffixes
+        or os.path.basename(path_text) in {"Makefile", "CMakeLists.txt"}
+    )
+
+
+def _reference_candidates(content: str) -> list[str]:
+    """提取反引号、Markdown 链接和裸写项目路径中的文件引用候选。"""
+    candidates = list(re.findall(r"`([^`\n]+)`", content))
+    candidates.extend(re.findall(r"\[[^\]]+\]\(([^)]+)\)", content))
+    raw_content = re.sub(r"\[[^\]]+\]\([^)]+\)", "", content)
+    candidates.extend(
+        re.findall(
+            r"(?<![A-Za-z0-9_.-])"
+            r"(?:\.{0,2}/)?"
+            r"(?:[A-Za-z0-9_\-\u3400-\u9fff]+/)+"
+            r"[A-Za-z0-9_.\-\u3400-\u9fff]+"
+            r"(?:(?:::|#)[A-Za-z0-9_.:()\-\u3400-\u9fff]+|:\d+)?",
+            raw_content,
+        )
+    )
+    return list(dict.fromkeys(candidate.strip() for candidate in candidates if candidate.strip()))
+
+
+def _declared_symbol(raw_symbol: str) -> str | None:
+    """解析正式代码位置中声明的类、函数、方法、常量或配置项。"""
+    value = raw_symbol.strip()
+    value = re.sub(r"\([^()]*\)$", "", value).strip()
+    if re.fullmatch(r"--[a-z0-9][a-z0-9-]*", value):
+        return value
+    if re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|::)[A-Za-z_][A-Za-z0-9_]*)*",
+        value,
+    ):
+        return value
+    return None
+
+
+def _symbol_is_locatable(file_content: str, raw_symbol: str) -> bool:
+    """以完整标识边界检查符号，避免 `run` 误命中 `runner`。"""
+    value = raw_symbol.strip()
+    value = re.sub(r"\[[^\]]*\]$", "", value)
+    value = re.sub(r"\([^()]*\)$", "", value).strip()
+    if value.startswith("--"):
+        return re.search(
+            rf"(?<![A-Za-z0-9-]){re.escape(value)}(?![A-Za-z0-9-])",
+            file_content,
+        ) is not None
+    lookup = re.split(r"::|\.", value)[-1]
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", lookup):
+        return False
+    return re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(lookup)}(?![A-Za-z0-9_])",
+        file_content,
+    ) is not None
+
+
+def _markdown_anchor_exists(file_content: str, anchor: str) -> bool:
+    """检查 Markdown 标题锚点或显式 HTML id 是否真实存在。"""
+    normalized_anchor = anchor.strip().lstrip("#").lower()
+    if not normalized_anchor:
+        return False
+    if re.search(
+        rf"\bid\s*=\s*['\"]{re.escape(normalized_anchor)}['\"]",
+        file_content,
+        re.IGNORECASE,
+    ):
+        return True
+    for heading in re.findall(r"^#{1,6}\s+(.+?)\s*#*\s*$", file_content, re.MULTILINE):
+        heading = re.sub(r"`([^`]+)`", r"\1", heading)
+        slug = re.sub(r"[^\w\u3400-\u9fff -]", "", heading.lower())
+        slug = re.sub(r"\s+", "-", slug.strip())
+        if slug == normalized_anchor:
+            return True
+    return False
+
+
+def _reference_target_is_locatable(
+    project_root: str,
+    reference: tuple[str, str | None, str | None],
+    fallback_symbols: list[str],
+) -> bool:
+    """检查文件引用中的行号、锚点、符号或同单元格符号。"""
+    relative_path, target_kind, target = reference
+    file_content = _read_text(project_root, relative_path)
+    if target_kind == "line" and target is not None:
+        line_number = int(target)
+        return 1 <= line_number <= len(file_content.splitlines())
+    if target_kind == "anchor" and target is not None:
+        line_match = re.fullmatch(r"L(\d+)", target, re.IGNORECASE)
+        if line_match:
+            line_number = int(line_match.group(1))
+            return 1 <= line_number <= len(file_content.splitlines())
+        return _markdown_anchor_exists(file_content, target)
+    if target_kind == "symbol" and target is not None:
+        return _symbol_is_locatable(file_content, target)
+    return any(_symbol_is_locatable(file_content, symbol) for symbol in fallback_symbols)
+
+
+def _feature_code_mappings(
+    project_root: str,
+    section: str,
+) -> tuple[bool, str, list[str]]:
+    """逐个校验正式功能表中声明的代码文件和全部反引号符号。"""
+    mapped_paths: set[str] = set()
+    mapping_cells = 0
+    for headers, rows in _markdown_tables(section):
+        code_indexes = [
+            index
+            for index, header in enumerate(headers)
+            if header.strip("* `") in {"代码位置", "对应代码"}
+        ]
+        for row in rows:
+            for code_index in code_indexes:
+                mapping_cells += 1
+                cell = row[code_index]
+                if not _has_real_text(cell):
+                    return False, "代码位置存在空值或模板占位符", []
+
+                references: list[tuple[str, str | None, str | None]] = []
+                symbols: list[str] = []
+                for token in _reference_candidates(cell):
+                    resolved = _resolve_project_reference(project_root, token)
+                    if resolved is not None:
+                        suffix = os.path.splitext(resolved[0])[1].lower()
+                        if suffix not in CODE_SUFFIXES:
+                            continue
+                        if resolved[0].startswith("tests/"):
+                            return False, f"代码位置不能用测试文件代替产品代码: {resolved[0]}", []
+                        references.append(resolved)
+                        mapped_paths.add(resolved[0])
+                        if resolved[1] == "symbol" and resolved[2]:
+                            symbols.append(resolved[2])
+                        continue
+                    if _looks_like_file_reference(token):
+                        path_text, _, _ = _reference_parts(token)
+                        if os.path.splitext(path_text)[1].lower() in CODE_SUFFIXES:
+                            return False, f"代码位置引用的文件不存在或不在项目内: {token}", []
+
+                    symbol = _declared_symbol(token)
+                    if symbol is not None:
+                        symbols.append(symbol)
+
+                references = list(dict.fromkeys(references))
+                symbols = list(dict.fromkeys(symbols))
+                if not references:
+                    return False, f"代码位置没有项目内真实代码文件: {cell}", []
+                if not symbols:
+                    return False, f"代码位置没有反引号可定位符号: {cell}", []
+
+                file_contents = {
+                    relative_path: _read_text(project_root, relative_path)
+                    for relative_path, _, _ in references
+                }
+                for symbol in symbols:
+                    if not any(
+                        _symbol_is_locatable(file_content, symbol)
+                        for file_content in file_contents.values()
+                    ):
+                        return (
+                            False,
+                            f"代码符号 `{symbol}` 无法在同一代码位置声明的文件中定位",
+                            [],
+                        )
+
+    if mapping_cells == 0 or not mapped_paths:
+        return False, "功能段没有按正式表格填写代码位置和对应代码", []
+    return True, "", sorted(mapped_paths)
+
+
+def _feature_verification_locations(
+    project_root: str,
+    section: str,
+) -> tuple[bool, str]:
+    """逐格校验验证位置指向项目内真实文件和可定位目标。"""
+    verification_cells = 0
+    for headers, rows in _markdown_tables(section):
+        verification_indexes = [
+            index
+            for index, header in enumerate(headers)
+            if header.strip("* `") in {"验证位置", "验证依据"}
+        ]
+        for row in rows:
+            for verification_index in verification_indexes:
+                verification_cells += 1
+                cell = row[verification_index]
+                if not _has_real_text(cell):
+                    return False, "验证位置存在空值或模板占位符"
+
+                references: list[tuple[str, str | None, str | None]] = []
+                fallback_symbols: list[str] = []
+                for token in _reference_candidates(cell):
+                    resolved = _resolve_project_reference(project_root, token)
+                    if resolved is not None:
+                        references.append(resolved)
+                        continue
+                    if _looks_like_file_reference(token):
+                        return False, f"验证位置引用的文件不存在或不在项目内: {token}"
+                    symbol = _declared_symbol(token)
+                    if symbol is not None:
+                        fallback_symbols.append(symbol)
+
+                references = list(dict.fromkeys(references))
+                fallback_symbols = list(dict.fromkeys(fallback_symbols))
+                if not references:
+                    return False, f"验证位置没有项目内真实文件: {cell}"
+                for reference in references:
+                    if not _reference_target_is_locatable(
+                        project_root,
+                        reference,
+                        fallback_symbols,
+                    ):
+                        return (
+                            False,
+                            f"验证位置没有可定位的行号、标题、测试函数或运行入口: {cell}",
+                        )
+
+    if verification_cells == 0:
+        return False, "功能段没有按正式表格填写验证位置或验证依据"
+    return True, ""
+
+
+def _required_final_machine_record_ids(wf_state) -> tuple[set[str] | None, str]:
+    """汇总最终设计核对依据必须精确列出的当前机器记录编号。"""
+    stage_state = wf_state.stages.get("topic_acceptance")
+    if stage_state is None:
+        return None, "缺少 topic_acceptance（主题验收阶段）状态"
+
+    required: set[str] = set()
+    for topic in wf_state.topics:
+        for criterion_id, record in stage_state.acceptance_records.get(topic, {}).items():
+            if not acceptance_records_mod.record_is_current(record, wf_state):
+                return None, f"{topic} / {criterion_id} 的程序验收记录已经失效"
+            required.update(record.test_record_ids)
+
+    regression = wf_state.regression_test
+    if regression.status != "passed" or not regression.record_id:
+        return None, "最终全量回归没有当前有效的机器记录编号"
+    required.add(regression.record_id)
+    return required, ""
 
 
 def _architecture_feature_sections(content: str) -> list[str]:
@@ -279,16 +654,20 @@ def validate_final_code_design_document(
     project_root: str,
     workflow_id: str,
 ) -> tuple[bool, str]:
-    """校验最终架构文档已经完成产品、功能、架构和代码映射。"""
-    relative_path = os.path.join("spec", "architecture_code_design.md")
+    """校验最终架构文档已经完成产品、功能、架构和真实代码映射。
+
+    功能范围以产品总说明当前链接的功能文档为准；每个功能必须唯一匹配一个
+    6.x 功能段，映射真实代码文件、可定位符号和验证位置，并拒绝计划性表述。
+    """
+    relative_path = artifact_paths_mod.CODE_DESIGN_DOC
     full_path = os.path.join(project_root, relative_path)
     if not os.path.isfile(full_path):
         return False, f"{relative_path} 不存在"
 
     content = _read_text(project_root, relative_path)
-    product_path = os.path.join(project_root, "spec", "product.md")
+    product_path = os.path.join(project_root, artifact_paths_mod.PRODUCT_OVERVIEW_DOC)
     if not os.path.isfile(product_path):
-        return False, "spec/product.md 不存在，无法核对最终产品设计"
+        return False, f"{artifact_paths_mod.PRODUCT_OVERVIEW_DOC} 不存在，无法核对最终产品设计"
     missing_sections = [
         heading
         for heading in ARCHITECTURE_DOCUMENT_SECTIONS
@@ -297,12 +676,14 @@ def validate_final_code_design_document(
     if missing_sections:
         return False, f"{relative_path} 缺少章节: {missing_sections}"
 
-    feature_paths = sorted(
-        os.path.relpath(path, project_root)
-        for path in glob.glob(os.path.join(project_root, "spec", "feature_*.md"))
-    )
+    # 功能范围以产品总说明当前链接的功能文档为准，不扫描目录里的废弃文档
+    feature_paths = [
+        path
+        for path in get_linked_product_design_paths(project_root)
+        if path != artifact_paths_mod.PRODUCT_OVERVIEW_DOC
+    ]
     if not feature_paths:
-        return False, "spec/ 下没有 feature_*.md，无法建立功能到代码映射"
+        return False, "产品总说明没有链接任何功能文档，无法建立功能到代码映射"
 
     feature_sections = _architecture_feature_sections(content)
     if not feature_sections:
@@ -312,20 +693,36 @@ def validate_final_code_design_document(
         feature_name = os.path.basename(feature_path)
         matching_sections = [section for section in feature_sections if feature_name in section]
         if len(matching_sections) != 1:
-            return False, f"最终架构文档没有映射功能文档: {feature_path}"
-        mapped_code_paths = [
-            path
-            for path in _existing_code_paths_in_text(project_root, matching_sections[0])
-            if not path.startswith(f"tests{os.sep}")
-        ]
-        if not mapped_code_paths:
-            return False, f"最终架构文档没有给功能文档映射真实代码文件: {feature_path}"
+            return False, f"最终架构文档必须唯一映射功能文档: {feature_path}"
+        section = matching_sections[0]
+        mapping_ok, mapping_detail, mapped_code_paths = _feature_code_mappings(
+            project_root,
+            section,
+        )
+        if not mapping_ok:
+            return (
+                False,
+                f"最终架构文档的功能代码映射无效: {feature_path}；{mapping_detail}",
+            )
+        verification_ok, verification_detail = _feature_verification_locations(
+            project_root,
+            section,
+        )
+        if not verification_ok:
+            return (
+                False,
+                f"最终架构文档的功能验证位置无效: {feature_path}；{verification_detail}",
+            )
+        forbidden = [word for word in FINAL_DESIGN_FORBIDDEN_WORDS if word in section]
+        if forbidden:
+            return (
+                False,
+                f"最终架构文档功能段不能把计划性表述写成最终事实（{forbidden}）: {feature_path}",
+            )
 
     feature_code_section = _section(content, "6. 各产品功能的代码设计") or ""
     if "代码位置" not in feature_code_section:
         return False, "最终架构文档的功能代码设计缺少“代码位置”"
-    if "验证位置" not in feature_code_section:
-        return False, "最终架构文档的功能代码设计缺少“验证位置”"
 
     sync_section = _section(content, "9. 最终同步结论") or ""
     expected_fields = {
@@ -344,8 +741,24 @@ def validate_final_code_design_document(
     sync_type = _field(sync_section, "本次同步类型")
     if sync_type not in {"架构变化", "架构未变化"}:
         return False, "最终同步结论的“本次同步类型”只能写“架构变化”或“架构未变化”"
-    if not _has_real_text(_field(sync_section, "核对依据")):
+    verification_basis = _field(sync_section, "核对依据")
+    if not _has_real_text(verification_basis):
         return False, "最终同步结论必须写清可以复核的核对依据"
+    state = load_state(project_root)
+    if state is None or state.workflow_id != workflow_id:
+        return False, "找不到当前工作流状态，无法核对机器记录编号"
+    required_record_ids, record_detail = _required_final_machine_record_ids(state)
+    if required_record_ids is None:
+        return False, record_detail
+    actual_record_ids = _machine_record_ids(verification_basis)
+    if actual_record_ids != required_record_ids:
+        missing_ids = sorted(required_record_ids - actual_record_ids)
+        extra_ids = sorted(actual_record_ids - required_record_ids)
+        return (
+            False,
+            "最终同步结论的核对依据必须精确列出当前机器记录编号；"
+            f"缺少={missing_ids}，额外或拼接错误={extra_ids}",
+        )
 
     return (
         True,
@@ -358,22 +771,23 @@ def validate_reproduce_documents(
     changed_paths: list[str],
     workflow_id: str,
 ) -> tuple[bool, str]:
-    index_path = os.path.join("bug", "index.md")
-    if index_path not in changed_paths:
-        return (False, "bug/index.md 没有在本阶段更新")
+    index_path = artifact_paths_mod.BUG_INDEX_DOC
+    normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
+    if index_path not in normalized_changed:
+        return (False, f"{index_path} 没有在本阶段更新")
     if not os.path.isfile(os.path.join(project_root, index_path)):
-        return (False, "bug/index.md 不存在")
+        return (False, f"{index_path} 不存在")
 
     changed_bug_docs = [
         rel_path
-        for rel_path in changed_paths
-        if rel_path.startswith(f"bug{os.sep}")
-        and rel_path != index_path
+        for rel_path in normalized_changed
+        if rel_path.startswith("bug/")
+        and os.path.basename(rel_path) not in BUG_INDEX_FILENAMES
         and os.path.isfile(os.path.join(project_root, rel_path))
         and rel_path.endswith(".md")
     ]
     if not changed_bug_docs:
-        return (False, "本阶段没有新增或修改 bug 记录文档")
+        return (False, "本阶段没有新增或修改缺陷记录文档")
 
     index_content = _read_text(project_root, index_path)
     required_sections = [
@@ -390,9 +804,9 @@ def validate_reproduce_documents(
     for rel_path in changed_bug_docs:
         filename = os.path.basename(rel_path)
         if not BUG_FILENAME_RE.match(filename):
-            return (False, f"bug 记录文件名不符合 YYYY-MM-DD_HHmm-<bug描述>.md: {filename}")
+            return (False, f"缺陷记录文件名必须是 缺陷_<缺陷文件标识>.md: {filename}")
         if not re.search(rf"\((?:\./)?{re.escape(filename)}\)", index_content):
-            return (False, f"bug/index.md 没有链接本次 bug 记录: {filename}")
+            return (False, f"{index_path} 没有链接本次缺陷记录: {filename}")
 
         content = _read_text(project_root, rel_path)
         if _field(content, "工作流编号") != workflow_id:
@@ -427,7 +841,7 @@ def validate_reproduce_documents(
 
     return (
         True,
-        f"本阶段 bug 记录已复现、确认根因并确定验收主题: {dict(zip(changed_bug_docs, topics))}",
+        f"本阶段缺陷记录已复现、确认根因并确定验收主题: {dict(zip(changed_bug_docs, topics))}",
     )
 
 
@@ -473,12 +887,15 @@ def validate_acceptance_plan_documents(
 
     all_criteria: list[str] = []
     for topic in topics:
-        rel_path = os.path.join("acceptance", f"{topic}_plan.md")
+        paths = topic_paths(project_root, topic)
+        rel_path = paths["acceptance_plan"]
         full_path = os.path.join(project_root, rel_path)
         if not os.path.isfile(full_path):
             return (False, f"缺少验收计划文档: {rel_path}")
 
         content = _read_text(project_root, rel_path)
+        if _field(content, "验收主题") != topic:
+            return (False, f"{rel_path} 的验收主题显示名称必须是“{topic}”")
         for heading in ACCEPTANCE_PLAN_SECTIONS:
             if _section(content, heading) is None:
                 return (False, f"{rel_path} 缺少“{heading}”")
@@ -496,17 +913,17 @@ def validate_acceptance_plan_documents(
             product_basis = _field(criterion_content, "产品设计依据") or ""
             if re.search(r"\[[^\]]+\]\([^)]+\)", product_basis) is None:
                 return (False, f"{rel_path} 的 {criterion_id} 产品设计依据必须是可打开的链接")
-        if "../traceability.md" not in content:
-            return (False, f"{rel_path} 的上下游文档没有链接 ../traceability.md")
-        if f"../qa/{topic}_plan.md" not in content:
-            return (False, f"{rel_path} 没有写下游测试计划路径 qa/{topic}_plan.md")
+        if f"../{TRACEABILITY_PATH}" not in content:
+            return (False, f"{rel_path} 的上下游文档没有链接 ../{TRACEABILITY_PATH}")
+        test_plan_rel = paths["test_plan"]
+        if f"../{test_plan_rel}" not in content and os.path.basename(test_plan_rel) not in content:
+            return (False, f"{rel_path} 没有写下游测试计划路径 {test_plan_rel}")
 
         for criterion_id in criterion_ids:
-            expected_topic_path = f"acceptance/{topic}_plan.md"
             matching_rows = [
                 row
                 for row in traceability_rows
-                if expected_topic_path in row[1] and criterion_id in row[2]
+                if paths["acceptance_plan"] in row[1] and criterion_id in row[2]
             ]
             if len(matching_rows) != 1:
                 return (
@@ -537,7 +954,10 @@ def _validate_topic_index_rows(
     expected_links: dict[str, str],
     allowed_text_values: dict[str, set[str]] | None = None,
 ) -> tuple[bool, str, list]:
-    """校验主题索引的主题集合、顺序、链接和前置关系。"""
+    """校验主题索引的主题集合、顺序、链接和前置关系。
+
+    expected_links 的值使用 "{key}" 占位符，按主题文件标识展开。
+    """
 
     try:
         relations = read_topic_index(
@@ -566,9 +986,14 @@ def _validate_topic_index_rows(
 
     order_by_topic = {relation.topic: relation.order for relation in relations}
     for relation in relations:
+        file_key = topic_file_key(project_root, relation.topic)
         for header, path_template in expected_links.items():
-            expected_path = path_template.format(topic=relation.topic)
-            if relation.links.get(header) != expected_path:
+            expected_path = path_template.format(key=file_key)
+            actual_value = relation.links.get(header)
+            if actual_value != expected_path:
+                allowed = (allowed_text_values or {}).get(header, set())
+                if actual_value in allowed:
+                    continue
                 return False, f"{relative_path} 主题“{relation.topic}”的“{header}”链接错误", []
         for prerequisite in relation.prerequisites:
             if prerequisite not in order_by_topic:
@@ -617,14 +1042,14 @@ def validate_acceptance_index(
         project_root,
         workflow_id,
         topics,
-        os.path.join("acceptance", "index.md"),
+        artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
         ["展示顺序", "验收主题", "前置主题", "验收计划", "主题验收结果"],
         {
-            "验收计划": "./{topic}_plan.md",
-            "主题验收结果": "./{topic}_result.md",
+            "验收计划": "./{key}_验收计划.md",
+            "主题验收结果": "./{key}_验收结果.md",
         },
     )
-    return ok, detail or "acceptance/index.md 结构完整"
+    return ok, detail or f"{artifact_paths_mod.ACCEPTANCE_INDEX_DOC} 结构完整"
 
 
 def validate_inherited_topic_index(
@@ -642,11 +1067,11 @@ def validate_inherited_topic_index(
         project_root,
         workflow_id,
         topics,
-        os.path.join("acceptance", "index.md"),
+        artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
         ["展示顺序", "验收主题", "前置主题", "验收计划", "主题验收结果"],
         {
-            "验收计划": "./{topic}_plan.md",
-            "主题验收结果": "./{topic}_result.md",
+            "验收计划": "./{key}_验收计划.md",
+            "主题验收结果": "./{key}_验收结果.md",
         },
     )
     if not source_ok:
@@ -663,8 +1088,8 @@ def validate_inherited_topic_index(
     if not target_ok:
         return False, target_detail
     if relation_signature(source_relations) != relation_signature(target_relations):
-        return False, f"{relative_path} 的主题关系没有继承 acceptance/index.md"
-    return True, f"{relative_path} 已继承 acceptance/index.md 的主题关系"
+        return False, f"{relative_path} 的主题关系没有继承 {artifact_paths_mod.ACCEPTANCE_INDEX_DOC}"
+    return True, f"{relative_path} 已继承 {artifact_paths_mod.ACCEPTANCE_INDEX_DOC} 的主题关系"
 
 
 def validate_downstream_traceability(
@@ -682,28 +1107,29 @@ def validate_test_plan_documents(
     topics: list[str],
 ) -> tuple[bool, str]:
     """校验测试计划结构，以及每条 AC 到 TC 的覆盖关系。"""
-    index_path = os.path.join(project_root, "qa", "index.md")
+    qa_index = artifact_paths_mod.QA_INDEX_DOC
+    index_path = os.path.join(project_root, qa_index)
     if not os.path.isfile(index_path):
-        return False, "qa/index.md 不存在"
+        return False, f"{qa_index} 不存在"
     inherited_ok, inherited_detail = validate_inherited_topic_index(
         project_root,
         workflow_id,
         topics,
-        os.path.join("qa", "index.md"),
+        qa_index,
         ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
         {
-            "验收计划": "../acceptance/{topic}_plan.md",
-            "测试计划": "./{topic}_plan.md",
+            "验收计划": "../acceptance/{key}_验收计划.md",
+            "测试计划": "./{key}_测试计划.md",
+            "测试结果": "./{key}_测试结果.md",
         },
         {"测试结果": {"无自动化测试项"}},
     )
     if not inherited_ok:
         return False, inherited_detail
-    index_content = _read_text(project_root, os.path.join("qa", "index.md"))
-    index_links = set(re.findall(r"\[[^\]]+\]\((?:\./)?([^)]*_plan\.md)\)", index_content))
+    index_content = _read_text(project_root, qa_index)
     index_relations = read_topic_index(
         project_root,
-        os.path.join("qa", "index.md"),
+        qa_index,
         workflow_id,
         ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
         {"测试结果": {"无自动化测试项"}},
@@ -713,10 +1139,12 @@ def validate_test_plan_documents(
     total_criteria = 0
     total_test_items = 0
     for topic in topics:
-        acceptance_rel_path = os.path.join("acceptance", f"{topic}_plan.md")
-        test_rel_path = os.path.join("qa", f"{topic}_plan.md")
-        if f"{topic}_plan.md" not in index_links:
-            return False, f"qa/index.md 缺少主题测试计划链接: {topic}_plan.md"
+        paths = topic_paths(project_root, topic)
+        acceptance_rel_path = paths["acceptance_plan"]
+        test_rel_path = paths["test_plan"]
+        test_plan_name = os.path.basename(test_rel_path)
+        if test_plan_name not in index_content:
+            return False, f"{qa_index} 缺少主题测试计划链接: {test_plan_name}"
         if not os.path.isfile(os.path.join(project_root, acceptance_rel_path)):
             return False, f"缺少上游验收计划: {acceptance_rel_path}"
         if not os.path.isfile(os.path.join(project_root, test_rel_path)):
@@ -729,9 +1157,9 @@ def validate_test_plan_documents(
         for heading in TEST_PLAN_SECTIONS:
             if _section(test_content, heading) is None:
                 return False, f"{test_rel_path} 缺少“{heading}”"
-        if f"../acceptance/{topic}_plan.md" not in test_content:
+        if f"../{acceptance_rel_path}" not in test_content:
             return False, f"{test_rel_path} 缺少上游验收计划链接"
-        if "../impl/index.md" not in test_content:
+        if f"../{artifact_paths_mod.IMPL_INDEX_DOC}" not in test_content:
             return False, f"{test_rel_path} 缺少下游实施计划链接"
         if re.search(r"测试(?:结果|状态)\s*[：:]\s*(?:通过|失败)", test_content):
             return False, f"{test_rel_path} 不能提前填写测试通过或失败"
@@ -744,13 +1172,14 @@ def validate_test_plan_documents(
             test_items = parse_test_plan_items(project_root, topic)
         except ValueError as exc:
             return False, str(exc)
+        test_result_name = os.path.basename(paths["test_result"])
         expected_result_cell = (
-            f"./{topic}_result.md"
+            f"./{test_result_name}"
             if any(item.requires_test_code for item in test_items)
             else "无自动化测试项"
         )
         if any(item.requires_test_code for item in test_items):
-            if f"./{topic}_result.md" not in test_content:
+            if f"./{test_result_name}" not in test_content:
                 return False, f"{test_rel_path} 缺少下游测试结果链接"
         elif "无自动化测试结果，转主题验收" not in test_content:
             return False, f"{test_rel_path} 是纯人工验收主题，必须写“无自动化测试结果，转主题验收”"
@@ -758,7 +1187,7 @@ def validate_test_plan_documents(
         if actual_result_cell != expected_result_cell:
             return (
                 False,
-                f"qa/index.md 主题“{topic}”的测试结果位置应为 {expected_result_cell}",
+                f"{qa_index} 主题“{topic}”的测试结果位置应为 {expected_result_cell}",
             )
         for criterion_id in criterion_ids:
             criterion_items = [
@@ -767,7 +1196,7 @@ def validate_test_plan_documents(
             if not criterion_items:
                 return False, f"{test_rel_path} 没有覆盖 {criterion_id}"
             criterion_lines = [line for line in coverage.splitlines() if criterion_id in line]
-            if not any(f"../acceptance/{topic}_plan.md#" in line for line in criterion_lines):
+            if not any(f"../{acceptance_rel_path}#" in line for line in criterion_lines):
                 return False, f"{test_rel_path} 的 {criterion_id} 没有链接到验收计划具体位置"
         total_criteria += len(criterion_ids)
         total_test_items += len(test_items)
@@ -801,7 +1230,8 @@ def _validate_topic_acceptance_result(
     topic: str,
 ) -> tuple[bool, str]:
     """校验正式主题验收结果只包含全部通过的当前验收条件。"""
-    rel_path = os.path.join("acceptance", f"{topic}_result.md")
+    paths = topic_paths(project_root, topic)
+    rel_path = paths["acceptance_result"]
     ok, detail = _validate_topic_result_file(
         project_root,
         rel_path,
@@ -828,7 +1258,7 @@ def _validate_topic_acceptance_result(
     if stage_state is None:
         return False, "缺少 topic_acceptance（主题验收阶段）状态"
 
-    plan_rel_path = os.path.join("acceptance", f"{topic}_plan.md")
+    plan_rel_path = paths["acceptance_plan"]
     if not os.path.isfile(os.path.join(project_root, plan_rel_path)):
         return False, f"{plan_rel_path} 不存在"
     plan_content = _read_text(project_root, plan_rel_path)
@@ -871,6 +1301,25 @@ def _validate_topic_acceptance_result(
         if _field(criterion_content, "程序记录") != record.record_id:
             return False, f"{rel_path} 的 {criterion_id} 程序记录编号不一致"
 
+        # 自动化或混合条件必须逐项列出作为依据的精确机器测试记录编号
+        machine_ids_text = _field(criterion_content, "机器测试记录编号")
+        if method == "人工验收":
+            if machine_ids_text not in (None, "不适用"):
+                return False, f"{rel_path} 的 {criterion_id} 是纯人工验收，机器测试记录编号必须写“不适用”"
+        else:
+            if not _has_real_text(machine_ids_text):
+                return False, f"{rel_path} 的 {criterion_id} 缺少机器测试记录编号"
+            expected_machine_ids = set(record.test_record_ids)
+            actual_machine_ids = _machine_record_ids(machine_ids_text)
+            if actual_machine_ids != expected_machine_ids or not expected_machine_ids:
+                missing_ids = sorted(expected_machine_ids - actual_machine_ids)
+                extra_ids = sorted(actual_machine_ids - expected_machine_ids)
+                return (
+                    False,
+                    f"{rel_path} 的 {criterion_id} 机器测试记录编号与当前记录不一致："
+                    f"缺少={missing_ids}，额外或拼接错误={extra_ids}",
+                )
+
         manual_confirmation = _field(criterion_content, "人工确认")
         if method == "自动化测试":
             if manual_confirmation != "不适用":
@@ -909,12 +1358,12 @@ def _validate_topic_acceptance_result(
                 return False, f"{rel_path} 的 {criterion_id} 缺少混合验收使用的自动化测试项"
 
     required_links = [
-        f"./{topic}_plan.md",
-        f"../impl/{topic}.md",
-        "../traceability.md",
+        f"./{os.path.basename(paths['acceptance_plan'])}",
+        f"../{paths['impl_doc']}",
+        f"../{TRACEABILITY_PATH}",
     ]
     if any(method != "人工验收" for method in methods.values()):
-        required_links.append(f"../qa/{topic}_result.md")
+        required_links.append(f"../{paths['test_result']}")
     elif "无自动化测试项" not in content:
         return False, f"{rel_path} 是纯人工验收主题，必须明确写“无自动化测试项”"
     for required_link in required_links:
@@ -948,7 +1397,8 @@ def _validate_topic_test_execution_result(
     items,
     tasks,
 ) -> tuple[bool, str]:
-    rel_path = os.path.join("qa", f"{topic}_result.md")
+    """主题测试结果必须逐字段引用当前机器记录，不接受手写成功。"""
+    rel_path = topic_paths(project_root, topic)["test_result"]
     full_path = os.path.join(project_root, rel_path)
     if not os.path.isfile(full_path):
         return False, f"{rel_path} 不存在"
@@ -984,28 +1434,93 @@ def _validate_topic_test_execution_result(
             return False, f"{topic} / {item.test_id} 的当前执行记录不是退出码 0 的通过状态"
         if record.command != task.command:
             return False, f"{topic} / {item.test_id} 的执行命令和登记命令不一致"
-        if set(record.test_entries) != set(task.test_entries):
+        if record.test_entries != task.test_entries:
             return False, f"{topic} / {item.test_id} 的执行入口和登记入口不一致"
+        if record.cwd != task.cwd:
+            return False, f"{topic} / {item.test_id} 的工作目录和登记内容不一致"
+        if record.timeout_seconds != task.timeout_seconds:
+            return False, f"{topic} / {item.test_id} 的超时时间和登记内容不一致"
         if not record.code_snapshot_hash or not record.test_code_hash:
             return False, f"{topic} / {item.test_id} 的执行记录没有绑定代码快照"
+        if not record.record_id:
+            return False, f"{topic} / {item.test_id} 的执行记录缺少机器记录编号"
+        if record.record_id != _topic_test_record_id(topic, item.test_id, record):
+            return False, f"{topic} / {item.test_id} 的机器记录编号与执行事实不一致"
+        if (
+            isinstance(record.timeout_seconds, bool)
+            or not isinstance(record.timeout_seconds, int)
+            or record.timeout_seconds <= 0
+        ):
+            return False, f"{topic} / {item.test_id} 的机器记录超时时间不合法"
+        if (
+            not isinstance(record.started_at, str)
+            or not isinstance(record.finished_at, str)
+            or isinstance(record.duration_seconds, bool)
+            or not isinstance(record.duration_seconds, (int, float))
+            or record.duration_seconds < 0
+        ):
+            return False, f"{topic} / {item.test_id} 的机器记录时间或时长不完整"
+        try:
+            record_started_at = datetime.fromisoformat(record.started_at)
+            record_finished_at = datetime.fromisoformat(record.finished_at)
+        except ValueError:
+            return False, f"{topic} / {item.test_id} 的机器记录时间格式不合法"
+        if (
+            record_started_at.tzinfo is None
+            or record_finished_at.tzinfo is None
+            or record_finished_at < record_started_at
+        ):
+            return False, f"{topic} / {item.test_id} 的机器记录时间顺序不合法"
+        if not record.platform or not record.executable:
+            return False, f"{topic} / {item.test_id} 的机器记录缺少平台或实际可执行文件"
+        if not isinstance(record.output_tail, str):
+            return False, f"{topic} / {item.test_id} 的机器记录输出摘要不是文本"
+        if not isinstance(record.output_sha256, str) or re.fullmatch(
+            r"[0-9a-f]{64}",
+            record.output_sha256,
+        ) is None:
+            return False, f"{topic} / {item.test_id} 的机器记录输出哈希不完整"
+        if (
+            isinstance(record.output_bytes, bool)
+            or not isinstance(record.output_bytes, int)
+            or record.output_bytes < 0
+        ):
+            return False, f"{topic} / {item.test_id} 的机器记录输出字节数不合法"
 
         section = sections[item.test_id]
         if item.criterion_id not in (_field(section, "对应验收条件") or ""):
             return False, f"{rel_path} 的 {item.test_id} 没有对应 {item.criterion_id}"
-        if _field(section, "退出码") != "0":
-            return False, f"{rel_path} 的 {item.test_id} 必须写真实退出码 0"
+        # 机器事实统一编码成单行文本，再与正式结果逐字段精确比对。
+        checks = [
+            ("机器记录编号", record.record_id),
+            ("工作目录", record.cwd or "项目根"),
+            ("测试入口", _argv_text(record.test_entries)),
+            ("执行命令", _argv_text(record.command)),
+            ("超时（秒）", record.timeout_seconds),
+            ("运行环境", _environment_text(record.platform, record.executable)),
+            ("开始时间", record.started_at),
+            ("结束时间", record.finished_at),
+            ("时长（秒）", record.duration_seconds),
+            ("退出码", record.exit_code),
+            ("输出摘要", _output_tail_text(record.output_tail)),
+            ("输出哈希", record.output_sha256),
+            ("输出字节数", record.output_bytes),
+            ("产品代码哈希", record.code_snapshot_hash),
+            ("测试代码哈希", record.test_code_hash),
+        ]
+        for label, expected_value in checks:
+            actual_value = _field(section, label)
+            if expected_value is None or actual_value != str(expected_value):
+                return (
+                    False,
+                    f"{rel_path} 的 {item.test_id} “{label}”与机器记录不一致"
+                    f"（记录 {expected_value!r}，文档 {actual_value!r}）",
+                )
         if _field(section, "自动化测试结果") != "通过":
             return False, f"{rel_path} 的 {item.test_id} 必须写“自动化测试结果：通过”"
-        command_text = _field(section, "执行命令") or ""
-        if command_text != shlex.join(task.command):
-            return False, f"{rel_path} 的 {item.test_id} 执行命令与程序记录不一致"
-        entry_text = _field(section, "测试入口") or ""
-        missing_entries = [entry for entry in task.test_entries if entry not in entry_text]
-        if missing_entries:
-            return False, f"{rel_path} 的 {item.test_id} 缺少测试入口: {missing_entries}"
-        if not _field(section, "实际结果"):
+        if not _has_real_text(_field(section, "实际结果")):
             return False, f"{rel_path} 的 {item.test_id} 缺少实际结果"
-        if not _field(section, "证据"):
+        if not _has_real_text(_field(section, "证据")):
             return False, f"{rel_path} 的 {item.test_id} 缺少可复核证据"
     return True, ""
 
@@ -1015,7 +1530,10 @@ def validate_test_execution_results(
     workflow_id: str,
     topics: list[str],
 ) -> tuple[bool, str]:
-    """测试执行阶段只校验主题测试结果，不能提前要求主题验收结果。"""
+    """测试执行阶段只校验主题测试结果，不能提前要求主题验收结果。
+
+    只接受当前机器记录；不再保留“只看旧文档通过”的兼容放行。
+    """
     failures = []
     try:
         automated = automated_topics(project_root, topics)
@@ -1030,21 +1548,7 @@ def validate_test_execution_results(
         return False, "找不到当前工作流的测试执行状态"
     stage_state = state.stages.get("test_execution")
     if stage_state is None:
-        # 兼容旧的单元测试夹具和旧工作流快照；新的 test_execution 状态一旦存在，
-        # 必须严格检查当前执行记录，不能再只看文档里的“通过”。
-        compatibility_failures = []
-        for topic in automated:
-            compatibility_ok, compatibility_detail = _validate_topic_result_file(
-                project_root,
-                os.path.join("qa", f"{topic}_result.md"),
-                workflow_id,
-                "测试结果",
-            )
-            if not compatibility_ok:
-                compatibility_failures.append(compatibility_detail)
-        if compatibility_failures:
-            return False, "；".join(compatibility_failures)
-        return True, f"兼容旧状态：主题测试结果都明确通过: {automated}"
+        return False, "缺少 test_execution（测试执行阶段）状态，正式结果必须来自真实执行记录"
     for topic in automated:
         topic_items = [item for item in automated_items if item.topic == topic]
         test_ok, test_detail = _validate_topic_test_execution_result(
@@ -1102,16 +1606,103 @@ def validate_final_regression_state(
     project_root: str,
     workflow_id: str,
 ) -> tuple[bool, str]:
-    """最终全量回归只接受程序实际执行统一测试入口后的通过状态。"""
+    """逐字段校验最终全量回归的当前机器事实。"""
     state = load_state(project_root)
     if state is None or state.workflow_id != workflow_id:
         return (False, "找不到当前工作流状态，不能确认最终全量回归")
     result = state.regression_test
+    if result.status == "unavailable":
+        return (False, "最终全量回归明确失败：当前平台没有可执行的项目全量测试入口")
     if result.status != "passed":
         return (False, f"最终全量回归状态不是通过：{result.status}")
+    if result.exit_code != 0:
+        return (False, f"最终全量回归退出码不是 0：{result.exit_code}")
+
+    # 入口必须与当前平台登记的项目全量入口一致
+    expected_argv, entry_detail = test_runner_mod.resolve_regression_entry(project_root)
+    if expected_argv is None:
+        return (False, f"当前项目全量测试入口无效：{entry_detail}")
+    if list(result.entry or []) != expected_argv:
+        return (
+            False,
+            f"最终全量回归使用的入口 {result.entry} 与当前平台登记入口 {expected_argv} 不一致，"
+            "必须重新真实执行",
+        )
+    if list(result.command or []) != expected_argv:
+        return (
+            False,
+            f"最终全量回归实际命令 {result.command} 与当前平台登记入口 {expected_argv} 不一致",
+        )
+    if result.cwd != "":
+        return (False, "最终全量回归必须在项目根执行")
+    if result.timeout_seconds != test_runner_mod.TEST_TIMEOUT_SECONDS:
+        return (
+            False,
+            "最终全量回归超时时间与程序固定值不一致："
+            f"{result.timeout_seconds} != {test_runner_mod.TEST_TIMEOUT_SECONDS}",
+        )
+
+    if not result.started_at or not result.finished_at:
+        return (False, "最终全量回归缺少开始时间或结束时间")
+    try:
+        started_at = datetime.fromisoformat(result.started_at)
+        finished_at = datetime.fromisoformat(result.finished_at)
+    except (TypeError, ValueError):
+        return (False, "最终全量回归开始时间或结束时间不是合法 ISO 8601 时间")
+    if started_at.tzinfo is None or finished_at.tzinfo is None or finished_at < started_at:
+        return (False, "最终全量回归时间缺少时区或结束时间早于开始时间")
+    if (
+        isinstance(result.duration_seconds, bool)
+        or not isinstance(result.duration_seconds, (int, float))
+        or result.duration_seconds < 0
+    ):
+        return (False, f"最终全量回归时长不合法：{result.duration_seconds}")
+
+    if not isinstance(result.output_tail, str):
+        return (False, "最终全量回归输出摘要不是文本")
+    if not isinstance(result.output_sha256, str) or re.fullmatch(
+        r"[0-9a-f]{64}",
+        result.output_sha256,
+    ) is None:
+        return (False, "最终全量回归输出哈希不是完整 SHA-256")
+    if (
+        isinstance(result.output_bytes, bool)
+        or not isinstance(result.output_bytes, int)
+        or result.output_bytes < 0
+    ):
+        return (False, f"最终全量回归输出字节数不合法：{result.output_bytes}")
+    if result.platform != sys.platform:
+        return (
+            False,
+            f"最终全量回归记录平台 {result.platform!r} 与当前平台 {sys.platform!r} 不一致",
+        )
+    expected_executable = process_runner_mod.resolve_executable(expected_argv[0])
+    if result.executable != expected_executable:
+        return (
+            False,
+            f"最终全量回归实际可执行文件 {result.executable!r} "
+            f"与当前入口 {expected_executable!r} 不一致",
+        )
+
+    expected_record_id = test_runner_mod.regression_record_id(
+        result.started_at,
+        result.finished_at,
+        result.exit_code,
+        result.output_sha256,
+        result.command,
+    )
+    if result.record_id != expected_record_id:
+        return (
+            False,
+            f"最终全量回归机器记录编号不一致：{result.record_id!r} != {expected_record_id!r}",
+        )
     if result.code_snapshot_hash != compute_code_snapshot_hash(project_root):
         return (False, "最终全量回归完成后代码又发生变化，必须重新执行全量测试")
-    return (True, f"最终全量测试已通过统一入口：{result.command}")
+    return (
+        True,
+        f"最终全量测试机器事实完整且匹配当前入口和代码："
+        f"{result.command}（机器记录 {result.record_id}）",
+    )
 
 
 def validate_overall_acceptance_prerequisites(

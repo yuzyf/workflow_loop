@@ -4,10 +4,12 @@
 
 首次处理已有代码项目时，查清用户当前能够使用的产品行为和对应代码实现，一次建立：
 
-- `spec/product.md`（产品总说明）。
-- 多个 `spec/feature_<english-name>.md`（功能说明文档）。
-- `spec/architecture_code_design.md`（代码架构设计文档）。
-- `spec/project_design_init_evidence.md`（本次代码调查、测试运行和文档校准证据）。
+- `spec/产品总说明.md`（产品总说明）。
+- 多个 `spec/功能_<功能文件标识>.md`（功能说明文档）。
+- `spec/代码架构设计.md`（代码架构设计文档）。
+- `spec/项目设计初始化证据.md`（本次代码调查、测试运行和文档校准证据）。
+
+功能文档的标题和正文保留用户确认的完整中文显示名称；文件名使用程序生成并保存的稳定中文文件标识（只保留中文、字母、数字、下划线、连字符，其它字符替换为下划线），两者可能不同。
 
 本阶段只适用于 `product_change`（修改产品）或 `bugfix`（修复缺陷）且 `project_design_initialized=false`（项目设计尚未初始化）的情况。`from_scratch`（从零创建项目）不执行本阶段。
 
@@ -45,7 +47,7 @@
 
 ## 三、调查证据文档
 
-调查证据按照 `Template_Repository/code_design/project_design_init_evidence.md` 写入 `spec/project_design_init_evidence.md`。本规范负责说明怎样取得真实证据，文档模板负责规定最终字段和章节。
+调查证据按照 `Template_Repository/code_design/project_design_init_evidence.md` 写入 `spec/项目设计初始化证据.md`。本规范负责说明怎样取得真实证据，文档模板负责规定最终字段和章节。
 
 程序会检查：
 
@@ -123,7 +125,7 @@
 
 ## 八、禁止事项
 
-- 禁止只生成 `spec/architecture_code_design.md`。
+- 禁止只生成 `spec/代码架构设计.md`。
 - 禁止把产品调查和代码调查拆成两轮互不校准的工作。
 - 禁止用旧文档存在代替本次调查和生成。
 - 禁止只看目录结构猜架构。

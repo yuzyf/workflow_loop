@@ -25,12 +25,12 @@ def test_state_round_trip(tmp_path):
         stages={
             "spec": StageState(
                 status="in_progress",
-                artifact_paths=["spec/product.md"],
+                artifact_paths=["spec/产品总说明.md"],
                 artifact_baseline_captured_at="2026-07-20T03:47:30+00:00",
-                artifact_baseline_hashes={"spec/product.md": None},
+                artifact_baseline_hashes={"spec/产品总说明.md": None},
                 gate=GateState(discussion_complete=True, code_validated=False, user_confirmed=False),
             ),
-            "code_design": StageState(status="pending", artifact_paths=["spec/architecture_code_design.md"]),
+            "code_design": StageState(status="pending", artifact_paths=["spec/代码架构设计.md"]),
             "test_execution": StageState(
                 discussion_material_hash="materials-123",
                 existing_test_code_accepted_hash="test-code-accepted-123",
@@ -67,7 +67,7 @@ def test_state_round_trip(tmp_path):
         spike_baseline=SpikeBaselineState(
             captured_at="2026-07-20T03:48:00+00:00",
             product_design_hash="product123",
-            product_design_paths=["spec/product.md", "spec/feature_example.md"],
+            product_design_paths=["spec/产品总说明.md", "spec/功能_示例.md"],
             code_design_hash="code123",
             legacy_unavailable=False,
         ),
@@ -108,7 +108,7 @@ def test_state_round_trip(tmp_path):
     # 验证嵌套 gate.discussion_complete 往返一致
     assert loaded.stages["spec"].gate.discussion_complete is True
     assert loaded.stages["spec"].artifact_baseline_captured_at == "2026-07-20T03:47:30+00:00"
-    assert loaded.stages["spec"].artifact_baseline_hashes == {"spec/product.md": None}
+    assert loaded.stages["spec"].artifact_baseline_hashes == {"spec/产品总说明.md": None}
     assert loaded.stages["spec"].existing_code_accepted_hash is None
     test_task = loaded.stages["test_execution"].test_tasks["上传文件"]["TC-01"]
     assert loaded.stages["test_execution"].discussion_material_hash == "materials-123"
@@ -126,7 +126,7 @@ def test_state_round_trip(tmp_path):
     assert loaded.verification.regression_test_result_hash == "regression123"
     # 验证穿刺设计基线往返一致
     assert loaded.spike_baseline.product_design_hash == "product123"
-    assert loaded.spike_baseline.product_design_paths == ["spec/product.md", "spec/feature_example.md"]
+    assert loaded.spike_baseline.product_design_paths == ["spec/产品总说明.md", "spec/功能_示例.md"]
     assert loaded.spike_baseline.legacy_unavailable is False
     assert loaded.recovery.source_stage == "test_plan"
     assert loaded.recovery.affected_stages == ["test_plan", "impl", "test_code"]
@@ -212,7 +212,7 @@ def test_full_schema_fields(tmp_path):
         spike_baseline=SpikeBaselineState(
             captured_at="2026-07-20T03:48:00+00:00",
             product_design_hash="product123",
-            product_design_paths=["spec/product.md"],
+            product_design_paths=["spec/产品总说明.md"],
             code_design_hash="code123",
             legacy_unavailable=True,
         ),

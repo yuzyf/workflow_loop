@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
-import signal
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from time import monotonic
 
+from . import artifact_paths as artifact_paths_mod
 from . import journal as journal_mod
+from . import process_runner as process_runner_mod
 from . import state as state_mod
 from . import test_mapping
 from . import traceability as traceability_mod
 from . import verification
 from .project import DEFAULT_TEST_PARALLELISM, load_project
 from .state import TestExecutionRecord, TestTaskState, WorkflowState, now_iso
+from .topic import topic_paths
 from .topic_relations import read_topic_index
 
 
@@ -43,6 +44,23 @@ class ExecutionAttempt:
     exit_code: int | None
     output_tail: str
     error: str | None = None
+
+
+def normalize_task_cwd(project_root: str, cwd: str | None) -> str:
+    """校验并规范化项目内工作目录；返回相对项目根的路径（空串表示项目根）。"""
+    if not cwd or cwd in (".", "./"):
+        return ""
+    candidate = cwd
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(project_root, candidate)
+    project_real = os.path.realpath(project_root)
+    candidate_real = os.path.realpath(candidate)
+    if os.path.commonpath([project_real, candidate_real]) != project_real:
+        raise ValueError(f"测试工作目录必须在项目内: {cwd}")
+    if not os.path.isdir(candidate_real):
+        raise ValueError(f"测试工作目录不存在: {cwd}")
+    relative = os.path.relpath(candidate_real, project_real)
+    return "" if relative == "." else relative.replace(os.sep, "/")
 
 
 def validate_command(argv: list[str]) -> tuple[bool, str]:
@@ -122,8 +140,9 @@ def prepare_task(
     test_id: str,
     command: list[str],
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    cwd: str | None = None,
 ) -> TestTaskState:
-    """登记一个已经由用户确认过的测试项命令。"""
+    """登记一个已经由用户确认过的测试项命令；登记不启动测试。"""
     valid, detail = validate_command(command)
     if not valid:
         raise ValueError(detail)
@@ -131,6 +150,7 @@ def prepare_task(
         raise ValueError("测试超时时间必须大于 0 秒")
     if topic not in workflow_state.topics:
         raise ValueError(f"主题不属于当前工作流: {topic}")
+    normalized_cwd = normalize_task_cwd(project_root, cwd)
 
     items = test_mapping.parse_test_plan_items(project_root, topic)
     item = next((candidate for candidate in items if candidate.test_id == test_id), None)
@@ -158,6 +178,7 @@ def prepare_task(
     stage_state.test_tasks.setdefault(topic, {})[test_id] = TestTaskState(
         test_entries=sorted(set(entries)),
         command=list(command),
+        cwd=normalized_cwd,
         dependencies=list(item.dependencies),
         timeout_seconds=timeout_seconds,
         status="pending",
@@ -227,6 +248,10 @@ def validate_prepared_tasks(
             return False, f"{item.topic} / {item.test_id}: {command_detail}"
         if task.timeout_seconds <= 0:
             return False, f"{item.topic} / {item.test_id} 的超时时间必须大于 0 秒"
+        try:
+            normalize_task_cwd(project_root, task.cwd or None)
+        except ValueError as exc:
+            return False, f"{item.topic} / {item.test_id}: {exc}"
         if tuple(task.dependencies) != item.dependencies:
             return False, f"{item.topic} / {item.test_id} 的登记依赖与当前测试计划不一致"
         expected_entries = sorted(set(current_entries.get(key, [])))
@@ -238,86 +263,55 @@ def validate_prepared_tasks(
     return True, f"{len(expected)} 个自动化测试项的登记任务与当前计划和测试代码一致"
 
 
-def _output_tail(output: str, limit: int = 4000) -> str:
-    if len(output) <= limit:
-        return output
-    return output[-limit:]
+def _record_id_for(attempt_result: process_runner_mod.ProcessResult, topic: str, test_id: str) -> str:
+    """测试机器记录编号：可从结果文档逐字段回查状态快照。"""
+    payload = (
+        f"{topic}|{test_id}|{attempt_result.started_at}|{attempt_result.finished_at}|"
+        f"{attempt_result.exit_code}|{attempt_result.output_sha256}"
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    compact_time = (attempt_result.started_at or "").replace(":", "").replace("-", "")
+    return f"RUN-{compact_time}-{digest}"
 
 
-def _kill_process_group(process: subprocess.Popen) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        try:
-            process.terminate()
-        except OSError:
-            return
-
-
-def _run_one(project_root: str, topic: str, test_id: str, task: TestTaskState, code_hash: str, test_hash: str) -> ExecutionAttempt:
-    started_at = now_iso()
-    started_clock = monotonic()
-    process: subprocess.Popen | None = None
-    try:
-        process = subprocess.Popen(
-            task.command,
-            cwd=project_root,
-            shell=False,
-            start_new_session=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+def _run_one(
+    project_root: str,
+    topic: str,
+    test_id: str,
+    task: TestTaskState,
+    code_hash: str,
+    test_hash: str,
+) -> tuple[ExecutionAttempt, process_runner_mod.ProcessResult]:
+    """通过共同受控执行器运行一个测试项，返回尝试摘要和完整机器事实。"""
+    cwd = os.path.join(project_root, task.cwd) if task.cwd else project_root
+    result = process_runner_mod.run_process(
+        process_runner_mod.ProcessRequest(
+            argv=list(task.command),
+            cwd=cwd,
+            timeout_seconds=task.timeout_seconds,
         )
-        try:
-            stdout, _ = process.communicate(timeout=task.timeout_seconds)
-            exit_code = process.returncode
-            status = "passed" if exit_code == 0 else "failed"
-            error = None if status == "passed" else f"退出码为 {exit_code}"
-        except subprocess.TimeoutExpired as exc:
-            _kill_process_group(process)
-            stdout, _ = process.communicate()
-            exit_code = None
-            status = "timeout"
-            error = f"运行超过 {task.timeout_seconds} 秒，已终止"
-            output = "\n".join(part for part in (stdout, exc.stdout or "") if part)
-            return ExecutionAttempt(
-                topic=topic,
-                test_id=test_id,
-                status=status,
-                command=list(task.command),
-                started_at=started_at,
-                finished_at=now_iso(),
-                duration_seconds=round(monotonic() - started_clock, 3),
-                exit_code=exit_code,
-                output_tail=_output_tail(output),
-                error=error,
-            )
-    except OSError as exc:
-        return ExecutionAttempt(
-            topic=topic,
-            test_id=test_id,
-            status="unavailable",
-            command=list(task.command),
-            started_at=started_at,
-            finished_at=now_iso(),
-            duration_seconds=round(monotonic() - started_clock, 3),
-            exit_code=None,
-            output_tail="",
-            error=f"启动测试命令失败: {exc}",
-        )
-
-    return ExecutionAttempt(
+    )
+    if result.status == "passed":
+        error = None
+    elif result.status == "timeout":
+        error = result.error_message
+    elif result.status == "error":
+        error = result.error_message or "启动测试命令失败"
+    else:
+        error = f"退出码为 {result.exit_code}"
+    attempt = ExecutionAttempt(
         topic=topic,
         test_id=test_id,
-        status=status,
+        status=result.status if result.status != "error" else "unavailable",
         command=list(task.command),
-        started_at=started_at,
-        finished_at=now_iso(),
-        duration_seconds=round(monotonic() - started_clock, 3),
-        exit_code=exit_code,
-        output_tail=_output_tail(stdout or ""),
+        started_at=result.started_at,
+        finished_at=result.finished_at,
+        duration_seconds=result.duration_seconds,
+        exit_code=result.exit_code,
+        output_tail=result.output_tail,
         error=error,
     )
+    return attempt, result
 
 
 def _topic_execution_order(
@@ -363,10 +357,10 @@ def _topic_prerequisites(
     workflow_state: WorkflowState,
     topics: set[str],
 ) -> tuple[list[str], dict[str, tuple[str, ...]]]:
-    """读取 qa/index.md 的主题顺序，只保留本阶段有自动化任务的前置主题。"""
+    """读取 qa/索引.md 的主题顺序，只保留本阶段有自动化任务的前置主题。"""
     relations = read_topic_index(
         project_root,
-        os.path.join("qa", "index.md"),
+        artifact_paths_mod.QA_INDEX_DOC,
         workflow_state.workflow_id,
         ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
         {"测试结果": {"无自动化测试项"}},
@@ -374,7 +368,7 @@ def _topic_prerequisites(
     ordered_topics = [relation.topic for relation in relations if relation.topic in topics]
     missing = sorted(topics - set(ordered_topics))
     if missing:
-        raise ValueError(f"qa/index.md 缺少需要执行自动化测试的主题: {missing}")
+        raise ValueError(f"{artifact_paths_mod.QA_INDEX_DOC} 缺少需要执行自动化测试的主题: {missing}")
     prerequisites = {
         relation.topic: tuple(
             prerequisite
@@ -439,7 +433,7 @@ def run_prepared_tasks(
             detail=trace_detail,
         )
     for topic in topics_to_run:
-        result_path = os.path.join(project_root, "qa", f"{topic}_result.md")
+        result_path = os.path.join(project_root, topic_paths(project_root, topic)["test_result"])
         if os.path.exists(result_path):
             os.remove(result_path)
             journal_mod.append_entry(
@@ -481,14 +475,16 @@ def run_prepared_tasks(
                     )
                 )
                 continue
-            attempt = _run_one(project_root, topic, test_id, task, code_hash, test_hash)
+            attempt, result = _run_one(project_root, topic, test_id, task, code_hash, test_hash)
             attempts.append(attempt)
             if attempt.status == "passed":
                 task.status = "passed"
                 task.last_error = None
-                task.current_record = TestExecutionRecord(
+                record = TestExecutionRecord(
                     test_entries=list(task.test_entries),
                     command=list(task.command),
+                    cwd=task.cwd,
+                    timeout_seconds=task.timeout_seconds,
                     started_at=attempt.started_at,
                     finished_at=attempt.finished_at,
                     duration_seconds=attempt.duration_seconds,
@@ -497,8 +493,16 @@ def run_prepared_tasks(
                     environment=safe_environment(),
                     code_snapshot_hash=code_hash,
                     test_code_hash=test_hash,
+                    output_tail=result.output_tail,
+                    output_sha256=result.output_sha256,
+                    output_bytes=result.output_bytes,
+                    platform=result.platform,
+                    executable=result.executable,
                 )
+                record.record_id = _record_id_for(result, topic, test_id)
+                task.current_record = record
             else:
+                # 失败、超时或无法启动立即清除当前测试项旧成功
                 task.status = "needs_action"
                 task.last_error = attempt.error or "测试没有通过"
                 task.current_record = None
@@ -558,8 +562,14 @@ def run_prepared_tasks(
             )
         ]
         if not ready_topics:
+            # 失败会逐层阻塞后置主题；先重新计算，不把正常传播误报为非法依赖。
+            if blocked_topics:
+                continue
             if remaining:
-                raise ValueError(f"主题依赖无法继续执行，请检查 qa/index.md: {sorted(remaining)}")
+                raise ValueError(
+                    f"主题依赖无法继续执行，请检查 {artifact_paths_mod.QA_INDEX_DOC}: "
+                    f"{sorted(remaining)}"
+                )
             break
 
         with ThreadPoolExecutor(max_workers=min(max_workers, len(ready_topics))) as executor:

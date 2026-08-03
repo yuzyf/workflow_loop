@@ -55,14 +55,21 @@ def test_set_project_design_initialized_creates_if_missing(tmp_path):
     assert project.project_design_initialized is True
 
 
-# 测试 is_installed：根据 .workflow_loop/project.json 是否存在判定安装状态
-def test_is_installed(tmp_path):
-    # 空目录：未安装
+# 测试 is_installed：只有 project.json 不能冒充完整安装骨架
+def test_is_installed_rejects_project_state_without_complete_skeleton(tmp_path):
+    """Workflow-Test
+    主题：一次安装后可在三种操作系统开始使用工作流
+    测试项：TC-04 所有失败路径恢复确认前状态
+    验收条件：AC-04 异常不留下半套安装
+    测试方式：自动化测试 + 人工验收
+    测试层级：单元测试
+    测试目标：空目录和只有项目状态文件的残缺骨架都不能被判定为已安装
+    测试入口：tests/test_project.py::test_is_installed_rejects_project_state_without_complete_skeleton
+    代码入口：workflow_loop.project.is_installed
+    """
     assert is_installed(str(tmp_path)) is False
-    # 创建项目
     create_project(str(tmp_path))
-    # 验证已安装
-    assert is_installed(str(tmp_path)) is True
+    assert is_installed(str(tmp_path)) is False
 
 
 # 测试 project.json 跨 Run 持久化：即使 state.json 被覆盖成 aborted，project 标记依然保留

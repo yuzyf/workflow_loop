@@ -77,33 +77,33 @@ def test_compute_file_hash(tmp_path):
 def test_product_design_hash_uses_only_linked_feature_documents(tmp_path):
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir()
-    (spec_dir / "product.md").write_text(
-        "[功能 A](./feature_a.md)\n[外部文档](https://example.com)\n",
+    (spec_dir / "产品总说明.md").write_text(
+        "[功能 A](./功能_a.md)\n[外部文档](https://example.com)\n",
         encoding="utf-8",
     )
-    (spec_dir / "feature_a.md").write_text("A", encoding="utf-8")
-    (spec_dir / "feature_old.md").write_text("old", encoding="utf-8")
+    (spec_dir / "功能_a.md").write_text("A", encoding="utf-8")
+    (spec_dir / "功能_已删除.md").write_text("old", encoding="utf-8")
 
     paths = get_linked_product_design_paths(str(tmp_path))
     first_hash, _ = compute_product_design_hash(str(tmp_path))
-    (spec_dir / "feature_old.md").write_text("changed old", encoding="utf-8")
+    (spec_dir / "功能_已删除.md").write_text("changed old", encoding="utf-8")
     second_hash, _ = compute_product_design_hash(str(tmp_path))
 
-    assert paths == ["spec/feature_a.md", "spec/product.md"]
+    assert paths == ["spec/产品总说明.md", "spec/功能_a.md"]
     assert first_hash == second_hash
 
 
 def test_product_and_code_design_hash_change_with_content(tmp_path):
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir()
-    (spec_dir / "product.md").write_text("[功能 A](./feature_a.md)\n", encoding="utf-8")
-    (spec_dir / "feature_a.md").write_text("A", encoding="utf-8")
-    (spec_dir / "architecture_code_design.md").write_text("code v1", encoding="utf-8")
+    (spec_dir / "产品总说明.md").write_text("[功能 A](./功能_a.md)\n", encoding="utf-8")
+    (spec_dir / "功能_a.md").write_text("A", encoding="utf-8")
+    (spec_dir / "代码架构设计.md").write_text("code v1", encoding="utf-8")
 
     product_hash_1, _ = compute_product_design_hash(str(tmp_path))
     code_hash_1 = compute_code_design_hash(str(tmp_path))
-    (spec_dir / "feature_a.md").write_text("A changed", encoding="utf-8")
-    (spec_dir / "architecture_code_design.md").write_text("code v2", encoding="utf-8")
+    (spec_dir / "功能_a.md").write_text("A changed", encoding="utf-8")
+    (spec_dir / "代码架构设计.md").write_text("code v2", encoding="utf-8")
 
     product_hash_2, _ = compute_product_design_hash(str(tmp_path))
     code_hash_2 = compute_code_design_hash(str(tmp_path))
@@ -117,7 +117,7 @@ def test_compute_impl_hash_includes_code_snapshot(tmp_path):
     impl_dir = os.path.join(str(tmp_path), "impl")
     os.makedirs(impl_dir)
     # 写入实施记录文件
-    with open(os.path.join(impl_dir, "test_topic.md"), "w") as f:
+    with open(os.path.join(impl_dir, "test_topic_实施记录.md"), "w") as f:
         f.write("impl record")
     # 第一次计算 impl 哈希
     h1 = compute_impl_hash(str(tmp_path), "test_topic")
@@ -139,7 +139,7 @@ def test_compute_impl_hash_ignores_test_code_changes(tmp_path):
     tests_dir = os.path.join(str(tmp_path), "tests")
     os.makedirs(impl_dir)
     os.makedirs(tests_dir)
-    with open(os.path.join(impl_dir, "test_topic.md"), "w") as stream:
+    with open(os.path.join(impl_dir, "test_topic_实施记录.md"), "w") as stream:
         stream.write("impl record")
     with open(os.path.join(tests_dir, "test_topic.py"), "w") as stream:
         stream.write("def test_one(): pass")
@@ -152,6 +152,16 @@ def test_compute_impl_hash_ignores_test_code_changes(tmp_path):
 
 
 def test_structured_pyproject_changes_are_split_between_test_and_product_hashes(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-03 测试代码追踪标识准确绑定要求
+    验收条件：AC-03 测试代码能够追踪到产品要求
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：测试工具配置和开发依赖组只改变测试代码哈希而正式产品配置改变产品代码哈希
+    测试入口：tests/test_verification.py::test_structured_pyproject_changes_are_split_between_test_and_product_hashes
+    代码入口：workflow_loop.verification._split_pyproject_config
+    """
     create_project(str(tmp_path))
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
@@ -161,6 +171,9 @@ version = "0.1.0"
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+
+[dependency-groups]
+dev = ["pytest>=7"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -185,6 +198,19 @@ testpaths = ["tests"]
     product_after = compute_non_test_code_snapshot_hash(str(tmp_path))
     pyproject.write_text(
         pyproject.read_text(encoding="utf-8").replace(
+            'dev = ["pytest>=7"]',
+            'dev = ["pytest>=7", "pyyaml>=6"]',
+        ),
+        encoding="utf-8",
+    )
+
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != test_after
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == product_after
+
+    test_after = compute_test_code_snapshot_hash(str(tmp_path))
+    product_after = compute_non_test_code_snapshot_hash(str(tmp_path))
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
             'version = "0.1.0"',
             'version = "0.2.0"',
         ),
@@ -193,6 +219,47 @@ testpaths = ["tests"]
 
     assert compute_test_code_snapshot_hash(str(tmp_path)) == test_after
     assert compute_non_test_code_snapshot_hash(str(tmp_path)) != product_after
+
+
+def test_test_prefixed_source_module_stays_in_product_hash(tmp_path):
+    """Workflow-Test
+    主题：项目修改可恢复且正式测试结果来自真实执行
+    测试项：TC-03 测试代码追踪标识准确绑定要求
+    验收条件：AC-03 测试代码能够追踪到产品要求
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：产品源码中的 test_ 前缀模块归入产品哈希，真测试目录和明确测试后缀归入测试哈希
+    测试入口：tests/test_verification.py::test_test_prefixed_source_module_stays_in_product_hash
+    代码入口：workflow_loop.verification.compute_non_test_code_snapshot_hash 和 compute_test_code_snapshot_hash
+    """
+    create_project(str(tmp_path))
+    product_module = tmp_path / "src" / "workflow_loop" / "test_execution.py"
+    directory_test = tmp_path / "tests" / "test_execution.py"
+    suffix_test = tmp_path / "src" / "components" / "button.test.ts"
+    product_module.parent.mkdir(parents=True)
+    directory_test.parent.mkdir(parents=True)
+    suffix_test.parent.mkdir(parents=True)
+    product_module.write_text("PRODUCT = 1\n", encoding="utf-8")
+    directory_test.write_text("def test_execution(): pass\n", encoding="utf-8")
+    suffix_test.write_text("test('button', () => {})\n", encoding="utf-8")
+
+    product_before = compute_non_test_code_snapshot_hash(str(tmp_path))
+    test_before = compute_test_code_snapshot_hash(str(tmp_path))
+    product_module.write_text("PRODUCT = 2\n", encoding="utf-8")
+
+    product_after = compute_non_test_code_snapshot_hash(str(tmp_path))
+    test_after = compute_test_code_snapshot_hash(str(tmp_path))
+    assert product_after != product_before
+    assert test_after == test_before
+
+    directory_test.write_text("def test_execution(): assert True\n", encoding="utf-8")
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == product_after
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != test_after
+
+    test_after = compute_test_code_snapshot_hash(str(tmp_path))
+    suffix_test.write_text("test('button', () => { expect(true) })\n", encoding="utf-8")
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == product_after
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != test_after
 
 
 def test_test_entry_command_and_script_are_part_of_test_code_hash(tmp_path):
@@ -281,7 +348,7 @@ def test_check_invalidation_no_change(tmp_path):
     impl_dir = os.path.join(str(tmp_path), "impl")
     os.makedirs(impl_dir)
     # 写入实施记录
-    with open(os.path.join(impl_dir, "test_topic.md"), "w") as f:
+    with open(os.path.join(impl_dir, "test_topic_实施记录.md"), "w") as f:
         f.write("impl record")
     # 计算 impl 哈希
     impl_hash = compute_impl_hash(str(tmp_path), "test_topic")
@@ -299,7 +366,7 @@ def test_check_invalidation_impl_changed(tmp_path):
     impl_dir = os.path.join(str(tmp_path), "impl")
     os.makedirs(impl_dir)
     # 写入原始实施记录
-    with open(os.path.join(impl_dir, "test_topic.md"), "w") as f:
+    with open(os.path.join(impl_dir, "test_topic_实施记录.md"), "w") as f:
         f.write("original")
     # 计算 impl 哈希
     impl_hash = compute_impl_hash(str(tmp_path), "test_topic")
@@ -319,14 +386,14 @@ def test_check_invalidation_impl_changed(tmp_path):
         }
     }
     state.regression_test = RegressionTestState(status="passed", exit_code=0)
-    qa_result = tmp_path / "qa" / "test_topic_result.md"
-    acceptance_result = tmp_path / "acceptance" / "test_topic_result.md"
+    qa_result = tmp_path / "qa" / "test_topic_测试结果.md"
+    acceptance_result = tmp_path / "acceptance" / "test_topic_验收结果.md"
     qa_result.parent.mkdir(exist_ok=True)
     acceptance_result.parent.mkdir(exist_ok=True)
     qa_result.write_text("old test result", encoding="utf-8")
     acceptance_result.write_text("old acceptance result", encoding="utf-8")
     # 修改 impl 记录内容（触发 invalidation）
-    with open(os.path.join(impl_dir, "test_topic.md"), "w") as f:
+    with open(os.path.join(impl_dir, "test_topic_实施记录.md"), "w") as f:
         f.write("changed")
     # 检查 invalidation
     invalidations = check_invalidation(state, str(tmp_path))
@@ -353,7 +420,7 @@ def test_check_invalidation_impl_changed(tmp_path):
 def test_acceptance_result_change_returns_to_regression_test(tmp_path):
     acceptance_dir = os.path.join(str(tmp_path), "acceptance")
     os.makedirs(acceptance_dir)
-    result_path = os.path.join(acceptance_dir, "test_topic_result.md")
+    result_path = os.path.join(acceptance_dir, "test_topic_验收结果.md")
     with open(result_path, "w") as stream:
         stream.write("original")
     state = _make_state(str(tmp_path))
@@ -410,7 +477,7 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     acc_dir = os.path.join(str(tmp_path), "acceptance")
     os.makedirs(acc_dir)
     # 写入原始 acceptance plan
-    with open(os.path.join(acc_dir, "test_topic_plan.md"), "w") as f:
+    with open(os.path.join(acc_dir, "test_topic_验收计划.md"), "w") as f:
         f.write("original")
     # 计算 acceptance_plan 哈希
     ap_hash = compute_acceptance_plan_hash(str(tmp_path), "test_topic")
@@ -418,10 +485,10 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     state = _make_state(str(tmp_path), acceptance_plan_hash=ap_hash)
     state.stages["test_plan"].artifact_produced_at = "before"
     state.stages["test_plan"].artifact_baseline_captured_at = "before"
-    state.stages["test_plan"].artifact_baseline_hashes = {"qa/index.md": "old"}
+    state.stages["test_plan"].artifact_baseline_hashes = {"qa/索引.md": "old"}
     state.stages["impl"].code_baseline_hash = "old-code-baseline"
     # 修改 acceptance plan 内容（触发 invalidation）
-    with open(os.path.join(acc_dir, "test_topic_plan.md"), "w") as f:
+    with open(os.path.join(acc_dir, "test_topic_验收计划.md"), "w") as f:
         f.write("changed")
     # 检查 invalidation
     invalidations = check_invalidation(state, str(tmp_path))
@@ -445,6 +512,16 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
 
 
 def test_recovery_actions_distinguish_recheck_from_rerun(tmp_path):
+    """Workflow-Test
+    主题：返回上游或整轮作废后状态与项目内容正确恢复
+    测试项：TC-04 返回后区分重新核对和重新执行
+    验收条件：AC-04 复用内容必须重新核对
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：返回后计划和既有代码先重新核对而测试执行和主题验收必须重新执行
+    测试入口：tests/test_verification.py::test_recovery_actions_distinguish_recheck_from_rerun
+    代码入口：workflow_loop.verification.recovery_stage_action
+    """
     state = _make_state(str(tmp_path))
     state.recovery.source_stage = "test_plan"
     state.recovery.reason = "测试范围变化"
@@ -492,7 +569,7 @@ def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
     create_project(str(tmp_path))
     acc_dir = tmp_path / "acceptance"
     acc_dir.mkdir()
-    (acc_dir / "test_topic_plan.md").write_text("original", encoding="utf-8")
+    (acc_dir / "test_topic_验收计划.md").write_text("original", encoding="utf-8")
     register_topics(str(tmp_path), ["test_topic"])
 
     state = _make_state(str(tmp_path))
@@ -502,7 +579,7 @@ def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
     )
     save_state(str(tmp_path), state)
 
-    (acc_dir / "new_topic_plan.md").write_text("new", encoding="utf-8")
+    (acc_dir / "new_topic_验收计划.md").write_text("new", encoding="utf-8")
     invalidations = check_invalidation(state, str(tmp_path))
 
     assert invalidations == [("acceptance_plan", "acceptance_plan 及全部后续阶段")]
