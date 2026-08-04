@@ -1,18 +1,26 @@
 [project]
 name = "workflow-loop"
 version = "0.1.0"
-description = "把 AI 驱动的软件开发从读 markdown 自觉遵守变成不过代码门禁就不能推进的流程约束系统"
+description = "为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "yuzyf" }]
 dependencies = []
 
 [project.scripts]
 workflow = "workflow_loop.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "PyYAML>=6.0"]
+dev = ["build>=1.2", "pytest>=7.0", "PyYAML>=6.0"]
+
+[project.urls]
+Homepage = "https://github.com/yuzyf/workflow_loop"
+Repository = "https://github.com/yuzyf/workflow_loop"
 
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

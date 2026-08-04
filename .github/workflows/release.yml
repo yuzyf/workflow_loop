@@ -292,7 +292,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1.0
-          name: workflow-loop 0.1.0
+          name: Workflow Loop 0.1.0
+          body: |
+            Workflow Loop 0.1.0 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。
+
+            - 支持 macOS、Linux 和原生 Windows 使用一条命令完成安装。
+            - 支持从零创建、修改产品和修复缺陷三种工作意图。
+            - 每个正式环节依次经过讨论完成、程序检查和用户确认三道门。
+            - 通过需求交付追踪表关联设计、验收、测试和实施结果。
+            - 正式测试由程序保存命令、环境、时间、退出码和代码版本等机器执行记录。
+            - 支持返回上游修正、本轮修改回退和整轮作废恢复。
+            - 运行环境要求 Python 3.11 或更高版本。
           files: |
             install.sh
             install.ps1

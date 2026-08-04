@@ -69,7 +69,7 @@ _Avoid_: 在 start --intent 里静默安装并直接开跑；把未安装当成�
 
 
 **Official Install Command** (官方安装命令):
-用户先进入目标项目根目录，只执行一条与当前终端匹配的官方安装命令。macOS 和 Linux 使用 `curl -fsSL https://github.com/yuzyf/workflow_loop_spike/releases/download/v0.1.0/install.sh | bash`；原生 Windows PowerShell 使用 `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop_spike/releases/download/v0.1.0/install.ps1 | iex"`。安装器在一次运行里完成两件事：电脑尚无 `workflow` 时安装全局命令；随后安装当前项目。面向用户不再提供 `workflow attach` 第二步。
+用户先进入目标项目根目录，只执行一条与当前终端匹配的官方安装命令。macOS 和 Linux 使用 `curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.1.0/install.sh | bash`；原生 Windows PowerShell 使用 `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop/releases/download/v0.1.0/install.ps1 | iex"`。安装器在一次运行里完成两件事：电脑尚无 `workflow` 时安装全局命令；随后安装当前项目。面向用户不再提供 `workflow attach` 第二步。
 
 安装脚本必须支持通过管道执行时仍从当前终端读取目录确认。确认输入不能直接读取承载脚本正文的标准输入；应读取 `/dev/tty`（当前终端设备），无法取得交互终端时明确停止并说明原因。需要用真实的 `cat install.sh | bash` 或等价管道方式验证确认输入、取消和继续安装三条路径。
 
@@ -77,18 +77,18 @@ _Avoid_: 在 start --intent 里静默安装并直接开跑；把未安装当成�
 
 全局命令提供 `workflow --version` 身份查询，固定返回产品标识 `workflow-loop` 和当前版本。安装脚本发现 PATH 中已有名为 `workflow` 的命令时，必须先核对产品标识和兼容版本；只有确认为兼容的 Workflow Loop 才能复用。遇到其它软件的同名命令或不兼容版本时立即停止，说明实际命令位置、检测到的身份或版本以及处理方法，不能调用内部项目写入功能，也不能静默覆盖。
 
-**Fixed Product Version** (固定产品版本):
-当前产品只存在一个版本 `0.1.0`。`pyproject.toml` 的发行版本、GitHub 标签 `v0.1.0`、`workflow --version`、`install.sh`、`install.ps1`、全局工具安装要求和项目 `project.json` 的安装版本必须全部严格等于 `0.1.0`；不存在兼容版本范围，也不设计 `0.1.1`、`0.2.0`、多版本引擎、版本调度、升级或迁移。
+**Product Version Rule** (产品版本规则):
+本次正式发布的产品版本是 `0.1.0`。`pyproject.toml` 的发行版本、GitHub 标签 `v0.1.0`、`workflow --version`、`install.sh`、`install.ps1`、全局工具安装要求和项目 `project.json` 的安装版本必须全部严格等于 `0.1.0`；本轮不设计兼容版本范围、多版本引擎、版本调度、升级或迁移。
 
-PyPI 上的 `workflow-loop==0.1.0` 只能正式发布一次。发布后继续修改的源码不能覆盖或重新发布为同一个 PyPI 版本；需要再次发布时，必须先由用户明确撤销“永久固定 `0.1.0`”的决定并重新设计版本和升级规则。当前产品不能提前实现隐藏的后续版本能力。
-_Avoid_: 把源码提交号冒充新版本, 重发或替换 PyPI 的 0.1.0, 使用 latest 让安装内容漂移, 接受其它版本为兼容版本, 提前加入多版本调度器, 未重新确认版本规则就发布修复
+PyPI 上的每个发行版本只能正式发布一次，不能删除、覆盖或重发。`workflow-loop==0.1.0` 发布后，需要再次公开发布修改时，必须先选择一个尚未被 PyPI 占用的新版本号，并把 Python 分发包、GitHub 标签、命令身份、安装脚本和项目安装版本统一更新为这个新版本号。具体新版本号和升级规则在对应发布需求中另行确认，当前产品不提前实现隐藏的后续版本能力。
+_Avoid_: 把源码提交号冒充新版本, 重发或替换 PyPI 的已有版本, 使用 latest 让安装内容漂移, 各公开入口使用不同版本号, 提前加入多版本调度器, 未确认新版本号就发布修复
 
 **Release Distribution** (正式发布渠道):
-唯一正式版本同时使用 GitHub Release（GitHub 正式发布页）和 PyPI（Python 公共软件包仓库）。发行包名固定为 `workflow-loop`；当前源码仓库分别提供 `https://github.com/yuzyf/workflow_loop_spike/releases/download/v0.1.0/install.sh` 和 `https://github.com/yuzyf/workflow_loop_spike/releases/download/v0.1.0/install.ps1`。官方命令使用不可变的 `v0.1.0` 地址，不使用会变化的 `latest` 地址。
+本次 `0.1.0` 正式版本同时使用 GitHub Release（GitHub 正式发布页）和 PyPI（Python 公共软件包仓库）。发行包名固定为 `workflow-loop`；当前源码仓库分别提供 `https://github.com/yuzyf/workflow_loop/releases/download/v0.1.0/install.sh` 和 `https://github.com/yuzyf/workflow_loop/releases/download/v0.1.0/install.ps1`。官方命令使用不可变的 `v0.1.0` 地址，不使用会变化的 `latest` 地址。
 
 `v0.1.0` GitHub Release 附带不可变的 `install.sh` 和 `install.ps1`。两个脚本内置同一个经过发布测试的 `uv` 安装工具版本和各支持平台安装包的 SHA-256（文件摘要）校验值。电脑已有完全相同版本的 `uv` 时可以复用；没有或版本不同时，把指定版本下载到本次安装的临时目录并校验，不能覆盖用户已有的其它 `uv`。脚本使用这个确定版本的 `uv tool` 安装 `workflow-loop==0.1.0`，随后删除临时 `uv`；不能要求用户预装安装工具，也不能使用不带版本的 `workflow-loop`。安装完成后再次执行 `workflow --version`，必须得到产品身份 `workflow-loop` 和版本 `0.1.0`，否则不能修改目标项目。
 
-正式发布由 GitHub Actions（GitHub 自动化任务）只在标签 `v0.1.0` 上执行：运行完整测试、构建 Python wheel（二进制分发包）和 source distribution（源码分发包）、使用 PyPI Trusted Publishing（可信发布）上传，不保存长期 PyPI 密码或上传令牌；随后从 PyPI 安装 `workflow-loop==0.1.0`，并在 Windows、macOS 和 Linux 上执行对应安装脚本的冒烟测试。前述动作全部通过后才创建或公开同时带有两个安装脚本的 `v0.1.0` GitHub Release。任一步失败都不能公开正式 Release。首次发布前必须确认并注册 `workflow-loop` 的 PyPI 项目名；检测到 PyPI 已存在 `0.1.0` 时发布任务只能停止，不能删除、覆盖或重发。
+正式发布由 GitHub Actions（GitHub 自动化任务）只在标签 `v0.1.0` 上执行：先核对版本身份并运行完整测试，再构建 Python wheel（二进制分发包）和 source distribution（源码分发包）；随后让 Linux、macOS、PowerShell 7 和 Windows PowerShell 5.1 四种托管环境使用对应安装脚本安装同一次构建的分发包并完成冒烟测试。前述检查全部通过后，才使用 PyPI Trusted Publishing（可信发布）上传同一份分发包，不保存长期 PyPI 密码或上传令牌；最后创建或公开同时带有两个安装脚本的 `v0.1.0` GitHub Release。任一步失败都不能继续后续公开发布。首次发布前必须确认并注册 `workflow-loop` 的 PyPI 项目名；检测到 PyPI 已存在 `0.1.0` 时发布任务只能停止，不能删除、覆盖或重发。手动运行发布任务只执行核对、测试、构建和四种托管环境安装验证，不上传 PyPI，也不创建 GitHub 正式发布页。
 _Avoid_: 从 main 分支直接下载安装脚本, 安装脚本不锁 0.1.0, GitHub Release 与 PyPI 版本不同, PyPI 包尚未可安装就公开安装脚本, 在仓库保存长期 PyPI 令牌, 只构建成功但不做真实安装验证
 
 **Supported Host Platforms** (正式支持的运行平台):

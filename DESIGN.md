@@ -68,7 +68,7 @@ curl -fsSL <安装地址>/install.sh | bash
 ### 2.5 仓库布局
 
 ```
-workflow_loop_spike/                      # 仓库根（可仍名 spike）
+workflow_loop/                            # 仓库根
   ├─ pyproject.toml                       # console script: workflow = "workflow_loop.cli:main"
   ├─ install.sh                           # 官方安装脚本（shell 引导 + 调 workflow install-project）
   ├─ AGENTS.md                            # 最小工作流契约 + 核心表达要求
