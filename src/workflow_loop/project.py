@@ -5,6 +5,8 @@ import tempfile
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 
+from packaging.version import InvalidVersion, Version
+
 # 统一产品身份：版本常量只在包 __init__ 定义一份，安装、CLI 和项目检查共用
 from . import __version__ as PRODUCT_VERSION
 
@@ -69,6 +71,30 @@ class ProjectState:
 class SkeletonStatus:
     state: str
     problems: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MaintenanceSkeletonStatus:
+    """更新流程使用的项目骨架状态，不要求项目版本等于当前程序版本。"""
+
+    state: str
+    installed_version: str | None = None
+    target_version: str | None = None
+    needs_update: bool = False
+    problems: list[str] = field(default_factory=list)
+
+
+def stable_version(value: object, label: str = "版本") -> Version:
+    """解析正式 PEP 440 版本；预发布、开发版和本地版不属于正式发布。"""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label}必须是非空字符串")
+    try:
+        parsed = Version(value.strip())
+    except InvalidVersion as exc:
+        raise ValueError(f"{label} {value!r} 不是有效的 Python 包版本") from exc
+    if parsed.is_prerelease or parsed.is_devrelease or parsed.local is not None:
+        raise ValueError(f"{label} {value!r} 不是正式版本")
+    return parsed
 
 
 # 生成 ISO 8601 UTC 时间戳（内部用，不对外暴露）
@@ -315,6 +341,112 @@ def check_skeleton(project_root: str) -> SkeletonStatus:
     if problems:
         return SkeletonStatus(state="broken", problems=problems)
     return SkeletonStatus(state="installed")
+
+
+def inspect_skeleton_for_update(
+    project_root: str,
+    target_version: str = PRODUCT_VERSION,
+) -> MaintenanceSkeletonStatus:
+    """只读检查当前目录中的旧版项目是否能直接更新到目标正式版本。"""
+    try:
+        target = stable_version(target_version, "目标版本")
+    except ValueError as exc:
+        return MaintenanceSkeletonStatus(
+            state="broken",
+            target_version=target_version,
+            problems=[str(exc)],
+        )
+
+    wf_dir = os.path.join(project_root, WORKFLOW_LOOP_DIRNAME)
+    project_json = os.path.join(project_root, PROJECT_FILE)
+    problems: list[str] = []
+    installed_version: str | None = None
+    installed: Version | None = None
+
+    if not os.path.lexists(wf_dir):
+        return MaintenanceSkeletonStatus(
+            state="uninstalled",
+            target_version=str(target),
+            problems=[f"当前目录缺少 {WORKFLOW_LOOP_DIRNAME}/，不是已安装项目根目录"],
+        )
+    if os.path.islink(wf_dir) or not os.path.isdir(wf_dir):
+        problems.append(f"{WORKFLOW_LOOP_DIRNAME}/ 必须是项目根下的普通目录，不能是符号链接")
+
+    if not os.path.lexists(project_json):
+        problems.append(f"缺少安装版本标记 {PROJECT_FILE}")
+    elif os.path.islink(project_json) or not os.path.isfile(project_json):
+        problems.append(f"{PROJECT_FILE} 必须是普通文件，不能是符号链接")
+    else:
+        try:
+            with open(project_json, "r", encoding="utf-8") as stream:
+                data = json.load(stream)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            problems.append(f"{PROJECT_FILE} 无法读取: {exc}")
+        else:
+            if not isinstance(data, dict):
+                problems.append(f"{PROJECT_FILE} 顶层必须是 JSON 对象")
+            else:
+                raw_version = data.get("installer_version")
+                if isinstance(raw_version, str):
+                    installed_version = raw_version
+                try:
+                    installed = stable_version(raw_version, "项目安装版本")
+                except ValueError as exc:
+                    problems.append(str(exc))
+                if not isinstance(data.get("project_design_initialized", False), bool):
+                    problems.append("project_design_initialized（项目设计已初始化）字段无效")
+                if not isinstance(data.get("topic_history", []), list):
+                    problems.append("topic_history（历史主题）字段无效")
+                if not isinstance(data.get("test_entry", {}), (dict, str)):
+                    problems.append("test_entry（项目全量测试入口）字段无效")
+                if not isinstance(data.get("artifact_file_keys", {}), dict):
+                    problems.append("artifact_file_keys（正式文件标识映射）字段无效")
+
+    for dirname in (TEMPLATE_DIRNAME, STANDARDIZED_DIRNAME):
+        directory = os.path.join(wf_dir, dirname)
+        if os.path.islink(directory) or not os.path.isdir(directory):
+            problems.append(f"缺少普通目录 .workflow_loop/{dirname}/，或该路径是符号链接")
+            continue
+        has_material = False
+        for root, dirs, files in os.walk(directory, followlinks=False):
+            linked_dirs = [name for name in dirs if os.path.islink(os.path.join(root, name))]
+            linked_files = [name for name in files if os.path.islink(os.path.join(root, name))]
+            if linked_dirs or linked_files:
+                relative_root = os.path.relpath(root, project_root).replace(os.sep, "/")
+                for name in linked_dirs + linked_files:
+                    problems.append(f"{relative_root}/{name} 是符号链接，更新已停止")
+            dirs[:] = [name for name in dirs if name not in linked_dirs]
+            if any(
+                not os.path.islink(os.path.join(root, name))
+                and os.path.isfile(os.path.join(root, name))
+                for name in files
+            ):
+                has_material = True
+        if not has_material:
+            problems.append(f".workflow_loop/{dirname}/ 不包含任何普通材料文件")
+
+    agents_path = os.path.join(project_root, AGENTS_MD_FILENAME)
+    if os.path.islink(agents_path) or not os.path.isfile(agents_path):
+        problems.append(f"缺少项目根普通文件 {AGENTS_MD_FILENAME}，或该路径是符号链接")
+
+    if installed is not None and installed > target:
+        problems.append(
+            f"项目版本 {installed} 高于目标版本 {target}，Workflow Loop 不允许降级"
+        )
+
+    if problems:
+        return MaintenanceSkeletonStatus(
+            state="broken",
+            installed_version=installed_version,
+            target_version=str(target),
+            problems=problems,
+        )
+    return MaintenanceSkeletonStatus(
+        state="installed",
+        installed_version=str(installed),
+        target_version=str(target),
+        needs_update=installed != target,
+    )
 
 
 # 判断项目设计架构是否已初始化（PathComposer 用）

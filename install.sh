@@ -25,6 +25,7 @@ AGENTS_MD="${PROJECT_ROOT}/AGENTS.md"
 # 工具环境与命令目录：显式固定并导出，保证确认时披露的位置就是实际写入位置
 UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
 UV_TOOL_DIR="${UV_TOOL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/uv/tools}"
+INSTALL_RECORD="${WORKFLOW_LOOP_INSTALL_RECORD:-${XDG_DATA_HOME:-$HOME/.local/share}/workflow-loop/install.json}"
 export UV_TOOL_BIN_DIR UV_TOOL_DIR
 
 # 临时目录（确认后才创建和使用；结束时删除）
@@ -34,6 +35,9 @@ INSTALLED_GLOBAL="no"
 SHELL_CONFIG_BACKUP=""
 SHELL_CONFIG_FILE=""
 SHELL_CONFIG_ORIGIN=""
+PATH_CONFIG_LINE=""
+INSTALL_RECORD_BACKUP=""
+INSTALL_RECORD_ORIGIN=""
 
 cleanup() {
     if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
@@ -61,6 +65,13 @@ rollback_global() {
     elif [ "${SHELL_CONFIG_ORIGIN}" = "missing" ]; then
         echo "删除本次新建的终端配置 ${SHELL_CONFIG_FILE}..."
         rm -f "${SHELL_CONFIG_FILE}"
+    fi
+    if [ "${INSTALL_RECORD_ORIGIN}" = "existing" ] && [ -f "${INSTALL_RECORD_BACKUP}" ]; then
+        mkdir -p "$(dirname "${INSTALL_RECORD}")"
+        cp "${INSTALL_RECORD_BACKUP}" "${INSTALL_RECORD}"
+    elif [ "${INSTALL_RECORD_ORIGIN}" = "missing" ]; then
+        rm -f "${INSTALL_RECORD}"
+        rmdir "$(dirname "${INSTALL_RECORD}")" 2>/dev/null || true
     fi
 }
 
@@ -290,6 +301,56 @@ if [ "${GLOBAL_NEEDED}" = "yes" ]; then
             fail "PATH 更新失败。已回滚本次全局安装，项目保持未修改。"
         fi
         echo "已把 ${UV_TOOL_BIN_DIR} 加入 ${SHELL_CONFIG_FILE}（对后续新终端生效）。"
+    fi
+
+    # 记录 PATH 来源。只有 path_added=true 且配置仍精确匹配时，全局卸载才删除该 PATH 项。
+    if [ -e "${INSTALL_RECORD}" ]; then
+        [ -f "${INSTALL_RECORD}" ] && [ ! -L "${INSTALL_RECORD}" ] \
+            || { rollback_global; fail "安装来源记录不是可安全覆盖的普通文件：${INSTALL_RECORD}"; }
+        INSTALL_RECORD_BACKUP="${TMP_DIR}/install_record.bak"
+        cp "${INSTALL_RECORD}" "${INSTALL_RECORD_BACKUP}"
+        INSTALL_RECORD_ORIGIN="existing"
+    else
+        INSTALL_RECORD_ORIGIN="missing"
+    fi
+    mkdir -p "$(dirname "${INSTALL_RECORD}")"
+    export INSTALL_RECORD PRODUCT_NAME PRODUCT_VERSION UV_TOOL_DIR UV_TOOL_BIN_DIR
+    export PATH_CHANGE_NEEDED SHELL_CONFIG_FILE PATH_CONFIG_LINE
+    if ! "${PYTHON_BIN}" - <<'PY'
+import json
+import os
+import tempfile
+from datetime import datetime, timezone
+
+path = os.environ["INSTALL_RECORD"]
+data = {
+    "product": os.environ["PRODUCT_NAME"],
+    "version": os.environ["PRODUCT_VERSION"],
+    "tool_dir": os.environ["UV_TOOL_DIR"],
+    "tool_bin_dir": os.environ["UV_TOOL_BIN_DIR"],
+    "path_added": os.environ["PATH_CHANGE_NEEDED"] == "yes",
+    "path_scope": "shell_config",
+    "path_config_file": os.environ.get("SHELL_CONFIG_FILE", ""),
+    "path_marker_line": f"# workflow-loop {os.environ['PRODUCT_VERSION']}",
+    "path_config_line": os.environ.get("PATH_CONFIG_LINE", ""),
+    "recorded_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+}
+directory = os.path.dirname(path)
+fd, temporary = tempfile.mkstemp(prefix=".workflow-install-", dir=directory)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(data, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.remove(temporary)
+PY
+    then
+        rollback_global
+        fail "安装来源记录写入失败；已回滚本次全局安装，项目保持未修改。"
     fi
 else
     WORKFLOW_BIN="${EXISTING_WORKFLOW}"

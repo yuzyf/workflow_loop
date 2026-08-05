@@ -25,6 +25,8 @@ if (-not $env:UV_TOOL_BIN_DIR) { $env:UV_TOOL_BIN_DIR = Join-Path $env:USERPROFI
 if (-not $env:UV_TOOL_DIR) { $env:UV_TOOL_DIR = Join-Path $env:USERPROFILE ".local\share\uv\tools" }
 $ToolBinDir = $env:UV_TOOL_BIN_DIR
 $ToolDir = $env:UV_TOOL_DIR
+$recordBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE ".local\share" }
+$InstallRecord = if ($env:WORKFLOW_LOOP_INSTALL_RECORD) { $env:WORKFLOW_LOOP_INSTALL_RECORD } else { Join-Path $recordBase "workflow-loop\install.json" }
 
 # 临时目录（确认后才创建和使用；结束时删除）
 $TmpDir = $null
@@ -32,6 +34,8 @@ $TmpDir = $null
 $InstalledGlobal = $false
 $UserPathBackup = $null
 $UserPathChanged = $false
+$InstallRecordBackup = $null
+$InstallRecordExisted = $false
 
 function Remove-TempDir {
     if ($script:TmpDir -and (Test-Path $script:TmpDir)) {
@@ -49,6 +53,13 @@ function Undo-GlobalInstall {
     if ($script:UserPathChanged) {
         Write-Host "恢复本次修改的用户 PATH..."
         [Environment]::SetEnvironmentVariable("Path", $script:UserPathBackup, "User")
+    }
+    if ($script:InstallRecordExisted -and $script:InstallRecordBackup -and (Test-Path $script:InstallRecordBackup)) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $script:InstallRecord) | Out-Null
+        Copy-Item -Force $script:InstallRecordBackup $script:InstallRecord
+    }
+    elseif (-not $script:InstallRecordExisted) {
+        Remove-Item -Force $script:InstallRecord -ErrorAction SilentlyContinue
     }
 }
 
@@ -288,6 +299,44 @@ if ($GlobalNeeded) {
             Stop-Install "用户 PATH 更新失败：$($_.Exception.Message)。已回滚本次全局安装，项目保持未修改。"
         }
         Write-Host "已把 $ToolBinDir 加入用户 PATH（对后续新终端生效）。"
+    }
+
+    # 记录用户 PATH 来源。只有 path_added=true 且当前值仍与记录完全相同时，全局卸载才恢复原值。
+    if (Test-Path -LiteralPath $InstallRecord) {
+        if (-not (Test-Path -LiteralPath $InstallRecord -PathType Leaf)) {
+            $InstallRecordExisted = $true
+            Undo-GlobalInstall
+            Stop-Install "安装来源记录不是可安全覆盖的普通文件：$InstallRecord"
+        }
+        $InstallRecordBackup = Join-Path $TmpDir "install_record.bak"
+        Copy-Item -Force $InstallRecord $InstallRecordBackup
+        $InstallRecordExisted = $true
+    }
+    $recordDirectory = Split-Path -Parent $InstallRecord
+    New-Item -ItemType Directory -Force -Path $recordDirectory | Out-Null
+    $currentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not $currentUserPath) { $currentUserPath = "" }
+    $pathBefore = if ($UserPathChanged) { $UserPathBackup } else { $currentUserPath }
+    $record = [ordered]@{
+        product          = $ProductName
+        version          = $ProductVersion
+        tool_dir         = $ToolDir
+        tool_bin_dir     = $ToolBinDir
+        path_added       = [bool]$UserPathChanged
+        path_scope       = "user"
+        user_path_before = $pathBefore
+        user_path_after  = $currentUserPath
+        recorded_at      = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss+00:00")
+    }
+    $recordTemp = Join-Path $recordDirectory (".workflow-install-" + [System.IO.Path]::GetRandomFileName())
+    try {
+        Write-Utf8NoBom -Path $recordTemp -Content ($record | ConvertTo-Json)
+        Move-Item -Force $recordTemp $InstallRecord
+    }
+    catch {
+        Remove-Item -Force $recordTemp -ErrorAction SilentlyContinue
+        Undo-GlobalInstall
+        Stop-Install "安装来源记录写入失败：$($_.Exception.Message)。已回滚本次全局安装，项目保持未修改。"
     }
 }
 else {

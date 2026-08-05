@@ -1,0 +1,800 @@
+{
+  "baseline_complete": true,
+  "clean_paths": [],
+  "created_at": "2026-08-05T08:15:15+00:00",
+  "entries": {
+    "acceptance/0_1_0_在_GitHub_和_PyPI_完成正式发布_验收结果.md": {
+      "backup_path": "files/888d2e8555bdbf23459310087bba9657c1fa4814626576017f88f6ebb24f042a.bin",
+      "content_hash": "5f5fb84b669c2ed3d1bae0fa8265dd42d49cf9f675d20100a1d8dc081bcd6bea",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/0_1_0_在_GitHub_和_PyPI_完成正式发布_验收计划.md": {
+      "backup_path": "files/be78b97b9f7ff3218e4b6eee4a7f557f5f1950b78f6bb06d243c03798297d259.bin",
+      "content_hash": "d31ddcc0ce7b3802ba5b619f820e64f879ecfaaebbaf095642ad6e773217d120",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/一次安装后可在三种操作系统开始使用工作流_验收结果.md": {
+      "backup_path": "files/6a3ae1526e2521774ff72343301dc41d472c91b460d4a824bcbf3c4f04f3d6f4.bin",
+      "content_hash": "ec0e4d0fc72c111b63e2522a1c0ee33415ddabf88fef2dfffc3f2fd84f9f11ae",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/一次安装后可在三种操作系统开始使用工作流_验收计划.md": {
+      "backup_path": "files/927c93cbc1f9ba42215dc64a9b80e1a48e93584478a79a6b41b5a4c758ebd012.bin",
+      "content_hash": "99e88935464108ab65ae41677114337f4ed157af82915ba1e90f871982bd080c",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/主题验收_全量回归和最终同步完成后正式收工_验收结果.md": {
+      "backup_path": "files/968df8dad758799ef52b2af9c8488af28cd17b4fdc9e83fa2de620f1116fdbf9.bin",
+      "content_hash": "9561d689a7067a35e97901d89ae5c8b428c4500d4c4855c451ced744ccb2d676",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/主题验收_全量回归和最终同步完成后正式收工_验收计划.md": {
+      "backup_path": "files/e4082f24cf0ce4811aef76d150472aea01156ad62a0765e16546663987f59da0.bin",
+      "content_hash": "ad36e4ff4681a0016715f72a9ae6b85f1f2d58adad6da4d55573bd15c9979df6",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收结果.md": {
+      "backup_path": "files/fa96230d3666ecf3a04c7bfd33c256b352f7ccbef5fbce7e70043fc35d0abb91.bin",
+      "content_hash": "43deceb7aa5d07101d8ef230b54c3ef3dd35c5cadc738eac7ce44c00978d3c9e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md": {
+      "backup_path": "files/23bc23f33c6b956061ed5a9edb7c4d0f332aaf78473744e78b884ebdb8697427.bin",
+      "content_hash": "9eb0357011eca980e83cff62ebe9d8ca9e23c916960759e021999c4d27a2a65e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/从当前项目强制卸载_Workflow_Loop_验收结果.md": {
+      "backup_path": "files/58b5b86692772bdea76e60e049733d2d20f759a455a476dfe2df8e0697a8c30d.bin",
+      "content_hash": "c93cd90cf18a522073d832aaf75b9eb8c806675685a61c27265387920c1b6ae1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/从当前项目强制卸载_Workflow_Loop_验收计划.md": {
+      "backup_path": "files/c089808bb10ae01a201884c3d38776861928849bf15b8b006fefa8467ae68b21.bin",
+      "content_hash": "18a30ac573e737146b32bef23666257a3ea36a50b1ceddf7884b8e1d76e6efb7",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/修复缺陷经过主题验收和全量回归后关闭_验收结果.md": {
+      "backup_path": "files/a6e06a002e68be7070232c5c68ceaf43f449e90597b569c8b2b24f100afd2e29.bin",
+      "content_hash": "b9508c5f46e892ed7cc9bf3f66aa754718e275c084cda1664df4dcc569721994",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/修复缺陷经过主题验收和全量回归后关闭_验收计划.md": {
+      "backup_path": "files/98040c45259df059d6f3ae7243f04f3cc9a12c7e1e89de47a295bd0400fd5749.bin",
+      "content_hash": "e0c3e08861054ca10f5a242012cd060c43904fb9460084e83815a19c039ad1f8",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/公开项目身份和中文说明保持一致_验收结果.md": {
+      "backup_path": "files/57392512c1dca87cb40f549816e5d0187afc6e968618ad0c9294c64c86671f2e.bin",
+      "content_hash": "4bd7c6882addce1268e169928856b40c4d90d5226270f429308a835f91a26495",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/公开项目身份和中文说明保持一致_验收计划.md": {
+      "backup_path": "files/a39232fcbfb45e095b952f6088b808dd177cbb0e5f8599f6b1096880fdbf2761.bin",
+      "content_hash": "b9ce0c0952f41eb1893cb236b24f3832f3c9d768c176d167539feebfc9a02bbe",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/单独卸载电脑全局_Workflow_Loop_命令_验收结果.md": {
+      "backup_path": "files/79417371667934c8c97ab9f664ed7819c416b44e8f15467995a42f9ef7a8afa6.bin",
+      "content_hash": "70a933685ad120db1495d9eff0c27301bc4a721981e9c87fe453c0db9e56966c",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/单独卸载电脑全局_Workflow_Loop_命令_验收计划.md": {
+      "backup_path": "files/6b6393feac64d3c5a0f626ad70dddc8a365e391cc8c8855e3f875d0fcf115298.bin",
+      "content_hash": "dc6be1d67ff2a02415160d0512f669a0110c62efd91c0ec22427377bd2a25c53",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/已安装项目一条命令更新到目标正式版本_验收结果.md": {
+      "backup_path": "files/1878ee5684b6bb6bc0ae0145ffeb091bdfc7ac140aaee9017f5436afca1eb0df.bin",
+      "content_hash": "2a7e88ddedc172fe6a2c4c26c8b6a1a264127cde47a1ce442f091d818a66a801",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/已安装项目一条命令更新到目标正式版本_验收计划.md": {
+      "backup_path": "files/9d14cde280d6a7f24d3da93063ceb7f4245596f4b8161b54d3ee2c255d593c6e.bin",
+      "content_hash": "e0f6ea4bf742741319aefd8f7e30b9af24f1cdc03a414b281ecb461024dac1b2",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/用户提出需求后工作流正确开始或继续并逐环节确认_验收结果.md": {
+      "backup_path": "files/5a6e06352cb57afac9a6d3ca3cf01ceb9dcfa533d630b78449ee9445261d8697.bin",
+      "content_hash": "fc3bff8581f22ad2b172eb05ef375e72ca9e696c4881b41efc372532d8a6efe1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/用户提出需求后工作流正确开始或继续并逐环节确认_验收计划.md": {
+      "backup_path": "files/06dae90c7153df9f834b9f5deb6e6290e99d30d12fb0254acc5ddba48d85a5b6.bin",
+      "content_hash": "1a007241d9c7073504e7330a865e67dee9d60244ab79c17609382c84662730d1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/索引.md": {
+      "backup_path": "files/5bea5209b6debcd8626561f715f70948b8ad8c40d58520195a850ac3d3fcf299.bin",
+      "content_hash": "a03cf0354abc667084e0c06e09f6b476f24a1a09f805152a2665d30bae521c08",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/返回上游或整轮作废后状态与项目内容正确恢复_验收结果.md": {
+      "backup_path": "files/2c48593809fa46cb89e7168f1339ddc21013f2a87b5b6a3efedfa0d52b384bc8.bin",
+      "content_hash": "4b43570c7e994f8ecfee7f746ec5607e93edd0a602c6cfa97388d753ba47611f",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/返回上游或整轮作废后状态与项目内容正确恢复_验收计划.md": {
+      "backup_path": "files/1346b133c69a635d9dcee262378a42e7dbe7dfe9028bf85a2eb5144c670257d4.bin",
+      "content_hash": "830e68df325045b45d27987d5e02885b8ca6d84f3c3185c30f46ccc0698ca92f",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/需求交付各阶段通过追踪表双向关联_验收结果.md": {
+      "backup_path": "files/1aed380c86b6785758c8f600c88f386976b7b7c6de9f9e5115b98a2c7579c9f8.bin",
+      "content_hash": "259a6dc1fe24ef715a23039f432cab982bedd1c19d3fc0ba9b25b7c7f05f4809",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/需求交付各阶段通过追踪表双向关联_验收计划.md": {
+      "backup_path": "files/d1b0f61ce044555c39517440a863846df9f4bd98df83e6fb44202c15e22a035a.bin",
+      "content_hash": "d51535b425aeee2d348896d83b5e4922a6de476a15e54dffcca31629d512e4ce",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/项目修改可恢复且正式测试结果来自真实执行_验收结果.md": {
+      "backup_path": "files/4ddb70e73266c1110f671f097a70969566396b641e6680a3d9b4508a7bb9cc1b.bin",
+      "content_hash": "34343900b85f7d55054e385a2d573aea3969930d3904aff16d3ec845270cd905",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/项目修改可恢复且正式测试结果来自真实执行_验收计划.md": {
+      "backup_path": "files/a368783ecd98de44cfb6b9a0104ada98d092ab78a0175a5e13b4f7663727378e.bin",
+      "content_hash": "fab9938020a2834b706eb94be57899e57181edd719bc759dfe220ca24197eafa",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/验收测试和实施计划按同一主题完整追踪_验收结果.md": {
+      "backup_path": "files/a6a8b007532d855d6ed55a28bf4f059088de3668b855160c3bb6316a2b828103.bin",
+      "content_hash": "6ded6dd8bf2dcdfe01fb861ab252e193b9da4023115ab75aab67cb0a311a976b",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/验收测试和实施计划按同一主题完整追踪_验收计划.md": {
+      "backup_path": "files/55ac8b97adcf38879762fdecaa51ccb62da09dd75a211c7eccfb1dec72c9043a.bin",
+      "content_hash": "b40c07e85f1ad2f1d5f0dc290a27bb97268663e0c868eca293fa13ac389cdcf2",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/验收计划按用户需求生成可判断完成条件_验收结果.md": {
+      "backup_path": "files/2c300fb50929fd59f4a527f5cd6593b311200639c05ae61531a9f52389d4193c.bin",
+      "content_hash": "3e797ca79a071e6e62b1751378051a99ad0e34cde37b1dde5fb1bde28f861cbe",
+      "mode": 420,
+      "original_exists": true
+    },
+    "acceptance/验收计划按用户需求生成可判断完成条件_验收计划.md": {
+      "backup_path": "files/9894bad80e25a5bb4f04a576ad09f2079f8d1d52cb789ec3ed8edeead57b22b1.bin",
+      "content_hash": "0f71c0dd7f7861120d63781e08f553efe2721f07518a017051a66b8d2e0d0aed",
+      "mode": 420,
+      "original_exists": true
+    },
+    "bug/索引.md": {
+      "backup_path": null,
+      "content_hash": null,
+      "mode": null,
+      "original_exists": false
+    },
+    "impl/0_1_0_在_GitHub_和_PyPI_完成正式发布_实施记录.md": {
+      "backup_path": "files/4a35ffa7df841ead1a04b4d19e337e540d4e197ac83570fcc341afbe7ff81faf.bin",
+      "content_hash": "a9c3cea7299916fb53cc91f7a034e231fc7a8d2abe828e7a71d34ad1bfd08f3a",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/一次安装后可在三种操作系统开始使用工作流_实施记录.md": {
+      "backup_path": "files/941305925e74e1a798b674822765355a06d01cc665d90579c34f4e40f5f36557.bin",
+      "content_hash": "914fcf22b58e0935d5d0c0b9fc581a945ade5c20d4a560d039431d79187b41ce",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/主题验收_全量回归和最终同步完成后正式收工_实施记录.md": {
+      "backup_path": "files/404b02d2141f46e4966114b5cdf35082c2fe6957841cbd67f808a5f2d0845e4b.bin",
+      "content_hash": "2da590977deb2ef8418ebd31b275b4031ef7f2852ccda81741550ac5b43b2b64",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/产品和代码设计及缺陷穿刺结论保持真实一致_实施记录.md": {
+      "backup_path": "files/f831c7853794304e9716c7dd2fc212a647f0b814fb7fccb048f732eafa63f066.bin",
+      "content_hash": "c8ab58b62a7d47beebccd51115db0b4a729bcf57a580b19f2e3adc6567b29f25",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/从当前项目强制卸载_Workflow_Loop_实施记录.md": {
+      "backup_path": "files/40804ab5fd3e66448239a526f11740d9a66c52cf71e13173cccfd35e7ce7e4a9.bin",
+      "content_hash": "83318259a36cd1907f6c79f391306422aac062fadf23cd9492fe7e94261b7efc",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/修复缺陷经过主题验收和全量回归后关闭_实施记录.md": {
+      "backup_path": "files/4bdb98f292fafada71d76ef43124f1bf835679c2a340cf9459dea2e254107f7f.bin",
+      "content_hash": "cbc6d172aa5d57d8152580272455198220c388141c6546b5aa6f013be7dabb1c",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/公开项目身份和中文说明保持一致_实施记录.md": {
+      "backup_path": "files/db31f2be31f75d0054b38f4fa5c11af192039da67d2e653d0d13a5f8dca4aea5.bin",
+      "content_hash": "19e69f6a9ff149f7d81cb19cc7a123418973fab7f9852846ea380263c5df4dd1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/单独卸载电脑全局_Workflow_Loop_命令_实施记录.md": {
+      "backup_path": "files/aca614c9395a97b94c91635862b4fe9b53171909deb5d2b07af68b7cd5e29394.bin",
+      "content_hash": "d0134ce34c05156174db5845b5c7985da929e13ff2f36ecaeecd50be9dd66a36",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/已安装项目一条命令更新到目标正式版本_实施记录.md": {
+      "backup_path": "files/5e290c975e2bf8ce8c2ccd4fe915227d65eb86a25ce90263cdd4220c3750a730.bin",
+      "content_hash": "2611cf284c82df2e82f835abd73ebdfc24c4d616f49f9b1a7944e7929744e712",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/用户提出需求后工作流正确开始或继续并逐环节确认_实施记录.md": {
+      "backup_path": "files/c92905392089734ff94039422ad338efed8fa14150db807c47072d66eee58049.bin",
+      "content_hash": "8b93c04dba3bbbe1a0411075111d700d1ed7874f6f7ac1e2da6f5a07816805ef",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/索引.md": {
+      "backup_path": "files/8daf5b1ebef5e8ce9c9787361504d0818569c6f94efa89dd31a8537758eea748.bin",
+      "content_hash": "7e2cd6446088283757938a304a95b2ede6656dc6ef5024de94f3d8e3562811df",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/返回上游或整轮作废后状态与项目内容正确恢复_实施记录.md": {
+      "backup_path": "files/04407cb24f1ab5b295d9636e7e9d15c606c31358c3f2bd1a86f33f9d8d377006.bin",
+      "content_hash": "f78c1c99f5d5c5964a8bd83c84f798552bd4e308842e482767c161a3d2282f4c",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/需求交付各阶段通过追踪表双向关联_实施记录.md": {
+      "backup_path": "files/96e23cc0d14a49710c6da66cea5ff32f805858d6b049bf43915dcde6e13b591d.bin",
+      "content_hash": "e38aa6eee2672f8f7a9a41a77b360040c38263454755056f1f5b390535c59da1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/项目修改可恢复且正式测试结果来自真实执行_实施记录.md": {
+      "backup_path": "files/a81113089d7c0b23fcccab3cd5258f3ab53b9d2749ce448bd3ea231e57e969a8.bin",
+      "content_hash": "5b76677585c87b063ae159918dbdf99a6922befc464840e005458dfa56d7b5fd",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/验收测试和实施计划按同一主题完整追踪_实施记录.md": {
+      "backup_path": "files/ff74e99754d3ff6f307536110b07a5f89ffa83f70db5c772902060d3b8810e58.bin",
+      "content_hash": "260e58afe578a2b89009958a9e67a033f0185b6ab74bc6de2c9ef57b6d1c69e1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "impl/验收计划按用户需求生成可判断完成条件_实施记录.md": {
+      "backup_path": "files/eafd8f2745c07a522fae064b9da535e6a6824e8cd8f856e7213a9d1c7cc3f75d.bin",
+      "content_hash": "ed0fd39b8a33645daf3f76df997c579286af85fa03e46628dcee01769c60e2c1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/0_1_0_在_GitHub_和_PyPI_完成正式发布_测试结果.md": {
+      "backup_path": "files/83dd4e7b9c3dce3e418621cebc7b1070ca9cb4d9394b4924b2e73d27c6c6948f.bin",
+      "content_hash": "e4e9ca949116ea9c99de6abcd5e8c9d4d0a0f4450cb2cbf6b76b9d5bb6e170d9",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/0_1_0_在_GitHub_和_PyPI_完成正式发布_测试计划.md": {
+      "backup_path": "files/e91fbb543f3298658f3c6a4ee192719c5b499be2e8f18cf3720740cd8a7d48d2.bin",
+      "content_hash": "e30dc676eff682bf1e7f6f84da7d8815310781fc96cdb9a3999868d983b21d39",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/一次安装后可在三种操作系统开始使用工作流_测试结果.md": {
+      "backup_path": "files/c789b6cc8f8e76f8a586f577038312cc68797e0554ea5b2b1091cb4bf5d97a1f.bin",
+      "content_hash": "498e76941278060c4cba75686d2ed5d88351c3eb8d90afdbc8b8d7140baeab6e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/一次安装后可在三种操作系统开始使用工作流_测试计划.md": {
+      "backup_path": "files/8a83cbc5e57e49e6dfd9e27d80e245c681a2810fbb1f83629e93bf676171ea7f.bin",
+      "content_hash": "3d72ead8adc1f99c570222ac611cba813beea4d0aa02f23f6e5d3a20048e3bdd",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/主题验收_全量回归和最终同步完成后正式收工_测试结果.md": {
+      "backup_path": "files/85169af2856fbac9d0ee64f159b6c55c99aa319623371b67c1fe5591fcb03a5a.bin",
+      "content_hash": "5f627446fff23e0a32ace71f10e4d41e1fd60c448a2670ec0a1ef53bab79158b",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/主题验收_全量回归和最终同步完成后正式收工_测试计划.md": {
+      "backup_path": "files/d62dc5e84ea840293bec118bd4a21bb88afe6d6e1db341818729aeddf87c251c.bin",
+      "content_hash": "ffd4c36e1ede1363c85316f582089d2a77d89315a8935eb6cd860654097102e5",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/产品和代码设计及缺陷穿刺结论保持真实一致_测试结果.md": {
+      "backup_path": "files/d5467f2f4b77d477dc9545ce185dde43a96bf1680cbcc5a6dcf34f972c5a6028.bin",
+      "content_hash": "ad662975fa1304d84d9c35960119f9d38ba8287dea674c65bcf7059c3908a499",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/产品和代码设计及缺陷穿刺结论保持真实一致_测试计划.md": {
+      "backup_path": "files/a1ccf95486d3e9d72d5fdcee86c2a43c23362babc848551c35c94c28a31b362e.bin",
+      "content_hash": "5b631c503a3b8a4b19cc4978a48feb74a407dab2008495769e7a43c16673be89",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/从当前项目强制卸载_Workflow_Loop_测试结果.md": {
+      "backup_path": "files/593aa77339dccd371a29cc853b06f305de6be14c8c8380fa7922fc5fb2f8de92.bin",
+      "content_hash": "9760a9429909173591d01d94d76f2042732ab4956a196fc45349f017d5dd3e53",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/从当前项目强制卸载_Workflow_Loop_测试计划.md": {
+      "backup_path": "files/8f4c59da4c10901ebeeeb01e4aa91bd574d326285ff291b8a7d7b2cf80d87050.bin",
+      "content_hash": "3937f569b8018d5907bdd6ca5bcd7033d0494281b706a6296c7739e2489ae084",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/修复缺陷经过主题验收和全量回归后关闭_测试结果.md": {
+      "backup_path": "files/e32d130570bc69d634bb251aa2c1c69c2aea181e970f0b271850e24750fac649.bin",
+      "content_hash": "7cf8ce35a30c0f7fa204c4637b448df4bdeda6f5d7c2fb0290d4e702ca2e83b4",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/修复缺陷经过主题验收和全量回归后关闭_测试计划.md": {
+      "backup_path": "files/4f4c2a207dd9b9236118b7c605e52fdab7731321b74ce96b9fecb24e7a53ac22.bin",
+      "content_hash": "41c12c94fba06b9768841c8f2c228e61e674e153a4855219b741eeddd132b719",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/公开项目身份和中文说明保持一致_测试结果.md": {
+      "backup_path": "files/1c190892c2a08806f5cd71f926058659adc8a69222f74c1eee245b40460350be.bin",
+      "content_hash": "cb1496d1f94b4f321f1678fc77893b36d19ad7082a4ba8c1c3011c2a5b434538",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/公开项目身份和中文说明保持一致_测试计划.md": {
+      "backup_path": "files/355142a56ba4d655eef9e45ee263e5d15deea8f36439df6b4c3f1b76a493edab.bin",
+      "content_hash": "5a5822d83cd1c381856df4c784f400a1914ba542ec5271dec44c55d6ed93dd12",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/单独卸载电脑全局_Workflow_Loop_命令_测试结果.md": {
+      "backup_path": "files/7e6739aea6383d347b3dfa2029d27c0ffee487cf4f6da1ebbeaf35d501badf75.bin",
+      "content_hash": "5deeef3935687372ba80a0e8df419303142885b279efe5f692787e5cc99a4827",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/单独卸载电脑全局_Workflow_Loop_命令_测试计划.md": {
+      "backup_path": "files/2893d50e5c05664d7a9aaae02db862b55e9dd263a0d18afa52b3444735c0692f.bin",
+      "content_hash": "9a4f68acba8a15c8fe84ad22ebcf3bc1d4be54cc4b0a63c62affeb75760c703a",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/已安装项目一条命令更新到目标正式版本_测试结果.md": {
+      "backup_path": "files/98c9116025e0536c5d31cc05b1d6bd63fc6f886011e4c152aed1754da1191d2b.bin",
+      "content_hash": "60db8d62d322b56859cee6746e60a72e0355c069789c6e2a55e3856fab169c91",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/已安装项目一条命令更新到目标正式版本_测试计划.md": {
+      "backup_path": "files/42a4a09a69f3fd47031f31d231ab46a851c29f7cdd371df84c3b009ec67697d5.bin",
+      "content_hash": "cc6c302790a41a72ca644ce87e145a88b187d7c72b349db2be9e83c76647360d",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/用户提出需求后工作流正确开始或继续并逐环节确认_测试结果.md": {
+      "backup_path": "files/a8949698de6db805c38e9dd97a39111cfea71be18ef4a49c86f53de8b46eea3d.bin",
+      "content_hash": "823fc51a85b2bd71ba00d9a5ab6bfe08ec7218a117262cd1521e1179cce13d90",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/用户提出需求后工作流正确开始或继续并逐环节确认_测试计划.md": {
+      "backup_path": "files/6add98293bd761bd92d162f3f94ca3dd02de266248d9fc3ccf7d8b09201f9011.bin",
+      "content_hash": "179c5a38ff2d1a32d619c93df37ebe724c0c1bbfbe9cd56993703024be8f6577",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/索引.md": {
+      "backup_path": "files/966bdb212d41701c6682bef6247bc7653ec31bcd9afae4a79f5bc6e8ee5232f4.bin",
+      "content_hash": "b904f6cdc36f77a2248271ac08e24c44816f14faf93a3672db06b4daf7b0930b",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/返回上游或整轮作废后状态与项目内容正确恢复_测试结果.md": {
+      "backup_path": "files/691c22b37f7571ee2305b16e09c5e09a76ede28a9df84e633c44a24084b2978c.bin",
+      "content_hash": "4cb0f9ac55572454d103cb21c26eab836f9df030990ca8ab6ad23fda873c4f96",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/返回上游或整轮作废后状态与项目内容正确恢复_测试计划.md": {
+      "backup_path": "files/d72e2c2406cb29510cd7f6601da7389c8f5081c0be4632f02e9ef79a8adb673f.bin",
+      "content_hash": "57422e8b247dfa9bc41d12bf3c1c087c4f2f8c70bedbb5617302b56f29a3ecd8",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/需求交付各阶段通过追踪表双向关联_测试结果.md": {
+      "backup_path": "files/40a1984b9ba7134a1ca441f256aecf48242907726cc00ab4703f26a9478e844a.bin",
+      "content_hash": "579d25cfa7adddb6ab23a438e276cba57e7e09638eb274edc8d1758f32d4b31c",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/需求交付各阶段通过追踪表双向关联_测试计划.md": {
+      "backup_path": "files/f8c9964f7ee90acf9e383174b6e7bcdee826a10617464a83b0a3d586091a8721.bin",
+      "content_hash": "edde9e4d30b0e56975e46e81c398059f4c534de41b4ed13eeb459b52353fc1b0",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/项目修改可恢复且正式测试结果来自真实执行_测试结果.md": {
+      "backup_path": "files/630a3aab23696747ca2bb6e4374329192dbf2127cbdfd5f2f8e0ac48023cf3c5.bin",
+      "content_hash": "acc287775f386e74fdb18783d5de6ee7224acba05c301c43bcd4b63a8a1d700e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/项目修改可恢复且正式测试结果来自真实执行_测试计划.md": {
+      "backup_path": "files/54f60c11d7ad8faf92062f01eb4e437f33245133fca6499f930647b9d1ad98ae.bin",
+      "content_hash": "b3905e0b20012df65a30923d88fd714be8dbbeb5bb935fd313675e17d6a3d5b4",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/验收测试和实施计划按同一主题完整追踪_测试结果.md": {
+      "backup_path": "files/799f7cf6403391b2427479ec72045c35f8067df548e46e16d8b5caf0f6cf5f3b.bin",
+      "content_hash": "88130df0bee625de0a594878d7589491f006bfba0b22d8f217ab7d14b49cd0b5",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/验收测试和实施计划按同一主题完整追踪_测试计划.md": {
+      "backup_path": "files/a78b6efe2b5c6b1079e5a55957644cdc764595bd13c10991b110f0942eb14ba4.bin",
+      "content_hash": "15ff43f6f340af799e913a7be431cd25f4637a5ee73d40e1dca6ced0b0c223cf",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/验收计划按用户需求生成可判断完成条件_测试结果.md": {
+      "backup_path": "files/7de307bdf490338a9e5cb070379d7c4e1e776a8f13c82fb54e274d73485132a5.bin",
+      "content_hash": "925fe54d73534089a7e0ce129125386447578df84ef9be15caf98132ba3ad35e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "qa/验收计划按用户需求生成可判断完成条件_测试计划.md": {
+      "backup_path": "files/e66cd286c6ad2cea962667556f448b358e047da03d0c1eba2f6b2e0dffa0248a.bin",
+      "content_hash": "845a3edbc38f2a0c5accf52570da777675072ae0a24b7994f358cd40fa333d65",
+      "mode": 420,
+      "original_exists": true
+    },
+    "scripts/test_all.sh": {
+      "backup_path": "files/515f3099467548079ea47e7a1fc72f846974282250facd1e97237b6fc490e02b.bin",
+      "content_hash": "90eb5f7922bae242f26c0eb486ae7b9cee78d42541e88fb11c69cdef6e617b17",
+      "mode": 493,
+      "original_exists": true
+    },
+    "spec/产品总说明.md": {
+      "backup_path": "files/036c91cd6937bb24d09e24f8f24a50f0bb0e99062d73357f000e53be4019506e.bin",
+      "content_hash": "4a4d50df0684f7b360ef17fd8b593879a3362f7898d700cd2a6d10ccbcd275cb",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/代码架构设计.md": {
+      "backup_path": "files/00f594f308854efc6905440bdcd99a802e052558afe7eb22e6966b699c6a1414.bin",
+      "content_hash": "81b262d245b06ab270958d8ca5c4acf1b9e62fee5f59adcb7ceb3dfc0386a584",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_制定验收与测试计划.md": {
+      "backup_path": "files/9b13171ec0b808ba630f0152e8cbc2472a3c58bcbf6a644d6b23ff104b20c80e.bin",
+      "content_hash": "96ebb7ab099e9886b758cdcc01a6fc99322e55f124b5d3582c9e755c60749524",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_卸载_Workflow_Loop.md": {
+      "backup_path": "files/5a2eb2d265b592b92e4898ea04347043fc2b9f8f4b4065b939120c3b76f8b42b.bin",
+      "content_hash": "e9792b27b9cc219ecdb1feff4d5f8a1dc237f633cb71c0956123ab02418b1c1e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_复现产品缺陷.md": {
+      "backup_path": "files/ed52f7b50542f11c29299d7bb108bf63bf605b67d9c9b1b1cb648afe7ac21ed8.bin",
+      "content_hash": "921cf4cbb7b167af8246f0a4d0205b4d0fb3d461d2e902a131f3d659d6c22d12",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_安装到项目.md": {
+      "backup_path": "files/9c852a9a0230cedd28d76f1f0332b09e675e2e69fffe9abd004aa961b29455d9.bin",
+      "content_hash": "7b65cda6bdb48c287ef581f93e86e3c13c6804bb342611d0750c017c9eceeaa1",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_实施并保护项目修改.md": {
+      "backup_path": "files/d388a35a1ff9e8f580128083fc421a5820a7ab24afb72ad65ec02c8cd0584191.bin",
+      "content_hash": "5839f5b03cedb64975cd1d73e4d6922fb8ae04f040d7fc4de37d4a13fb5d4035",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_开始或继续一轮工作.md": {
+      "backup_path": "files/7635867044a0d0065f473f6f851fcebc8f367c36fb09924136e8c02f6c47c1e7.bin",
+      "content_hash": "e3ac1b78df6d2a79af226b3f2516511fc86cf06cd7bd2baaf15f111aa7265a6b",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_推进并确认工作环节.md": {
+      "backup_path": "files/f02df19640c5f3e6abc323402195e3c9e8509713431365fe84bf164e98fc42a3.bin",
+      "content_hash": "89f2e1fb3bd15d9d545bb58dae78223e98dc3a07b48c2fc4d33d2ebaa98db8c3",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_整轮作废并恢复.md": {
+      "backup_path": "files/67fac84d2ac74684ec11a9a8da73f9f002e14f666d25387678cc4901dab4374a.bin",
+      "content_hash": "fb289547566089f2dad1c9e17d979b19244c87fbdf83c273624783490b205799",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_更新已安装项目.md": {
+      "backup_path": "files/5c9bfa99f59a402dcd413b979b3dddadd8ca2bcdcaa76544bfd74dda8cd60a1a.bin",
+      "content_hash": "4689c721a545dfe4a16c6b0605db11f5dde2faea67d70fad6c8d797b51f4899a",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_维护产品设计.md": {
+      "backup_path": "files/2f04c193428cd2aee5bc7badf9568bd3313fe6949ce97e29dbbb1cf6e7b262a0.bin",
+      "content_hash": "d23a2839f9fda650ffa73755a0b74dfddfcf174fbb02e73efb1308956a06c8d4",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_维护代码设计.md": {
+      "backup_path": "files/af26b760d9de245926b7918e59339d63ed86f315d4aee9a1ca57725518fb7a43.bin",
+      "content_hash": "0bf560cb45444ed5b8e1107a93b2091f0ecbebbf8be513318f65303c6edb7056",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_编写并执行测试.md": {
+      "backup_path": "files/a5b93f69271af606ff313f1b6abe7ad437588ef6b3bad32602f4eaba899db978.bin",
+      "content_hash": "b4c80275d52e8d940ce19d5838a7f11d8e66ca233fd2ba958171fee351854d5f",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_返回上游重新处理.md": {
+      "backup_path": "files/94b6624b97e4286338dffdfc4717cb5941ff3b59efa6d7dcda8f7278430be615.bin",
+      "content_hash": "f81df6053b1f9c272e33377ab7def8b5f5f7c162d37fed06fc12d2db7896bb1e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_验收并完成交付.md": {
+      "backup_path": "files/081e5d68759de77e56bcae252191e1c30d2955603caa17a6e445c5c98fc35f9a.bin",
+      "content_hash": "e3f5ceed787e46c2365f94314443b07d7e09e68deb4bf7ce9eece158ef946fc6",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/功能_验证技术不确定性.md": {
+      "backup_path": "files/b8bcef08705ff70362042eaed154d9b7e8866838a49c0ae1250ee198d9864116.bin",
+      "content_hash": "7af9cca347c14d81a2a996b2df7aef951c0d60c272bb0c449d1d61095dc6267b",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/穿刺_Windows_辅助进程替换或删除正在运行的全局命令.md": {
+      "backup_path": "files/dce99acb04af90e8d8ca4e903112fa575d29c103e8f944716c819563da6e1003.bin",
+      "content_hash": "6e6c7b4932d2b0a7280789992bf751957039d52ce41776be26376eff8267149e",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/穿刺_固定版本uv隔离安装.md": {
+      "backup_path": "files/144f431e96b78245f22fd0b532cfdb31de0163311ed7a4611e3f275222d42274.bin",
+      "content_hash": "a43f3277638f5aee4134d1bbae0ec32fe1454f46edf271a952e4268b3f7668b7",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/穿刺清单.md": {
+      "backup_path": "files/3c0fca93d7f30f400fc9ee6c0799581714a2ce344c071c3e8754df01b232d0de.bin",
+      "content_hash": "66eec694848910975c7b83f1a16f87b19caae2625c64308fdae34e45f2a78720",
+      "mode": 420,
+      "original_exists": true
+    },
+    "spec/项目设计初始化证据.md": {
+      "backup_path": null,
+      "content_hash": null,
+      "mode": null,
+      "original_exists": false
+    },
+    "需求交付追踪表.md": {
+      "backup_path": "files/714ff874bcf9b5fad06724474cbcbce237444bbf7b260ab39b1f5fbbe5f5e8dd.bin",
+      "content_hash": "9dab1069d924bb1a4081ffdbc24da82450f2b1cc11db18fc60f9215740614372",
+      "mode": 420,
+      "original_exists": true
+    }
+  },
+  "entry_scripts": [
+    "scripts/test_all.sh"
+  ],
+  "managed_paths": [
+    "acceptance/0_1_0_在_GitHub_和_PyPI_完成正式发布_验收结果.md",
+    "acceptance/0_1_0_在_GitHub_和_PyPI_完成正式发布_验收计划.md",
+    "acceptance/一次安装后可在三种操作系统开始使用工作流_验收结果.md",
+    "acceptance/一次安装后可在三种操作系统开始使用工作流_验收计划.md",
+    "acceptance/主题验收_全量回归和最终同步完成后正式收工_验收结果.md",
+    "acceptance/主题验收_全量回归和最终同步完成后正式收工_验收计划.md",
+    "acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收结果.md",
+    "acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md",
+    "acceptance/从当前项目强制卸载_Workflow_Loop_验收结果.md",
+    "acceptance/从当前项目强制卸载_Workflow_Loop_验收计划.md",
+    "acceptance/修复缺陷经过主题验收和全量回归后关闭_验收结果.md",
+    "acceptance/修复缺陷经过主题验收和全量回归后关闭_验收计划.md",
+    "acceptance/公开项目身份和中文说明保持一致_验收结果.md",
+    "acceptance/公开项目身份和中文说明保持一致_验收计划.md",
+    "acceptance/单独卸载电脑全局_Workflow_Loop_命令_验收结果.md",
+    "acceptance/单独卸载电脑全局_Workflow_Loop_命令_验收计划.md",
+    "acceptance/已安装项目一条命令更新到目标正式版本_验收结果.md",
+    "acceptance/已安装项目一条命令更新到目标正式版本_验收计划.md",
+    "acceptance/用户提出需求后工作流正确开始或继续并逐环节确认_验收结果.md",
+    "acceptance/用户提出需求后工作流正确开始或继续并逐环节确认_验收计划.md",
+    "acceptance/索引.md",
+    "acceptance/返回上游或整轮作废后状态与项目内容正确恢复_验收结果.md",
+    "acceptance/返回上游或整轮作废后状态与项目内容正确恢复_验收计划.md",
+    "acceptance/需求交付各阶段通过追踪表双向关联_验收结果.md",
+    "acceptance/需求交付各阶段通过追踪表双向关联_验收计划.md",
+    "acceptance/项目修改可恢复且正式测试结果来自真实执行_验收结果.md",
+    "acceptance/项目修改可恢复且正式测试结果来自真实执行_验收计划.md",
+    "acceptance/验收测试和实施计划按同一主题完整追踪_验收结果.md",
+    "acceptance/验收测试和实施计划按同一主题完整追踪_验收计划.md",
+    "acceptance/验收计划按用户需求生成可判断完成条件_验收结果.md",
+    "acceptance/验收计划按用户需求生成可判断完成条件_验收计划.md",
+    "bug/索引.md",
+    "impl/0_1_0_在_GitHub_和_PyPI_完成正式发布_实施记录.md",
+    "impl/一次安装后可在三种操作系统开始使用工作流_实施记录.md",
+    "impl/主题验收_全量回归和最终同步完成后正式收工_实施记录.md",
+    "impl/产品和代码设计及缺陷穿刺结论保持真实一致_实施记录.md",
+    "impl/从当前项目强制卸载_Workflow_Loop_实施记录.md",
+    "impl/修复缺陷经过主题验收和全量回归后关闭_实施记录.md",
+    "impl/公开项目身份和中文说明保持一致_实施记录.md",
+    "impl/单独卸载电脑全局_Workflow_Loop_命令_实施记录.md",
+    "impl/已安装项目一条命令更新到目标正式版本_实施记录.md",
+    "impl/用户提出需求后工作流正确开始或继续并逐环节确认_实施记录.md",
+    "impl/索引.md",
+    "impl/返回上游或整轮作废后状态与项目内容正确恢复_实施记录.md",
+    "impl/需求交付各阶段通过追踪表双向关联_实施记录.md",
+    "impl/项目修改可恢复且正式测试结果来自真实执行_实施记录.md",
+    "impl/验收测试和实施计划按同一主题完整追踪_实施记录.md",
+    "impl/验收计划按用户需求生成可判断完成条件_实施记录.md",
+    "qa/0_1_0_在_GitHub_和_PyPI_完成正式发布_测试结果.md",
+    "qa/0_1_0_在_GitHub_和_PyPI_完成正式发布_测试计划.md",
+    "qa/一次安装后可在三种操作系统开始使用工作流_测试结果.md",
+    "qa/一次安装后可在三种操作系统开始使用工作流_测试计划.md",
+    "qa/主题验收_全量回归和最终同步完成后正式收工_测试结果.md",
+    "qa/主题验收_全量回归和最终同步完成后正式收工_测试计划.md",
+    "qa/产品和代码设计及缺陷穿刺结论保持真实一致_测试结果.md",
+    "qa/产品和代码设计及缺陷穿刺结论保持真实一致_测试计划.md",
+    "qa/从当前项目强制卸载_Workflow_Loop_测试结果.md",
+    "qa/从当前项目强制卸载_Workflow_Loop_测试计划.md",
+    "qa/修复缺陷经过主题验收和全量回归后关闭_测试结果.md",
+    "qa/修复缺陷经过主题验收和全量回归后关闭_测试计划.md",
+    "qa/公开项目身份和中文说明保持一致_测试结果.md",
+    "qa/公开项目身份和中文说明保持一致_测试计划.md",
+    "qa/单独卸载电脑全局_Workflow_Loop_命令_测试结果.md",
+    "qa/单独卸载电脑全局_Workflow_Loop_命令_测试计划.md",
+    "qa/已安装项目一条命令更新到目标正式版本_测试结果.md",
+    "qa/已安装项目一条命令更新到目标正式版本_测试计划.md",
+    "qa/用户提出需求后工作流正确开始或继续并逐环节确认_测试结果.md",
+    "qa/用户提出需求后工作流正确开始或继续并逐环节确认_测试计划.md",
+    "qa/索引.md",
+    "qa/返回上游或整轮作废后状态与项目内容正确恢复_测试结果.md",
+    "qa/返回上游或整轮作废后状态与项目内容正确恢复_测试计划.md",
+    "qa/需求交付各阶段通过追踪表双向关联_测试结果.md",
+    "qa/需求交付各阶段通过追踪表双向关联_测试计划.md",
+    "qa/项目修改可恢复且正式测试结果来自真实执行_测试结果.md",
+    "qa/项目修改可恢复且正式测试结果来自真实执行_测试计划.md",
+    "qa/验收测试和实施计划按同一主题完整追踪_测试结果.md",
+    "qa/验收测试和实施计划按同一主题完整追踪_测试计划.md",
+    "qa/验收计划按用户需求生成可判断完成条件_测试结果.md",
+    "qa/验收计划按用户需求生成可判断完成条件_测试计划.md",
+    "spec/产品总说明.md",
+    "spec/代码架构设计.md",
+    "spec/功能_制定验收与测试计划.md",
+    "spec/功能_卸载_Workflow_Loop.md",
+    "spec/功能_复现产品缺陷.md",
+    "spec/功能_安装到项目.md",
+    "spec/功能_实施并保护项目修改.md",
+    "spec/功能_开始或继续一轮工作.md",
+    "spec/功能_推进并确认工作环节.md",
+    "spec/功能_整轮作废并恢复.md",
+    "spec/功能_更新已安装项目.md",
+    "spec/功能_维护产品设计.md",
+    "spec/功能_维护代码设计.md",
+    "spec/功能_编写并执行测试.md",
+    "spec/功能_返回上游重新处理.md",
+    "spec/功能_验收并完成交付.md",
+    "spec/功能_验证技术不确定性.md",
+    "spec/穿刺_Windows_辅助进程替换或删除正在运行的全局命令.md",
+    "spec/穿刺_固定版本uv隔离安装.md",
+    "spec/穿刺清单.md",
+    "spec/项目设计初始化证据.md",
+    "需求交付追踪表.md"
+  ],
+  "previous_state_raw": "{\n  \"workflow_id\": \"2026-08-05-0659-product_change\",\n  \"intent\": \"product_change\",\n  \"run_status\": \"aborted\",\n  \"current_stage\": \"spec\",\n  \"started_at\": \"2026-08-05T06:59:51+00:00\",\n  \"ended_at\": null,\n  \"aborted_at\": \"2026-08-05T07:02:22+00:00\",\n  \"topic\": null,\n  \"topics\": [],\n  \"clean_confirmed\": false,\n  \"spike_skipped\": false,\n  \"stage_path\": [\n    \"spec\",\n    \"revise_code_design\",\n    \"spike\",\n    \"acceptance_plan\",\n    \"test_plan\",\n    \"impl\",\n    \"test_code\",\n    \"test_execution\",\n    \"topic_acceptance\",\n    \"regression_test\",\n    \"overall_acceptance\",\n    \"update_code_design\"\n  ],\n  \"stages\": {\n    \"spec\": {\n      \"status\": \"in_progress\",\n      \"artifact_paths\": [\n        \"spec/产品总说明.md\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": \"9b77f1c1b1b60eb763caf012f0b5317750970db32f670477b7e7593b49288fee\",\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"revise_code_design\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"spec/代码架构设计.md\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"spike\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"spec/穿刺清单.md\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"acceptance_plan\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"需求交付追踪表.md\",\n        \"acceptance/索引.md\",\n        \"acceptance/\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"test_plan\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"qa/索引.md\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"impl\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"impl/索引.md\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"test_code\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"test_execution\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"qa/\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"topic_acceptance\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"acceptance/\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"regression_test\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"overall_acceptance\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    },\n    \"update_code_design\": {\n      \"status\": \"pending\",\n      \"artifact_paths\": [\n        \"spec/代码架构设计.md\"\n      ],\n      \"artifact_produced_at\": null,\n      \"artifact_baseline_captured_at\": null,\n      \"artifact_baseline_hashes\": {},\n      \"code_baseline_hash\": null,\n      \"test_code_baseline_hash\": null,\n      \"non_test_code_baseline_hash\": null,\n      \"existing_code_accepted_hash\": null,\n      \"existing_test_code_accepted_hash\": null,\n      \"discussion_material_hash\": null,\n      \"plan_confirmed_hash\": null,\n      \"test_tasks\": {},\n      \"acceptance_records\": {},\n      \"gate\": {\n        \"discussion_complete\": false,\n        \"code_validated\": false,\n        \"user_confirmed\": false\n      }\n    }\n  },\n  \"architecture\": {\n    \"preliminary_done\": false,\n    \"detailed_done\": false\n  },\n  \"verification\": {\n    \"impl_hash\": null,\n    \"test_plan_hash\": null,\n    \"acceptance_plan_hash\": null,\n    \"test_code_hash\": null,\n    \"test_result_hash\": null,\n    \"acceptance_result_hash\": null,\n    \"regression_test_result_hash\": null\n  },\n  \"regression_test\": {\n    \"entry\": [],\n    \"command\": [],\n    \"cwd\": \"\",\n    \"timeout_seconds\": null,\n    \"started_at\": null,\n    \"finished_at\": null,\n    \"duration_seconds\": null,\n    \"status\": \"not_run\",\n    \"exit_code\": null,\n    \"code_snapshot_hash\": null,\n    \"record_id\": null,\n    \"output_tail\": \"\",\n    \"output_sha256\": null,\n    \"output_bytes\": null,\n    \"platform\": \"\",\n    \"executable\": \"\"\n  },\n  \"spike_baseline\": {\n    \"captured_at\": null,\n    \"product_design_hash\": null,\n    \"product_design_paths\": [],\n    \"code_design_hash\": null,\n    \"legacy_unavailable\": false\n  },\n  \"rollback\": {\n    \"manifest_path\": null,\n    \"manifest_hash\": null,\n    \"prepared_at\": null,\n    \"plan_hash\": null,\n    \"code_baseline_hash\": null,\n    \"planned_paths\": [],\n    \"restore_started_at\": \"2026-08-05T07:02:22+00:00\",\n    \"restored_at\": \"2026-08-05T07:02:22+00:00\",\n    \"cleanup_completed_at\": \"2026-08-05T07:02:22+00:00\"\n  },\n  \"recovery\": {\n    \"source_stage\": null,\n    \"return_target\": null,\n    \"reason\": null,\n    \"affected_stages\": [],\n    \"affected_topics\": [],\n    \"created_at\": null\n  },\n  \"meta\": {}\n}",
+  "project_fields": {
+    "artifact_file_keys": {
+      "feature": {
+        "制定验收与测试计划": "制定验收与测试计划",
+        "卸载 Workflow Loop": "卸载_Workflow_Loop",
+        "复现产品缺陷": "复现产品缺陷",
+        "安装到项目": "安装到项目",
+        "实施并保护项目修改": "实施并保护项目修改",
+        "开始或继续一轮工作": "开始或继续一轮工作",
+        "推进并确认工作环节": "推进并确认工作环节",
+        "整轮作废并恢复": "整轮作废并恢复",
+        "更新已安装项目": "更新已安装项目",
+        "维护产品设计": "维护产品设计",
+        "维护代码设计": "维护代码设计",
+        "编写并执行测试": "编写并执行测试",
+        "返回上游重新处理": "返回上游重新处理",
+        "验收并完成交付": "验收并完成交付",
+        "验证技术不确定性": "验证技术不确定性"
+      },
+      "spike": {
+        "Windows 辅助进程替换或删除正在运行的全局命令": "Windows_辅助进程替换或删除正在运行的全局命令",
+        "验证固定版本 uv 的隔离安装": "固定版本uv隔离安装"
+      },
+      "topic": {
+        "0.1.0 在 GitHub 和 PyPI 完成正式发布": "0_1_0_在_GitHub_和_PyPI_完成正式发布",
+        "一次安装后可在三种操作系统开始使用工作流": "一次安装后可在三种操作系统开始使用工作流",
+        "主题验收、全量回归和最终同步完成后正式收工": "主题验收_全量回归和最终同步完成后正式收工",
+        "产品和代码设计及缺陷穿刺结论保持真实一致": "产品和代码设计及缺陷穿刺结论保持真实一致",
+        "从当前项目强制卸载 Workflow Loop": "从当前项目强制卸载_Workflow_Loop",
+        "修复缺陷经过主题验收和全量回归后关闭": "修复缺陷经过主题验收和全量回归后关闭",
+        "公开项目身份和中文说明保持一致": "公开项目身份和中文说明保持一致",
+        "单独卸载电脑全局 Workflow Loop 命令": "单独卸载电脑全局_Workflow_Loop_命令",
+        "已安装项目一条命令更新到目标正式版本": "已安装项目一条命令更新到目标正式版本",
+        "用户提出需求后工作流正确开始或继续并逐环节确认": "用户提出需求后工作流正确开始或继续并逐环节确认",
+        "返回上游或整轮作废后状态与项目内容正确恢复": "返回上游或整轮作废后状态与项目内容正确恢复",
+        "需求交付各阶段通过追踪表双向关联": "需求交付各阶段通过追踪表双向关联",
+        "项目修改可恢复且正式测试结果来自真实执行": "项目修改可恢复且正式测试结果来自真实执行",
+        "验收测试和实施计划按同一主题完整追踪": "验收测试和实施计划按同一主题完整追踪",
+        "验收计划按用户需求生成可判断完成条件": "验收计划按用户需求生成可判断完成条件"
+      }
+    },
+    "project_design_initialized": true,
+    "test_entry": {
+      "darwin": [
+        "scripts/test_all.sh"
+      ],
+      "linux": [
+        "scripts/test_all.sh"
+      ],
+      "windows": [
+        ".venv\\Scripts\\pytest.exe"
+      ]
+    },
+    "test_parallelism": 2,
+    "topic_history": [
+      "修复缺陷经过主题验收和全量回归后关闭",
+      "需求交付各阶段通过追踪表双向关联",
+      "验收计划按用户需求生成可判断完成条件",
+      "一次安装后可在三种操作系统开始使用工作流",
+      "用户提出需求后工作流正确开始或继续并逐环节确认",
+      "产品和代码设计及缺陷穿刺结论保持真实一致",
+      "验收测试和实施计划按同一主题完整追踪",
+      "项目修改可恢复且正式测试结果来自真实执行",
+      "返回上游或整轮作废后状态与项目内容正确恢复",
+      "主题验收、全量回归和最终同步完成后正式收工",
+      "公开项目身份和中文说明保持一致",
+      "0.1.0 在 GitHub 和 PyPI 完成正式发布",
+      "已安装项目一条命令更新到目标正式版本",
+      "从当前项目强制卸载 Workflow Loop",
+      "单独卸载电脑全局 Workflow Loop 命令"
+    ]
+  },
+  "version": 1,
+  "workflow_id": "2026-08-05-0815-product_change"
+}

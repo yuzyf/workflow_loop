@@ -23,7 +23,7 @@ Workflow Loop 把一次软件修改拆成有顺序的工作环节，并用程序
 
 - 不替代 AI 编码助手、版本控制系统或持续集成服务，也不替用户决定产品需求是否正确。
 - 不允许跳过必要讨论、程序检查或用户确认，把未经验证的内容当成交付结果。
-- 不自动安装 Python，不自动升级或修复已有的异常安装，也不同时维护多个产品版本。
+- 不自动安装 Python，不静默更新，也不把残缺项目当成完整安装覆盖；更新必须由用户明确执行并确认。
 - 当前只支持 `from_scratch`（从零创建）、`product_change`（修改现有产品）和 `bugfix`（修复缺陷）三种正式工作意图。
 
 ## 工作流程
@@ -87,6 +87,53 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/y
 
 安装命令固定读取 `v0.1.0` 正式发布中的脚本；不会跟随内容可能变化的 `latest`（最新版本）地址。
 
+## 更新与卸载
+
+下面的维护命令都由用户从项目根目录主动执行，并且在持久修改前只确认一次。`workflow update` 默认核对 PyPI 和 GitHub Release 后更新到双方一致的最新正式版本；`--version` 后的版本号必须是比电脑全局命令和当前项目都不低的正式版本。
+
+```bash
+workflow update
+workflow update --version 0.2.0
+```
+
+更新按需补齐电脑全局命令和当前项目，只直接覆盖项目根 `AGENTS.md`、`.workflow_loop/Template_Repository/`、`.workflow_loop/Standardized_Repository/`，以及 `.workflow_loop/project.json` 中的安装版本字段。更新不创建备份，不回滚已经完成的步骤；当前轮次状态、历史、回退资料、业务代码和正式产物保持不变。失败后重新执行同一命令即可继续补齐。
+
+没有 `workflow update` 命令的旧版本，可从项目根目录直接运行最新正式发布提供的脚本：
+
+```bash
+# macOS / Linux
+curl -fsSL https://github.com/yuzyf/workflow_loop/releases/latest/download/update.sh | bash
+```
+
+```powershell
+# Windows PowerShell 5.1 / 7
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop/releases/latest/download/update.ps1 | iex"
+```
+
+项目卸载和电脑全局命令卸载是两个独立动作：
+
+```bash
+# 强制删除当前项目的 AGENTS.md、整个 .workflow_loop/ 和安装事务残留
+workflow uninstall
+
+# 只删除电脑全局命令；不会扫描或删除任何项目
+workflow uninstall --global
+```
+
+项目卸载不检查当前轮次处于进行中、已完成还是已作废，也不恢复本轮业务修改；删除没有备份。全局卸载只清理全局工具和能够由安装来源记录证明是 Workflow Loop 添加的 `PATH`（命令搜索路径）项，来源不明或用户原本就有的 PATH 项会保留并报告。全局命令删除后，其它已安装项目仍保留，但在重新安装全局命令前不能运行 `workflow`。
+
+旧版本没有公开卸载命令时，可从项目根运行 `uninstall.sh` 或 `uninstall.ps1` 的最新正式发布资产；两个脚本默认只卸载当前项目，不会先升级或删除电脑全局命令。
+
+```bash
+# macOS / Linux 旧版本项目卸载
+curl -fsSL https://github.com/yuzyf/workflow_loop/releases/latest/download/uninstall.sh | bash
+```
+
+```powershell
+# Windows PowerShell 5.1 / 7 旧版本项目卸载
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop/releases/latest/download/uninstall.ps1 | iex"
+```
+
 ## 最小使用示例
 
 安装完成后，在当前项目中启动支持读取 `AGENTS.md`（智能体契约文件）的 AI 编码助手，直接用自然语言提出需求：
@@ -122,6 +169,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/y
 | `workflow return --to <stage> --reason <reason>` | 带具体原因退回上游环节，并使受影响的下游结果失效；`<reason>` 表示退回原因 |
 | `workflow abort` | 作废当前整轮，并按回退清单恢复受管内容 |
 | `workflow done` | 在最后一个环节确认后记录整轮完成并清理临时回退副本 |
+| `workflow update [--version <version>]` | 更新电脑全局命令和当前项目；`<version>` 表示可选的目标正式版本 |
+| `workflow uninstall` | 不管当前轮次状态，强制删除当前项目固定的 Workflow Loop 管理内容 |
+| `workflow uninstall --global` | 只卸载电脑全局 Workflow Loop 命令和来源明确的 PATH 项，不扫描项目 |
 
 可运行 `workflow --help` 查看当前版本提供的完整参数。
 
@@ -152,6 +202,10 @@ workflow_loop/
 ├── impl/                  实施计划与实施记录
 ├── install.sh             macOS 和 Linux 安装脚本
 ├── install.ps1            Windows 安装脚本
+├── update.sh              macOS 和 Linux 旧版本更新脚本
+├── update.ps1             Windows 旧版本更新脚本
+├── uninstall.sh           macOS 和 Linux 旧版本卸载脚本
+├── uninstall.ps1          Windows 旧版本卸载脚本
 ├── CONTEXT.md             产品术语、规则和限制
 └── DESIGN.md              实现设计文档
 ```
@@ -160,6 +214,8 @@ workflow_loop/
 
 - [产品总说明](spec/产品总说明.md)：产品目的、范围、使用者和通用规则。
 - [安装到项目](spec/功能_安装到项目.md)：支持环境、安装行为、异常处理和公开发布要求。
+- [更新已安装项目](spec/功能_更新已安装项目.md)：目标版本、覆盖范围、保留范围和失败重试规则。
+- [卸载 Workflow Loop](spec/功能_卸载_Workflow_Loop.md)：项目强制卸载和电脑全局卸载的独立边界。
 - [代码架构设计](spec/代码架构设计.md)：功能到代码模块、状态和外部依赖的对应关系。
 - [实现设计文档](DESIGN.md)：命令、数据模型、工作意图、阶段路径和门禁的实现形态。
 - [产品事实与约束](CONTEXT.md)：当前有效的术语、约束和设计决策。

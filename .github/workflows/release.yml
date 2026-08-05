@@ -27,6 +27,10 @@ jobs:
           grep -q '__version__ = "0.1.0"' src/workflow_loop/__init__.py || { echo "__init__.py 版本不是 0.1.0"; fail=1; }
           grep -q 'PRODUCT_VERSION="0.1.0"' install.sh || { echo "install.sh 版本不是 0.1.0"; fail=1; }
           grep -q '\$ProductVersion = "0.1.0"' install.ps1 || { echo "install.ps1 版本不是 0.1.0"; fail=1; }
+          grep -q 'SCRIPT_VERSION="0.1.0"' update.sh || { echo "update.sh 版本不是 0.1.0"; fail=1; }
+          grep -q '\$ScriptVersion = "0.1.0"' update.ps1 || { echo "update.ps1 版本不是 0.1.0"; fail=1; }
+          grep -q 'PRODUCT_VERSION="0.1.0"' uninstall.sh || { echo "uninstall.sh 版本不是 0.1.0"; fail=1; }
+          grep -q '\$ProductVersion = "0.1.0"' uninstall.ps1 || { echo "uninstall.ps1 版本不是 0.1.0"; fail=1; }
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             [ "${GITHUB_REF_NAME}" = "v0.1.0" ] || { echo "标签不是 v0.1.0"; fail=1; }
           fi
@@ -99,6 +103,37 @@ jobs:
         with:
           name: dist
           path: dist/
+      - name: 准备发布冒烟固定版本元数据
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["PRODUCT_VERSION"]
+          metadata_root = Path(os.environ["RUNNER_TEMP"]) / "workflow-loop-release-metadata"
+          github_root = metadata_root / "github"
+          tag_path = github_root / "releases" / "tags" / f"v{version}"
+          latest_path = github_root / "releases" / "latest"
+          tag_path.parent.mkdir(parents=True, exist_ok=True)
+
+          pypi = {
+              "info": {"version": version},
+              "releases": {version: [{"yanked": False}]},
+          }
+          github = {
+              "tag_name": f"v{version}",
+              "draft": False,
+              "prerelease": False,
+          }
+          pypi_path = metadata_root / "pypi.json"
+          pypi_path.write_text(json.dumps(pypi), encoding="utf-8")
+          tag_path.write_text(json.dumps(github), encoding="utf-8")
+          latest_path.write_text(json.dumps(github), encoding="utf-8")
+
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as stream:
+              stream.write(f"WORKFLOW_LOOP_PYPI_JSON_URL={pypi_path.as_uri()}\n")
+              stream.write(f"WORKFLOW_LOOP_GITHUB_API_URL={github_root.as_uri()}\n")
       - name: 安装脚本冒烟：确认、取消与安装（Linux）
         if: runner.os == 'Linux'
         env:
@@ -160,6 +195,27 @@ jobs:
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
           (cd "$proj" && run_installer "$(printf 'y\n')")
           cmp "$proj/AGENTS.md" "${RUNNER_TEMP}/linux-AGENTS.before"
+          python -m pip download --only-binary=:all: packaging -d "${GITHUB_WORKSPACE}/dist"
+          python - "$proj/.workflow_loop/project.json" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          with open(path, encoding="utf-8") as stream:
+              value = json.load(stream)
+          value["installer_version"] = "0.0.9"
+          value["topic_history"] = ["release-smoke-sentinel"]
+          with open(path, "w", encoding="utf-8") as stream:
+              json.dump(value, stream, ensure_ascii=False)
+          PY
+          printf 'business-sentinel' > "$proj/business.txt"
+          rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
+          (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/update.sh" --version "${PRODUCT_VERSION}" --confirmed)
+          grep -q '"installer_version": "0.1.0"' "$proj/.workflow_loop/project.json"
+          [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
+          (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --confirmed)
+          [ ! -e "$proj/.workflow_loop" ]
+          [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
+          (cd "${RUNNER_TEMP}" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --global --confirmed)
+          [ ! -e "${UV_TOOL_BIN_DIR}/workflow" ]
       - name: 安装脚本冒烟：确认、取消与安装（macOS）
         if: runner.os == 'macOS'
         env:
@@ -216,6 +272,27 @@ jobs:
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
           (cd "$proj" && run_installer "$(printf 'y\n')")
           cmp "$proj/AGENTS.md" "${RUNNER_TEMP}/macos-AGENTS.before"
+          python -m pip download --only-binary=:all: packaging -d "${GITHUB_WORKSPACE}/dist"
+          python - "$proj/.workflow_loop/project.json" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          with open(path, encoding="utf-8") as stream:
+              value = json.load(stream)
+          value["installer_version"] = "0.0.9"
+          value["topic_history"] = ["release-smoke-sentinel"]
+          with open(path, "w", encoding="utf-8") as stream:
+              json.dump(value, stream, ensure_ascii=False)
+          PY
+          printf 'business-sentinel' > "$proj/business.txt"
+          rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
+          (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/update.sh" --version "${PRODUCT_VERSION}" --confirmed)
+          grep -q '"installer_version": "0.1.0"' "$proj/.workflow_loop/project.json"
+          [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
+          (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --confirmed)
+          [ ! -e "$proj/.workflow_loop" ]
+          [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
+          (cd "${RUNNER_TEMP}" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --global --confirmed)
+          [ ! -e "${UV_TOOL_BIN_DIR}/workflow" ]
       - name: 安装脚本冒烟：PowerShell 7（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
@@ -254,6 +331,29 @@ jobs:
           $after = (Get-FileHash "AGENTS.md" -Algorithm SHA256).Hash
           if ($after -ne $before) { Write-Error "只缺电脑侧时改写了现有项目内容"; exit 1 }
           Pop-Location
+          python -m pip download --only-binary=:all: packaging -d "$env:GITHUB_WORKSPACE\dist"
+          $marker = Join-Path $proj ".workflow_loop\project.json"
+          $value = Get-Content -Raw $marker | ConvertFrom-Json
+          $value.installer_version = "0.0.9"
+          $value.topic_history = @("release-smoke-sentinel")
+          [System.IO.File]::WriteAllText($marker, ($value | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+          [System.IO.File]::WriteAllText((Join-Path $proj "business.txt"), "business-sentinel")
+          Remove-Item -Recurse -Force $env:UV_TOOL_DIR, $env:UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue
+          $env:UV_NO_INDEX = "1"
+          Push-Location $proj
+          pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\update.ps1" -TargetVersion $env:PRODUCT_VERSION -Confirmed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $updated = Get-Content -Raw ".workflow_loop\project.json" | ConvertFrom-Json
+          if ($updated.installer_version -ne $env:PRODUCT_VERSION) { Write-Error "项目版本没有更新"; exit 1 }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\uninstall.ps1" -Confirmed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path ".workflow_loop") { Write-Error "项目管理目录没有删除"; exit 1 }
+          if ((Get-Content -Raw "business.txt") -ne "business-sentinel") { Write-Error "业务文件发生变化"; exit 1 }
+          Pop-Location
+          Push-Location $env:RUNNER_TEMP
+          pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\uninstall.ps1" -Global -Confirmed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
       - name: 安装脚本冒烟：Windows PowerShell 5.1（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
@@ -278,8 +378,31 @@ jobs:
           $repeat = ("y" | powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 | Out-String)
           if ($repeat -notmatch "当前项目已经安装，未修改任何文件") { Write-Error "完整重复安装没有零修改退出"; exit 1 }
           Pop-Location
+          python -m pip download --only-binary=:all: packaging -d "$env:GITHUB_WORKSPACE\dist"
+          $marker = Join-Path $proj ".workflow_loop\project.json"
+          $value = Get-Content -Raw $marker | ConvertFrom-Json
+          $value.installer_version = "0.0.9"
+          $value.topic_history = @("release-smoke-sentinel")
+          [System.IO.File]::WriteAllText($marker, ($value | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+          [System.IO.File]::WriteAllText((Join-Path $proj "business.txt"), "business-sentinel")
+          Remove-Item -Recurse -Force $env:UV_TOOL_DIR, $env:UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue
+          $env:UV_NO_INDEX = "1"
+          Push-Location $proj
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\update.ps1" -TargetVersion $env:PRODUCT_VERSION -Confirmed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $updated = Get-Content -Raw ".workflow_loop\project.json" | ConvertFrom-Json
+          if ($updated.installer_version -ne $env:PRODUCT_VERSION) { Write-Error "项目版本没有更新"; exit 1 }
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\uninstall.ps1" -Confirmed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path ".workflow_loop") { Write-Error "项目管理目录没有删除"; exit 1 }
+          if ((Get-Content -Raw "business.txt") -ne "business-sentinel") { Write-Error "业务文件发生变化"; exit 1 }
+          Pop-Location
+          Push-Location $env:RUNNER_TEMP
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\uninstall.ps1" -Global -Confirmed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
 
-  # 全部通过后才创建带两个安装脚本的公开 GitHub Release
+  # 全部通过后才创建带安装、更新和卸载脚本的公开 GitHub Release
   github-release:
     if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.0'
     needs: publish-pypi
@@ -297,6 +420,7 @@ jobs:
             Workflow Loop 0.1.0 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。
 
             - 支持 macOS、Linux 和原生 Windows 使用一条命令完成安装。
+            - 支持更新电脑全局命令和当前项目，并分别卸载项目或电脑全局命令。
             - 支持从零创建、修改产品和修复缺陷三种工作意图。
             - 每个正式环节依次经过讨论完成、程序检查和用户确认三道门。
             - 通过需求交付追踪表关联设计、验收、测试和实施结果。
@@ -306,3 +430,7 @@ jobs:
           files: |
             install.sh
             install.ps1
+            update.sh
+            update.ps1
+            uninstall.sh
+            uninstall.ps1

@@ -1,8 +1,10 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tomllib
+from urllib.request import urlopen
 
 import yaml
 
@@ -211,7 +213,7 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
     验收条件：AC-02 最终标签任务全部成功
     测试方式：自动化测试
     测试层级：模块测试
-    测试目标：发布配置只有在完整测试、构建和四种托管环境验证成功后才依次发布 PyPI 包和带两个安装脚本的 GitHub 正式版本
+    测试目标：发布配置只有在完整测试、构建和四种托管环境验证成功后才依次发布 PyPI 包和带六个维护脚本的 GitHub 正式版本
     测试入口：tests/test_release_workflow.py::test_release_gate_matrix_and_assets_are_structurally_complete
     代码入口：.github/workflows/release.yml jobs.verify-and-test、build、prepublish-smoke、publish-pypi、github-release
     """
@@ -301,7 +303,14 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
         "Python 3.11 或更高版本",
     ):
         assert expected_text in release_body
-    assert release_config["files"].splitlines() == ["install.sh", "install.ps1"]
+    assert release_config["files"].splitlines() == [
+        "install.sh",
+        "install.ps1",
+        "update.sh",
+        "update.ps1",
+        "uninstall.sh",
+        "uninstall.ps1",
+    ]
     _print_evidence(
         "RELEASE_WORKFLOW_STRUCTURE",
         {
@@ -343,3 +352,222 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
             "tag_condition": tag_condition,
         },
     )
+
+
+def test_update_release_assets_and_readme_entries_are_consistent():
+    """Workflow-Test
+    主题：已安装项目一条命令更新到目标正式版本
+    测试项：TC-08 更新发布资产和 README 入口一致
+    验收条件：AC-08 正式发布提供一条命令更新入口
+    测试方式：自动化测试 + 人工验收
+    测试层级：集成测试
+    测试目标：正式发布携带两个同版本更新脚本，README 提供命令更新和旧版脚本更新的三平台入口
+    测试入口：tests/test_release_workflow.py::test_update_release_assets_and_readme_entries_are_consistent
+    代码入口：.github/workflows/release.yml；update.sh；update.ps1；README.md
+    """
+    workflow = _workflow()
+    release_step = next(
+        step
+        for step in workflow["jobs"]["github-release"]["steps"]
+        if step.get("uses") == "softprops/action-gh-release@v2"
+    )
+    assets = release_step["with"]["files"].splitlines()
+    shell = (ROOT / "update.sh").read_text(encoding="utf-8")
+    powershell = (ROOT / "update.ps1").read_text(encoding="utf-8-sig")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "update.sh" in assets and "update.ps1" in assets
+    assert f'SCRIPT_VERSION="{__version__}"' in shell
+    assert f'$ScriptVersion = "{__version__}"' in powershell
+    assert "workflow update" in readme
+    assert "workflow update --version 0.2.0" in readme
+    assert "/releases/latest/download/update.sh" in readme
+    assert "/releases/latest/download/update.ps1" in readme
+    assert "不创建备份" in readme and "重新执行同一命令" in readme
+
+
+def test_update_release_smoke_uses_deterministic_metadata(tmp_path):
+    """Workflow-Test
+    主题：已安装项目一条命令更新到目标正式版本
+    测试项：TC-04 旧版本脚本跨版本更新
+    验收条件：AC-04 旧版本可以直接跨版本更新
+    测试方式：自动化测试 + 人工验收
+    测试层级：模块测试
+    测试目标：发布冒烟在各平台使用本地固定版本元数据验证更新，同时用户脚本默认仍读取真实公开发布源
+    测试入口：tests/test_release_workflow.py::test_update_release_smoke_uses_deterministic_metadata
+    代码入口：.github/workflows/release.yml jobs.prepublish-smoke；update.sh；update.ps1
+    """
+    workflow = _workflow()
+    steps = workflow["jobs"]["prepublish-smoke"]["steps"]
+    metadata_step = next(
+        step for step in steps if step.get("name") == "准备发布冒烟固定版本元数据"
+    )
+    metadata_index = steps.index(metadata_step)
+    download_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses") == "actions/download-artifact@v4"
+    )
+    platform_indexes = [
+        index
+        for index, step in enumerate(steps)
+        if step.get("name", "").startswith("安装脚本冒烟：")
+    ]
+
+    assert metadata_step["shell"] == "python"
+    assert download_index < metadata_index < min(platform_indexes)
+
+    github_env = tmp_path / "github-env"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GITHUB_ENV": str(github_env),
+            "PRODUCT_VERSION": workflow["env"]["PRODUCT_VERSION"],
+            "RUNNER_TEMP": str(tmp_path),
+        }
+    )
+    subprocess.run(
+        [sys.executable, "-c", metadata_step["run"]],
+        cwd=ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    metadata_urls = dict(
+        line.split("=", 1)
+        for line in github_env.read_text(encoding="utf-8").splitlines()
+    )
+    assert set(metadata_urls) == {
+        "WORKFLOW_LOOP_PYPI_JSON_URL",
+        "WORKFLOW_LOOP_GITHUB_API_URL",
+    }
+    assert all(url.startswith("file://") for url in metadata_urls.values())
+
+    version = workflow["env"]["PRODUCT_VERSION"]
+    with urlopen(metadata_urls["WORKFLOW_LOOP_PYPI_JSON_URL"]) as response:
+        pypi = json.load(response)
+    assert pypi == {
+        "info": {"version": version},
+        "releases": {version: [{"yanked": False}]},
+    }
+
+    github_base = metadata_urls["WORKFLOW_LOOP_GITHUB_API_URL"]
+    for suffix in (f"releases/tags/v{version}", "releases/latest"):
+        with urlopen(f"{github_base}/{suffix}") as response:
+            github = json.load(response)
+        assert github == {
+            "tag_name": f"v{version}",
+            "draft": False,
+            "prerelease": False,
+        }
+
+    platform_scripts = "\n".join(steps[index]["run"] for index in platform_indexes)
+    assert "update.sh" in platform_scripts
+    assert "update.ps1" in platform_scripts
+
+    shell = (ROOT / "update.sh").read_text(encoding="utf-8")
+    powershell = (ROOT / "update.ps1").read_text(encoding="utf-8-sig")
+    for script in (shell, powershell):
+        assert "WORKFLOW_LOOP_PYPI_JSON_URL" in script
+        assert "WORKFLOW_LOOP_GITHUB_API_URL" in script
+        assert "https://pypi.org/pypi/workflow-loop/json" in script
+        assert "https://api.github.com/repos/yuzyf/workflow_loop" in script
+
+
+def test_project_uninstall_release_assets_and_readme_boundary_are_complete():
+    """Workflow-Test
+    主题：从当前项目强制卸载 Workflow Loop
+    测试项：TC-08 卸载发布资产和 README 项目入口完整
+    验收条件：AC-07 重新安装和公开卸载入口符合边界
+    测试方式：自动化测试 + 人工验收
+    测试层级：集成测试
+    测试目标：正式发布携带两个同版本卸载脚本，README 明确项目卸载命令、删除范围、保留范围和不可恢复边界
+    测试入口：tests/test_release_workflow.py::test_project_uninstall_release_assets_and_readme_boundary_are_complete
+    代码入口：.github/workflows/release.yml；uninstall.sh；uninstall.ps1；README.md
+    """
+    workflow = _workflow()
+    release_step = next(
+        step
+        for step in workflow["jobs"]["github-release"]["steps"]
+        if step.get("uses") == "softprops/action-gh-release@v2"
+    )
+    assets = release_step["with"]["files"].splitlines()
+    shell = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
+    powershell = (ROOT / "uninstall.ps1").read_text(encoding="utf-8-sig")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "uninstall.sh" in assets and "uninstall.ps1" in assets
+    assert f'PRODUCT_VERSION="{__version__}"' in shell
+    assert f'$ProductVersion = "{__version__}"' in powershell
+    assert "workflow uninstall" in readme
+    assert "AGENTS.md、整个 .workflow_loop/ 和安装事务残留" in readme
+    assert "不恢复本轮业务修改" in readme
+    assert "删除没有备份" in readme
+    assert "/releases/latest/download/uninstall.sh" in readme
+    assert "/releases/latest/download/uninstall.ps1" in readme
+
+
+def test_windows_powershell_matrix_covers_global_self_uninstall_contract():
+    """Workflow-Test
+    主题：单独卸载电脑全局 Workflow Loop 命令
+    测试项：TC-04 两种 Windows PowerShell 完成命令自卸载
+    验收条件：AC-04 受支持的 Windows PowerShell 能完成自卸载
+    测试方式：自动化测试 + 人工验收
+    测试层级：端到端测试
+    测试目标：PowerShell 5.1 和 7 远程任务都执行全局卸载，脚本等待父命令并按真实退出码分别处理标准输出与错误输出
+    测试入口：tests/test_release_workflow.py::test_windows_powershell_matrix_covers_global_self_uninstall_contract
+    代码入口：.github/workflows/release.yml；workflow_loop.cli._run_maintenance_script；uninstall.ps1
+    """
+    steps = _workflow()["jobs"]["prepublish-smoke"]["steps"]
+    windows_runs = {
+        step["name"]: step["run"]
+        for step in steps
+        if step.get("name")
+        in {
+            "安装脚本冒烟：PowerShell 7（Windows）",
+            "安装脚本冒烟：Windows PowerShell 5.1（Windows）",
+        }
+    }
+    cli_source = (ROOT / "src" / "workflow_loop" / "cli.py").read_text(
+        encoding="utf-8"
+    )
+    script = (ROOT / "uninstall.ps1").read_text(encoding="utf-8-sig")
+
+    assert set(windows_runs) == {
+        "安装脚本冒烟：PowerShell 7（Windows）",
+        "安装脚本冒烟：Windows PowerShell 5.1（Windows）",
+    }
+    assert "pwsh -NoProfile" in windows_runs["安装脚本冒烟：PowerShell 7（Windows）"]
+    assert "powershell -NoProfile" in windows_runs[
+        "安装脚本冒烟：Windows PowerShell 5.1（Windows）"
+    ]
+    assert all("uninstall.ps1\" -Global -Confirmed" in run for run in windows_runs.values())
+    assert '"-WaitForProcessId"' in cli_source
+    assert "[int]$WaitForProcessId = 0" in script
+    assert "while (Get-Process -Id $WaitForProcessId" in script
+    assert "$process.StandardOutput.ReadToEndAsync()" in script
+    assert "$process.StandardError.ReadToEndAsync()" in script
+    assert "ExitCode = $process.ExitCode" in script
+
+
+def test_readme_separates_project_and_global_uninstall_boundaries():
+    """Workflow-Test
+    主题：单独卸载电脑全局 Workflow Loop 命令
+    测试项：TC-06 README 区分两种卸载范围
+    验收条件：AC-06 公开说明区分项目卸载和全局卸载
+    测试方式：自动化测试 + 人工验收
+    测试层级：模块测试
+    测试目标：README 分开给出项目和全局卸载入口，并说明全局卸载不删除项目但会让依赖项目暂时不能运行
+    测试入口：tests/test_release_workflow.py::test_readme_separates_project_and_global_uninstall_boundaries
+    代码入口：README.md
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "项目卸载和电脑全局命令卸载是两个独立动作" in readme
+    assert "workflow uninstall\n" in readme
+    assert "workflow uninstall --global" in readme
+    assert "只删除电脑全局命令；不会扫描或删除任何项目" in readme
+    assert "其它已安装项目仍保留" in readme
+    assert "重新安装全局命令前不能运行 `workflow`" in readme

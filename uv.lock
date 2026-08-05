@@ -145,6 +145,9 @@ wheels = [
 name = "workflow-loop"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "packaging" },
+]
 
 [package.optional-dependencies]
 dev = [
@@ -161,6 +164,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
 ]

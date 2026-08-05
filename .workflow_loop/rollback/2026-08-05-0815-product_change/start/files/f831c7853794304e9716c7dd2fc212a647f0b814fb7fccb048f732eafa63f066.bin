@@ -1,0 +1,104 @@
+# 【实施】产品和代码设计及缺陷穿刺结论保持真实一致
+
+- 工作流编号：2026-07-30-0740-product_change
+- 验收主题：产品和代码设计及缺陷穿刺结论保持真实一致
+
+## 1. 实施依据
+
+| 依据类型 | 具体内容 | 文档位置 |
+|---|---|---|
+| 产品设计 | 正式文档使用稳定中文文件标识；产品、代码设计、缺陷和穿刺只保存用户决定或真实证据能够支持的结论 | [维护产品设计](../spec/功能_维护产品设计.md)<br>[维护代码设计](../spec/功能_维护代码设计.md)<br>[复现产品缺陷](../spec/功能_复现产品缺陷.md)<br>[验证技术不确定性](../spec/功能_验证技术不确定性.md) |
+| 验收条件 | AC-01 至 AC-06：中文正式路径、已确认产品内容、计划与事实区分、真实缺陷复现、真实穿刺和证据冲突处理 | [验收条件](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md#4-验收条件) |
+| 测试项 | TC-01 至 TC-06：稳定文件标识、产品结构、代码证据、缺陷根因、穿刺选择和冲突阻止 | [测试项](../qa/产品和代码设计及缺陷穿刺结论保持真实一致_测试计划.md#1-验收条件覆盖) |
+| 代码设计 | 正式产物路径由一个模块生成；项目状态保存显示名称与文件标识映射；阶段和校验模块不再各自拼路径 | [正式产物与追踪层](../spec/代码架构设计.md#45-正式产物与追踪层)<br>[正式产物寻址](../spec/代码架构设计.md#51-正式产物寻址) |
+| 穿刺结论 | 固定 uv 安装穿刺使用真实资产、命令和环境取得结论，并明确保留尚未在 Windows、Linux 和正式 PyPI 验证的范围 | [固定版本 uv 隔离安装穿刺](../spec/穿刺_固定版本uv隔离安装.md#7-结论) |
+
+## 2. 实施前计划
+
+### 2.1 预期产品结果
+
+所有面向用户长期维护的正式文档使用中文文件名，固定程序目录和机器文件名保持英文。功能、主题、穿刺项和缺陷的完整显示名称与安全文件标识分别保存，后续环节不会从文件名反推业务名称。产品设计、代码设计、缺陷根因和穿刺结论继续接受结构、真实路径、当前工作流、证据状态和设计影响检查；证据冲突或结论仍阻塞时不能进入后续计划。
+
+### 2.2 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改的具体逻辑 | 数据、状态或输出变化 | 对应验收条件和测试项 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | `src/workflow_loop/artifact_paths.py` | 新增固定路径、文件标识生成、映射核对和动态路径函数 | 暂无统一路径模块；各模块直接拼接英文路径和主题名称 | 集中定义全部中文正式路径；对显示名称做 Unicode 规范化，保留中文、字母、数字、下划线和连字符，处理空值、危险字符、跨平台保留名、长度、大小写冲突和重名；已有映射只读不重算；分别生成产品、主题、穿刺和缺陷路径 | 所有正式路径由同一接口返回；显示名称不因文件安全处理而改变；冲突得到稳定编号且不会覆盖旧文件 | AC-01；TC-01 | 主题 2 的项目状态和阶段基础 |
+| 2 | `src/workflow_loop/project.py` | `ProjectState.artifact_file_keys`、读取保存和登记函数 | 项目状态没有显示名称到文件标识映射；主题历史只保存名称 | 增加按功能、主题、穿刺和缺陷分类的持久映射；兼容读取尚无该字段的当前开发状态；第三道门确认后才保存本轮新映射；拒绝一个显示名称漂移到另一标识或一个标识覆盖另一名称 | `project.json` 保存稳定文件标识；后续轮次不再重新猜文件名 | AC-01、AC-04、AC-05；TC-01、TC-04、TC-05 | 1 |
+| 3 | `src/workflow_loop/stages/stages.py` | 产品设计、代码设计、项目设计初始化、设计修订、缺陷复现、穿刺和最终设计同步阶段 | `artifact_paths()`、文件搜索、变化范围和输出说明硬编码 `产品总说明.md`、`feature_*.md`、`代码架构设计.md`、`spike_索引.md` 和 `bug/索引.md` | 改用统一路径函数；从产品总说明当前链接取得有效功能文档；校验标题显示名、链接文件标识和项目映射；第三道门推进时登记已确认的新功能、穿刺和缺陷映射；保留原有真实变化、工作流编号、根因、阻塞和最终同步要求 | 各设计与调查阶段只识别中文正式路径；已移除历史功能不冒充当前功能；英文旧文件不能与中文文件共同通过 | AC-01 至 AC-06；TC-01 至 TC-06 | 1、2 |
+| 4 | `src/workflow_loop/artifact_validation.py` | 产品、代码设计、缺陷、计划和结果的结构与链接校验 | 固定常量和大量链接检查使用旧英文正式路径，并通过 `feature_*.md` 搜索功能 | 所有路径、索引链接和主题文件改由统一路径模块生成；产品总说明校验九章和当前功能链接，功能文档校验七章与显示名称；代码设计区分真实路径、计划位置和证据状态；缺陷继续校验真实复现、根因和单缺陷边界 | 旧路径、双套文件、错误映射、缺章、无效链接、虚假代码位置或根因不完整都得到具体失败原因 | AC-01、AC-02、AC-03、AC-04、AC-06；TC-01、TC-02、TC-03、TC-04、TC-06 | 1、2、3 |
+| 5 | `src/workflow_loop/verification.py` | 产品设计、代码设计和正式产物集合哈希 | 产品设计固定读取 `spec/产品总说明.md`，代码设计固定读取旧英文路径；部分主题文件从名称拼接 | 改用统一固定路径和已登记动态路径；产品设计哈希只覆盖产品总说明当前链接的功能文档；稳定排序显示名称和文件标识；保留已移除历史文档但不纳入当前哈希 | 内容相同但路径完成受控迁移时可以重新绑定；真实内容变化仍使对应下游结果失效 | AC-01、AC-02、AC-03、AC-06；TC-01、TC-02、TC-03、TC-06 | 1、2 |
+| 6 | `src/workflow_loop/spike_validation.py` | 穿刺清单、结论文档链接和设计影响校验 | 只接受 `spec/穿刺清单.md` 和 `spec/spike_<english-name>.md` | 改为读取 `spec/穿刺清单.md` 和登记过的 `spec/穿刺_<文件标识>.md`；核对显示名称、穿刺编号、当前工作流、状态、阻塞、设计影响和真实执行字段；继续拒绝模拟证据和未同步设计 | 中文穿刺路径稳定；仍未确认且阻塞、设计要求修改却未变化、缺陷轮次要求改产品时仍不能推进 | AC-01、AC-05、AC-06；TC-01、TC-05、TC-06 | 1、2、5 |
+| 7 | `src/workflow_loop/topic.py` | 当前主题和按主题文档路径读取 | 从 `acceptance/<topic>_plan.md` 文件名截取主题，文件名等同业务名称 | 从验收索引和项目主题映射读取完整显示名称；按统一路径取得主题计划和结果；缺少映射或索引不一致时明确失败 | 主题名称不再受文件名清理影响；同一主题跨验收、测试、实施和结果文件保持稳定 | AC-01；TC-01 | 1、2 |
+| 8 | `src/workflow_loop/bug_record.py` | 缺陷索引、缺陷记录查找和后续状态链接 | 固定使用 `bug/索引.md`，通过文件名和旧主题后缀生成链接 | 使用 `bug/索引.md`、缺陷映射和统一主题路径；只更新当前工作流登记的单个缺陷记录；原始复现与根因内容保持只追加后续结果 | 缺陷显示名、文件标识、主题和后续结果链接一致；旧工作流记录不被误改 | AC-01、AC-04、AC-06；TC-01、TC-04、TC-06 | 1、2、7 |
+| 9 | `src/workflow_loop/role_doc.py` | 阶段角色说明 | 角色说明仍告诉 AI 生成英文正式路径和 `_plan.md`、`_result.md` 文件 | 把用户正式产物说明改成中文路径，并在首次出现程序英文环节标识时说明中文含义；不改变角色职责 | `workflow discuss` 显示的短任务说明不再引导 AI 生成旧文件名 | AC-01；TC-01 | 1 |
+| 10 | `src/workflow_loop/data/Template_Repository/spec/spec.md` | 产品设计产物模板 | 正文要求生成 `产品总说明.md` 和 `feature_*.md` | 改为 `产品总说明.md` 与 `功能_<文件标识>.md`，保留九章总说明、七章功能文档和已移除历史规则 | 新安装项目的产品正式产物只使用中文路径 | AC-01、AC-02；TC-01、TC-02 | 1 |
+| 11 | `src/workflow_loop/data/Standardized_Repository/spec/spec.md` | 产品设计工作规范 | 调查和修改流程引用旧英文正式路径 | 改为统一中文路径；明确显示名称和文件标识分离、只改确认范围和证据冲突处理 | 产品设计过程与新路径及真实依据规则一致 | AC-01、AC-02、AC-06；TC-01、TC-02、TC-06 | 1 |
+| 12 | `src/workflow_loop/data/Template_Repository/code_design/code_design.md` | 代码设计产物模板 | 架构文档路径和功能文档链接使用旧英文名 | 改为 `代码架构设计.md` 和中文功能文档链接；继续要求计划位置、真实代码符号和证据状态分开写 | 代码设计模板不把计划冒充事实 | AC-01、AC-03；TC-01、TC-03 | 1 |
+| 13 | `src/workflow_loop/data/Template_Repository/code_design/project_design_init_evidence.md` | 项目设计初始化证据模板 | 初始化证据路径使用旧英文名 | 改为 `项目设计初始化证据.md`，并更新产品和代码设计链接 | 已有项目初始化证据与中文设计路径一致 | AC-01、AC-02、AC-03；TC-01、TC-02、TC-03 | 1 |
+| 14 | `src/workflow_loop/data/Standardized_Repository/code_design/code_design.md` | 初步代码设计工作规范 | 调查、功能覆盖和产出说明引用旧英文路径 | 改为统一中文路径，继续要求每个产品功能有完整代码过程和验证位置 | 设计计划与产品功能逐项对应 | AC-01、AC-03、AC-06；TC-01、TC-03、TC-06 | 1 |
+| 15 | `src/workflow_loop/data/Standardized_Repository/code_design/project_design_init.md` | 项目设计初始化工作规范 | 当前行为调查和三类产物引用旧英文路径 | 改为中文产品、代码设计和调查证据路径；保留真实代码与安全运行校准要求 | 初始化不会用猜测代替当前行为证据 | AC-01、AC-02、AC-03、AC-06；TC-01、TC-02、TC-03、TC-06 | 1 |
+| 16 | `src/workflow_loop/data/Standardized_Repository/code_design/revise_code_design.md` | 产品变化后的设计修订规范 | 设计修订引用旧架构和功能文件名 | 改为中文正式路径，继续区分设计计划、既有实现和穿刺影响 | 产品变化后的代码设计与当前产品保持一致 | AC-01、AC-03、AC-06；TC-01、TC-03、TC-06 | 1 |
+| 17 | `src/workflow_loop/data/Standardized_Repository/code_design/update_code_design.md` | 最终代码设计同步规范 | 最终同步引用旧架构路径 | 改为中文正式路径；本主题只调整路径，不提前填写最终实现结论 | 最终阶段可以在同一中文架构文档中核对真实交付 | AC-01、AC-03；TC-01、TC-03 | 1 |
+| 18 | `src/workflow_loop/data/Template_Repository/reproduce/reproduce.md` | 缺陷复现产物模板 | 缺陷索引和记录路径使用旧命名 | 改为 `bug/索引.md` 与 `bug/缺陷_<文件标识>.md`，保留真实环境、输入、步骤、期望、实际、根因和主题字段 | 缺陷正式记录使用稳定中文路径且仍可复核 | AC-01、AC-04；TC-01、TC-04 | 1 |
+| 19 | `src/workflow_loop/data/Standardized_Repository/reproduce/reproduce.md` | 缺陷复现工作规范 | 复现流程和门禁说明引用旧路径 | 改为中文缺陷路径；继续要求真实复现、根因证据、单缺陷和唯一主题 | 路径迁移不降低缺陷证据要求 | AC-01、AC-04、AC-06；TC-01、TC-04、TC-06 | 1 |
+| 20 | `src/workflow_loop/data/Template_Repository/spike/spike.md` | 穿刺清单和结论模板 | 模板生成 `spike_索引.md` 和英文穿刺文件 | 改为 `穿刺清单.md` 与 `穿刺_<文件标识>.md`，保留清单、八章结论和设计影响字段 | 新穿刺产物使用稳定中文路径 | AC-01、AC-05、AC-06；TC-01、TC-05、TC-06 | 1 |
+| 21 | `src/workflow_loop/data/Standardized_Repository/spike/spike.md` | 穿刺工作规范 | 穿刺选择、执行和清理规则引用旧英文正式路径 | 改为中文穿刺路径；保留用户逐项选择、真实场景、敏感操作确认、阻塞和设计同步规则 | 穿刺仍只验证真正未知事实，临时内容不会冒充正式结论 | AC-01、AC-05、AC-06；TC-01、TC-05、TC-06 | 1 |
+
+当前仓库在上述代码和资源就绪后执行一次发布前受控迁移：先计算全部旧路径到中文路径的唯一映射并检查冲突，再统一重命名正式文档、改写 Markdown 链接、登记文件标识并更新当前状态中的产物路径和有效哈希。任一步失败时恢复本次迁移；成功后删除旧英文正式文件，不把该动作做成 0.1.0 的旧版本升级功能。项目内 `.workflow_loop` 的模板和规范运行副本从对应包内源文件同步，并逐字节核对一致。
+
+### 2.3 开发检查计划
+
+| 检查命令或方法 | 检查范围 | 预期观察结果 |
+|---|---|---|
+| 对危险字符、空名称、Unicode、大小写、Windows 保留名和重名调用文件标识函数 | 跨平台文件标识 | 只生成允许字符；空值和无法安全处理的名称失败；冲突稳定追加编号且不覆盖 |
+| 保存并重新读取 `project.json` 映射 | 显示名称和文件标识持久化 | 同一名称跨进程、跨轮次保持同一标识；漂移和反向冲突被拒绝 |
+| 遍历全部 Stage 的产物路径和变化路径 | 阶段路径统一性 | 所有正式路径来自统一模块；旧英文正式路径不再出现 |
+| 用有效和无效产品、代码设计、缺陷与穿刺文档执行结构校验 | 真实证据和冲突门禁 | 有效中文文档通过；旧路径、双套、缺章、错误链接、虚假位置、根因缺失、模拟证据和阻塞结论失败 |
+| 执行发布前迁移并扫描仓库链接 | 当前正式文档迁移 | 所有正式文档改为中文路径；内部链接存在；旧英文正式文件不存在；显示名称未被改写 |
+| 比较包内资源和 `.workflow_loop` 运行副本 | 模板和规范下发一致性 | 对应文件逐字节一致 |
+| `python -m compileall src/workflow_loop` | 路径、状态、阶段和校验模块 | 所有修改后的 Python 模块可以编译 |
+
+### 2.4 未决问题
+
+暂无
+
+## 3. 实施后记录
+
+### 3.1 实际代码修改
+
+| 对应计划步骤 | 文件 | 类、函数或配置项 | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 对应验收条件和测试项 |
+|---|---|---|---|---|---|
+| 1 | `src/workflow_loop/artifact_paths.py` | 中文固定路径常量、`make_file_key()`（生成文件标识）、`resolve_file_key()`（解析稳定标识）、`register_file_keys()`（登记映射）、各类动态路径函数 | 新增正式产物路径的唯一来源；对显示名称做 Unicode 规范化、跨平台字符清理、Windows 保留名避让、长度限制和不区分大小写的冲突处理；已有映射优先复用 | 产品、代码设计、穿刺、缺陷、验收、测试和实施文档都由稳定中文文件标识生成路径，不改写用户确认的显示名称 | AC-01；TC-01 |
+| 2 | `src/workflow_loop/project.py` | `ProjectState.artifact_file_keys`（正式文件标识映射）、`load_project()`（读取项目状态）、`save_project()`（保存项目状态）、`snapshot_managed_fields()`（快照受管字段）、`restore_managed_fields()`（恢复受管字段）、`register_artifact_names()`（登记正式名称）、`register_topics()`（登记主题） | 在项目级状态中按 `feature/topic/spike/bug`（功能/主题/穿刺/缺陷）分类持久化“显示名称 → 文件标识”；保存时保留未知扩展字段，登记时拒绝名称重复和映射漂移 | `.workflow_loop/project.json` 持久保存稳定映射；整轮作废可只恢复工作流受管字段，不覆盖安装身份和其它扩展 | AC-01、AC-04、AC-05；TC-01、TC-04、TC-05 |
+| 3 | `src/workflow_loop/stages/stages.py` | `SpecStage`（产品设计阶段）、`CodeDesignStage`（代码设计阶段）、`SpikeStage`（穿刺阶段）、`UpdateCodeDesignStage`（最终设计同步阶段）、`ProjectDesignInitStage`（项目设计初始化阶段）、`ReviseCodeDesignStage`（代码设计修订阶段）、`ReproduceStage`（缺陷复现阶段） | 阶段产物、变化追踪、功能范围和门禁全部改用统一路径；当前功能只从产品总说明的实际链接取得，不再扫描目录猜测 | 旧英文正式路径、中英双套产物、未链接的历史功能不能被当作当前输出通过 | AC-01 至 AC-06；TC-01 至 TC-06 |
+| 4 | `src/workflow_loop/artifact_validation.py` | `validate_project_design_init_evidence()`（校验初始化证据）、`validate_final_code_design_document()`（校验最终代码设计）、`validate_reproduce_documents()`（校验缺陷复现文档）及产品、计划、结果和链接校验 | 所有正式路径和主题文件改由统一路径模块生成；最终设计逐功能校验真实代码文件、每个反引号符号、可定位验证入口和当前机器记录集合；缺陷记录继续校验真实复现、根因和单缺陷边界 | 缺章节、无效链接、虚假代码符号或验证位置、根因不完整、遗漏/额外/拼接机器记录都会返回具体失败原因 | AC-01、AC-02、AC-03、AC-04、AC-06；TC-01、TC-02、TC-03、TC-04、TC-06 |
+| 5 | `src/workflow_loop/verification.py` | `get_linked_product_design_paths()`（取得已链接功能文档）、`compute_product_design_hash()`（计算产品设计哈希）、`compute_code_design_hash()`（计算代码设计哈希）、按主题计算的各下游哈希函数 | 产品设计哈希只包含产品总说明和其当前链接的中文功能文档；代码设计和各主题产物从统一路径取值 | 受控路径迁移后可以重新绑定当前哈希；真实内容改变仍会使对应下游结果失效 | AC-01、AC-02、AC-03、AC-06；TC-01、TC-02、TC-03、TC-06 |
+| 6 | `src/workflow_loop/spike_validation.py` | `_detail_path_from_link()`（解析穿刺结论链接）、`validate_spike_stage()`（校验穿刺阶段） | 只接受 `spec/穿刺清单.md` 中链接的 `spec/穿刺_<文件标识>.md`，并逐项复核工作流编号、穿刺项编号、结果状态、阻塞、设计影响和后续阶段 | 中文穿刺路径可复核；仍在待验证、仍阻塞或要求设计变更却未同步时不能推进 | AC-01、AC-05、AC-06；TC-01、TC-05、TC-06 |
+| 7 至 9 | `src/workflow_loop/topic.py`<br>`src/workflow_loop/bug_record.py`<br>`src/workflow_loop/role_doc.py` | `topic_file_key()`（取得主题文件标识）、`topic_paths()`（生成主题全部路径）、`list_acceptance_index_topics()`（读取验收主题）；`_records_for_workflow()`（定位当前缺陷记录）、`update_status()`（追加缺陷状态）；`DOC_OVERVIEW`（文档概览）、`ROLE_DOC_MAP`（阶段角色说明） | 主题显示名称改从验收索引和项目映射读取，不再从文件名反推；缺陷状态只更新当前工作流和主题对应的记录；面向 AI 的产物说明改为中文路径和“显示名称/文件标识”规则 | 验收、测试、实施和缺陷链接共用同一主题标识；旧工作流缺陷记录不会被误改 | AC-01、AC-04、AC-06；TC-01、TC-04、TC-06 |
+| 10 至 20 | `src/workflow_loop/data/Template_Repository/spec/spec.md`<br>`src/workflow_loop/data/Template_Repository/code_design/code_design.md`<br>`src/workflow_loop/data/Template_Repository/code_design/project_design_init_evidence.md`<br>`src/workflow_loop/data/Template_Repository/reproduce/reproduce.md`<br>`src/workflow_loop/data/Template_Repository/spike/spike.md`<br>`src/workflow_loop/data/Standardized_Repository/spec/spec.md`<br>`src/workflow_loop/data/Standardized_Repository/code_design/*.md`<br>`src/workflow_loop/data/Standardized_Repository/reproduce/reproduce.md`<br>`src/workflow_loop/data/Standardized_Repository/spike/spike.md` | 产品设计、代码设计、初始化证据、缺陷复现和穿刺的模板与工作规范 | 把正式产物、链接和操作说明统一为中文文件名；保留产品结构、计划与事实边界、真实缺陷根因、真实穿刺证据和设计影响的填写要求 | 包内源资源不再指引新项目生成英文正式产物；最终设计的代码符号、验证定位和机器记录填写格式与门禁一致 | AC-01 至 AC-06；TC-01 至 TC-06 |
+| 发布前受控迁移 | 当前仓库 57 份现有正式文档、`.workflow_loop/project.json`、`.workflow_loop/state.json` | 一次性路径迁移与引用/哈希重绑定 | 将现有正式文档按唯一映射迁移到中文名，改写并核对 71 个 Markdown 引用；登记 13 个功能、10 个主题和 1 个穿刺项映射，重算当前产物路径和哈希 | 当前仓库中文正式文档、项目映射、状态哈希和内部链接复核一致；未增加 0.1.0 的旧版本升级分支 | AC-01 至 AC-06；TC-01 至 TC-06 |
+
+### 3.2 开发检查记录
+
+| 检查命令或方法 | 检查范围 | 实际反馈 | 是否需要继续修改 |
+|---|---|---|---|
+| `python3 -m compileall -q src/workflow_loop` | 正式路径、项目状态、阶段、文档校验、穿刺、主题、缺陷和哈希模块 | 命令无输出且退出码为 0，当前 Python 源码可编译 | 否 |
+| 临时项目聚焦冒烟：构造真实代码文件、测试入口和当前机器记录后调用 `validate_final_code_design_document()`（校验最终代码设计） | 最终设计的功能文档映射、全部代码符号、验证位置和机器记录集合 | 结构完整的临时文档通过开发检查；拼接机器编号、不存在的代码符号和只写“测试已通过”的验证位置被拒绝 | 否 |
+| 受控迁移结果核对 | 57 份现有正式文档、71 个 Markdown 引用、13 个功能映射、10 个主题映射和 1 个穿刺项映射 | 迁移后的文件数、映射数、内部链接、当前产物路径和绑定哈希复核一致 | 否 |
+| 包内源资源静态核对 | `src/workflow_loop/data/Template_Repository` 与 `src/workflow_loop/data/Standardized_Repository` 中的产品设计、代码设计、缺陷和穿刺资源 | 源资源使用中文正式路径，文件标识、证据边界和链接要求与当前代码一致 | 否 |
+
+### 3.3 未完成内容
+
+暂无
+
+## 4. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md) | 本主题要达到的用户结果和验收条件 |
+| 上游 | [测试计划](../qa/产品和代码设计及缺陷穿刺结论保持真实一致_测试计划.md) | 本主题准备覆盖的测试范围 |
+| 上游 | [代码设计](../spec/代码架构设计.md#64-功能维护产品设计) | 本次实施遵守的正式路径、设计、缺陷和穿刺架构 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整交付链路 |
+| 下游 | [主题测试结果](../qa/产品和代码设计及缺陷穿刺结论保持真实一致_测试结果.md) | 实施完成后执行正式测试 |
+| 下游 | [主题验收结果](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收结果.md) | 测试通过后执行主题验收 |

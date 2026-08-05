@@ -1,8 +1,13 @@
 import argparse
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 from datetime import datetime
 
 from . import PRODUCT_IDENTITY
@@ -64,6 +69,11 @@ STAGE_LABELS = {
     "overall_acceptance": "整体验收",
     "update_code_design": "最终产品、架构与代码设计同步",
 }
+
+PYPI_JSON_URL = "https://pypi.org/pypi/workflow-loop/json"
+GITHUB_API_URL = "https://api.github.com/repos/yuzyf/workflow_loop"
+GITHUB_RELEASE_URL = "https://github.com/yuzyf/workflow_loop/releases"
+MAINTENANCE_USER_AGENT = "workflow-loop-maintenance"
 
 
 # 打印 stdout 末尾的"下一步"指令（stdout 驱动原则的核心）
@@ -3004,6 +3014,233 @@ def cmd_abort(args) -> None:
     )
 
 
+# 读取正式发布元数据；更新命令只接受 PyPI 与 GitHub Release 都存在的正式版本。
+def _fetch_json(url: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": MAINTENANCE_USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, urllib.error.URLError) as exc:
+        raise ValueError(f"无法读取正式发布元数据 {url}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"正式发布元数据 {url} 的顶层不是 JSON 对象")
+    return payload
+
+
+def _resolve_update_version(requested_version: str | None) -> str:
+    pypi_url = os.environ.get("WORKFLOW_LOOP_PYPI_JSON_URL", PYPI_JSON_URL)
+    github_api = os.environ.get("WORKFLOW_LOOP_GITHUB_API_URL", GITHUB_API_URL).rstrip("/")
+    pypi = _fetch_json(pypi_url)
+
+    if requested_version:
+        target = project_mod.stable_version(requested_version, "指定目标版本")
+        releases = pypi.get("releases", {})
+        files = releases.get(str(target), []) if isinstance(releases, dict) else []
+        if not isinstance(files, list) or not files or not any(
+            isinstance(item, dict) and not item.get("yanked", False) for item in files
+        ):
+            raise ValueError(f"PyPI 没有可用的正式版本 {target}")
+        github = _fetch_json(f"{github_api}/releases/tags/v{target}")
+    else:
+        info = pypi.get("info", {})
+        raw_target = info.get("version") if isinstance(info, dict) else None
+        target = project_mod.stable_version(raw_target, "PyPI 最新版本")
+        github = _fetch_json(f"{github_api}/releases/latest")
+
+    tag = github.get("tag_name")
+    if github.get("draft") or github.get("prerelease"):
+        raise ValueError(f"GitHub Release v{target} 不是正式发布")
+    if tag != f"v{target}":
+        raise ValueError(
+            f"PyPI 目标版本是 {target}，GitHub Release 标记是 {tag!r}，两个来源不一致"
+        )
+    current = project_mod.stable_version(project_mod.PRODUCT_VERSION, "电脑全局命令版本")
+    if target < current:
+        raise ValueError(f"目标版本 {target} 低于电脑全局命令版本 {current}，不允许降级")
+    return str(target)
+
+
+def _confirm_once(prompt: str) -> bool:
+    try:
+        answer = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print("")
+        return False
+    return answer.lower() in {"y", "yes"}
+
+
+def _release_asset_url(version: str, filename: str) -> str:
+    override = os.environ.get("WORKFLOW_LOOP_RELEASE_BASE_URL")
+    if override:
+        return f"{override.rstrip('/')}/{filename}"
+    return f"{GITHUB_RELEASE_URL}/download/v{version}/{filename}"
+
+
+def _download_release_asset(version: str, filename: str, destination: str) -> None:
+    url = _release_asset_url(version, filename)
+    request = urllib.request.Request(url, headers={"User-Agent": MAINTENANCE_USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            content = response.read()
+    except (OSError, urllib.error.URLError) as exc:
+        raise ValueError(f"下载正式发布脚本失败 {url}: {exc}") from exc
+    if not content:
+        raise ValueError(f"下载到的正式发布脚本为空: {url}")
+    with open(destination, "wb") as stream:
+        stream.write(content)
+
+
+def _run_maintenance_script(
+    filename: str,
+    version: str,
+    arguments: list[str],
+) -> int:
+    temp_dir = tempfile.mkdtemp(prefix="workflow_loop_maintenance_")
+    script_path = os.path.join(temp_dir, filename)
+    try:
+        _download_release_asset(version, filename, script_path)
+        if os.name == "nt":
+            command = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script_path,
+                *arguments,
+                "-WaitForProcessId",
+                str(os.getpid()),
+                "-CleanupDirectory",
+                temp_dir,
+            ]
+            subprocess.Popen(command, close_fds=True)
+            print("已把确认后的维护动作交给辅助 PowerShell 进程。")
+            print("当前 workflow 进程退出后，辅助进程会继续并打印最终结果。")
+            return 0
+        completed = subprocess.run(["bash", script_path, *arguments], check=False)
+        return completed.returncode
+    except (OSError, ValueError) as exc:
+        print(f"维护脚本启动失败：{exc}")
+        return 1
+    finally:
+        if os.name != "nt":
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def cmd_update(args) -> None:
+    project_root = os.getcwd()
+    if not os.path.isdir(os.path.join(project_root, WORKFLOW_LOOP_DIRNAME)):
+        print("错误：workflow update 必须从已安装项目根目录执行；不会向父目录查找。")
+        sys.exit(1)
+    try:
+        target_version = _resolve_update_version(args.version)
+    except ValueError as exc:
+        print(f"更新预检失败：{exc}")
+        print("项目和电脑全局命令均未修改。")
+        sys.exit(1)
+
+    status = project_mod.inspect_skeleton_for_update(project_root, target_version)
+    if status.state != "installed":
+        print("更新预检失败：当前项目骨架残缺或版本方向不允许。")
+        for problem in status.problems:
+            print(f"  - {problem}")
+        print("项目和电脑全局命令均未修改。")
+        sys.exit(1)
+
+    global_needs_update = project_mod.stable_version(
+        project_mod.PRODUCT_VERSION,
+        "电脑全局命令版本",
+    ) != project_mod.stable_version(target_version, "目标版本")
+    if not global_needs_update and not status.needs_update:
+        print(f"电脑全局命令和当前项目都已经是 {target_version}，无需更新。")
+        return
+
+    print("═══ Workflow Loop 更新确认 ═══")
+    print(f"项目根目录: {os.path.realpath(project_root)}")
+    print(f"电脑全局命令版本: {project_mod.PRODUCT_VERSION}")
+    print(f"当前项目版本: {status.installed_version}")
+    print(f"目标正式版本: {target_version}")
+    print("确认后按需更新电脑全局命令，并直接覆盖当前项目：")
+    for path in installer_mod.UPDATE_PROJECT_PATHS:
+        print(f"  {os.path.join(os.path.realpath(project_root), *path.split('/'))}")
+    print("保留：当前轮次状态、Journal 历史、rollback 回退资料、业务代码和正式产物。")
+    print("不创建备份；中途失败不恢复已完成部分，可以重新执行同一命令补齐。")
+    if not _confirm_once("确认以上范围并开始更新？[y/N] "):
+        print("已取消。项目和电脑全局命令均未修改。")
+        return
+
+    filename = "update.ps1" if os.name == "nt" else "update.sh"
+    code = _run_maintenance_script(
+        filename,
+        target_version,
+        [
+            "-ProjectRoot" if os.name == "nt" else "--project-root",
+            project_root,
+            "-TargetVersion" if os.name == "nt" else "--version",
+            target_version,
+            "-ExpectedProjectVersion" if os.name == "nt" else "--expected-project-version",
+            status.installed_version or "",
+            "-Confirmed" if os.name == "nt" else "--confirmed",
+        ],
+    )
+    sys.exit(code)
+
+
+def _print_project_uninstall_scope(scope: installer_mod.UninstallScope) -> None:
+    print("═══ Workflow Loop 项目卸载确认 ═══")
+    print(f"项目根目录: {scope.project_root}")
+    if scope.existing_paths:
+        print("确认后删除：")
+        for path in scope.existing_paths:
+            print(f"  {os.path.join(scope.project_root, *path.split('/'))}")
+    else:
+        print("固定项目管理内容已经全部不存在。")
+    print("保留：业务代码、测试、Git 数据和 spec/、acceptance/、qa/、impl/、bug/ 等正式产物。")
+    print("电脑全局 workflow 命令不会修改。删除没有备份，当前轮次状态不会阻止卸载。")
+
+
+def cmd_uninstall(args) -> None:
+    if args.global_scope:
+        print("═══ Workflow Loop 全局卸载确认 ═══")
+        print("确认后删除这台电脑上的 Workflow Loop 全局命令和工具环境。")
+        print("只有来源记录能证明由 Workflow Loop 添加的 PATH 项才会删除；未知来源会保留并报告。")
+        print("不会查找、扫描、读取或删除任何项目目录。")
+        print("警告：全局命令删除后，其它已安装项目也暂时无法运行 workflow。")
+        if not _confirm_once("确认只卸载电脑全局命令？[y/N] "):
+            print("已取消。电脑和项目内容均未修改。")
+            return
+        filename = "uninstall.ps1" if os.name == "nt" else "uninstall.sh"
+        code = _run_maintenance_script(
+            filename,
+            project_mod.PRODUCT_VERSION,
+            ["-Global" if os.name == "nt" else "--global", "-Confirmed" if os.name == "nt" else "--confirmed"],
+        )
+        sys.exit(code)
+
+    project_root = os.getcwd()
+    scope = installer_mod.inspect_uninstall_scope(project_root)
+    _print_project_uninstall_scope(scope)
+    if not scope.existing_paths:
+        print("当前项目已经卸载干净，无需修改。")
+        return
+    if not _confirm_once("确认强制卸载当前项目？[y/N] "):
+        print("已取消。当前项目未修改。")
+        return
+    result = installer_mod.uninstall_project(project_root)
+    for path in result.changed_paths:
+        print(f"已删除: {path}")
+    if result.failures:
+        print("项目卸载未完成，以下残留未删除：")
+        for failure in result.failures:
+            print(f"  - {failure}")
+        print("已删除内容不会恢复；解决权限或占用后重新执行同一命令。")
+        sys.exit(1)
+    print("当前项目的 Workflow Loop 管理内容已全部删除。")
+
+
 # _install-project 内部命令：安装当前项目（只由官方安装脚本在确认后调用）
 # 不显示在普通帮助中；必须携带安装脚本生成的一次性事务文件
 # 项目根用 cwd（安装脚本已让用户确认目录）
@@ -3014,6 +3251,60 @@ def cmd_internal_install_project(args) -> None:
     code = installer_mod.install_project_transaction(project_root, args.transaction)
     # 退出
     sys.exit(code)
+
+
+def cmd_internal_update_project(args) -> None:
+    project_root = os.getcwd()
+    status = project_mod.inspect_skeleton_for_update(project_root, project_mod.PRODUCT_VERSION)
+    if status.state != "installed":
+        print("项目更新预检失败：")
+        for problem in status.problems:
+            print(f"  - {problem}")
+        sys.exit(1)
+    print(f"项目根目录: {os.path.realpath(project_root)}")
+    print(f"当前项目版本: {status.installed_version}")
+    print(f"目标项目版本: {project_mod.PRODUCT_VERSION}")
+    for path in installer_mod.UPDATE_PROJECT_PATHS:
+        print(f"  {path}")
+    if args.check_only:
+        return
+    if not args.confirmed:
+        print("内部项目更新入口缺少已确认标记，未修改项目。")
+        sys.exit(1)
+    result = installer_mod.update_project(
+        project_root,
+        expected_installed_version=args.expected_project_version,
+    )
+    for path in result.changed_paths:
+        print(f"已更新: {path}")
+    if not result.success:
+        print("项目更新未完成：")
+        for failure in result.failures:
+            print(f"  - {failure}")
+        sys.exit(1)
+    if not result.changed_paths:
+        print("当前项目已经是目标版本，无需修改。")
+    else:
+        print(f"当前项目已更新到 {project_mod.PRODUCT_VERSION}。")
+
+
+def cmd_internal_uninstall_project(args) -> None:
+    project_root = os.getcwd()
+    scope = installer_mod.inspect_uninstall_scope(project_root)
+    _print_project_uninstall_scope(scope)
+    if args.check_only or not scope.existing_paths:
+        return
+    if not args.confirmed:
+        print("内部项目卸载入口缺少已确认标记，未修改项目。")
+        sys.exit(1)
+    result = installer_mod.uninstall_project(project_root)
+    for path in result.changed_paths:
+        print(f"已删除: {path}")
+    if not result.success:
+        for failure in result.failures:
+            print(f"  - {failure}")
+        sys.exit(1)
+    print("当前项目的 Workflow Loop 管理内容已全部删除。")
 
 
 # Windows 下 stdout/stderr 被脚本捕获时可能退回本地西文编码，统一改成 UTF-8。
@@ -3040,11 +3331,11 @@ def main() -> None:
     # --version：固定产品身份查询，输出 "workflow-loop 0.1.0"
     # 安装脚本用它核对同名命令身份和兼容版本
     parser.add_argument("--version", action="version", version=PRODUCT_IDENTITY)
-    # 子命令。metavar 固定列出公开命令，内部 _install-project 不出现在普通帮助中
+    # 子命令。metavar 固定列出公开命令，内部维护入口不出现在普通帮助中
     subparsers = parser.add_subparsers(
         dest="command",
         help="可用命令",
-        metavar="{start,discuss,test,acceptance,gate,status,done,abort,return}",
+        metavar="{start,discuss,test,acceptance,gate,status,done,abort,return,update,uninstall}",
     )
 
     # start 命令
@@ -3203,6 +3494,27 @@ def main() -> None:
     )
     return_parser.add_argument("--reason", required=True, help="退回原因")
 
+    update_parser = subparsers.add_parser(
+        "update",
+        help="更新电脑全局命令和当前项目的 Workflow Loop 管理文件",
+    )
+    update_parser.add_argument(
+        "--version",
+        default=None,
+        help="指定更高的正式版本；省略时使用 PyPI 与 GitHub 共同确认的最新正式版本",
+    )
+
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="强制卸载当前项目，或单独卸载电脑全局命令",
+    )
+    uninstall_parser.add_argument(
+        "--global",
+        dest="global_scope",
+        action="store_true",
+        help="只卸载电脑全局命令，绝不扫描或删除项目",
+    )
+
     # _install-project 内部命令（只由官方安装脚本调用；不出现在普通帮助的公开命令列表中）
     internal_install_parser = subparsers.add_parser("_install-project")
     internal_install_parser.add_argument(
@@ -3210,6 +3522,15 @@ def main() -> None:
         required=True,
         help="官方安装脚本生成的一次性安装事务文件路径",
     )
+
+    internal_update_parser = subparsers.add_parser("_update-project")
+    internal_update_parser.add_argument("--check-only", action="store_true")
+    internal_update_parser.add_argument("--confirmed", action="store_true")
+    internal_update_parser.add_argument("--expected-project-version", default=None)
+
+    internal_uninstall_parser = subparsers.add_parser("_uninstall-project")
+    internal_uninstall_parser.add_argument("--check-only", action="store_true")
+    internal_uninstall_parser.add_argument("--confirmed", action="store_true")
 
     # 解析参数
     args = parser.parse_args()
@@ -3243,8 +3564,16 @@ def main() -> None:
         cmd_abort(args)
     elif args.command == "return":
         cmd_return(args)
+    elif args.command == "update":
+        cmd_update(args)
+    elif args.command == "uninstall":
+        cmd_uninstall(args)
     elif args.command == "_install-project":
         cmd_internal_install_project(args)
+    elif args.command == "_update-project":
+        cmd_internal_update_project(args)
+    elif args.command == "_uninstall-project":
+        cmd_internal_uninstall_project(args)
     else:
         # 未知命令（argparse 应该已经拦了，这是兜底）
         print(f"未知命令: {args.command}")

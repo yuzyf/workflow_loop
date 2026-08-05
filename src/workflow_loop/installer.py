@@ -3,6 +3,8 @@ import json
 import os
 import re
 import shutil
+import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 # importlib.resources 用于访问包内打包的数据文件（Template_Repository 等）
@@ -20,6 +22,7 @@ from .project import (
     WORKFLOW_LOOP_DIRNAME,
     check_skeleton,
     create_project,
+    inspect_skeleton_for_update,
 )
 
 # AGENTS.md 的固定内容（最小契约 + 核心表达要求）
@@ -62,7 +65,31 @@ PROJECT_WRITE_PATHS = (
     AGENTS_MD_FILENAME,
     WORKFLOW_LOOP_DIRNAME,
 )
+UPDATE_PROJECT_PATHS = (
+    AGENTS_MD_FILENAME,
+    f"{WORKFLOW_LOOP_DIRNAME}/{TEMPLATE_DIRNAME}",
+    f"{WORKFLOW_LOOP_DIRNAME}/{STANDARDIZED_DIRNAME}",
+    f"{WORKFLOW_LOOP_DIRNAME}/project.json",
+)
+PROJECT_UNINSTALL_PATHS = (
+    AGENTS_MD_FILENAME,
+    WORKFLOW_LOOP_DIRNAME,
+    TRANSACTION_DIRNAME,
+)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass
+class MaintenanceResult:
+    success: bool
+    changed_paths: list[str] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+
+
+@dataclass
+class UninstallScope:
+    project_root: str
+    existing_paths: list[str] = field(default_factory=list)
 
 
 def _now_iso() -> str:
@@ -630,3 +657,211 @@ def install_project_transaction(project_root: str, token_path: str) -> int:
     print("  .workflow_loop/project.json")
     print("启动 Codex/OpenCode 并提出需求即可。")
     return 0
+
+
+def _prepare_update_staging(staging_root: str) -> list[str]:
+    """在系统临时目录准备目标包的静态管理文件，不在项目中创建备份。"""
+    pkg_root = resource_files("workflow_loop")
+    data_root = pkg_root.joinpath("data")
+    wf_staging = os.path.join(staging_root, WORKFLOW_LOOP_DIRNAME)
+    problems: list[str] = []
+    try:
+        _copy_resource_tree(
+            data_root.joinpath(TEMPLATE_DIRNAME),
+            os.path.join(wf_staging, TEMPLATE_DIRNAME),
+        )
+        _copy_resource_tree(
+            data_root.joinpath(STANDARDIZED_DIRNAME),
+            os.path.join(wf_staging, STANDARDIZED_DIRNAME),
+        )
+        with open(
+            os.path.join(staging_root, AGENTS_MD_FILENAME),
+            "w",
+            encoding="utf-8",
+        ) as stream:
+            stream.write(AGENTS_MD_CONTENT)
+    except OSError as exc:
+        return [f"准备目标版本静态文件失败: {exc}"]
+
+    for dirname in (TEMPLATE_DIRNAME, STANDARDIZED_DIRNAME):
+        path = os.path.join(wf_staging, dirname)
+        if not os.path.isdir(path) or not os.listdir(path):
+            problems.append(f"目标安装包缺少 {dirname}/ 或内容为空")
+    if not os.path.isfile(os.path.join(staging_root, AGENTS_MD_FILENAME)):
+        problems.append(f"目标安装包缺少 {AGENTS_MD_FILENAME}")
+    return problems
+
+
+def _replace_plain_file(source: str, destination: str) -> None:
+    """在目标目录写临时文件后原子替换，不保存被替换文件。"""
+    destination_dir = os.path.dirname(destination) or "."
+    descriptor, temp_path = tempfile.mkstemp(prefix=".workflow-update-", dir=destination_dir)
+    os.close(descriptor)
+    try:
+        shutil.copyfile(source, temp_path)
+        os.replace(temp_path, destination)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def _sync_plain_tree(source_root: str, destination_root: str) -> None:
+    """逐文件覆盖目标树并删除目标版本没有的旧项；失败后保留可再次同步的目录。"""
+    source_files: set[str] = set()
+    source_dirs: set[str] = {"."}
+    for root, dirs, files in os.walk(source_root):
+        relative_root = os.path.relpath(root, source_root)
+        source_dirs.add(relative_root)
+        destination_directory = (
+            destination_root
+            if relative_root == "."
+            else os.path.join(destination_root, relative_root)
+        )
+        os.makedirs(destination_directory, exist_ok=True)
+        for dirname in dirs:
+            relative = os.path.normpath(os.path.join(relative_root, dirname))
+            source_dirs.add(relative)
+            os.makedirs(os.path.join(destination_root, relative), exist_ok=True)
+        for filename in files:
+            relative = os.path.normpath(os.path.join(relative_root, filename))
+            source_files.add(relative)
+            _replace_plain_file(
+                os.path.join(root, filename),
+                os.path.join(destination_root, relative),
+            )
+
+    for root, dirs, files in os.walk(destination_root, topdown=False, followlinks=False):
+        relative_root = os.path.relpath(root, destination_root)
+        for filename in files:
+            relative = os.path.normpath(os.path.join(relative_root, filename))
+            if relative not in source_files:
+                os.unlink(os.path.join(root, filename))
+        for dirname in dirs:
+            relative = os.path.normpath(os.path.join(relative_root, dirname))
+            if relative not in source_dirs:
+                path = os.path.join(root, dirname)
+                if os.path.islink(path):
+                    os.unlink(path)
+                else:
+                    shutil.rmtree(path)
+
+
+def _set_project_installer_version(project_root: str, version: str) -> None:
+    project_path = os.path.join(project_root, WORKFLOW_LOOP_DIRNAME, "project.json")
+    with open(project_path, "r", encoding="utf-8") as stream:
+        data = json.load(stream)
+    if not isinstance(data, dict):
+        raise ValueError(".workflow_loop/project.json 顶层必须是 JSON 对象")
+    data["installer_version"] = version
+    descriptor, temp_path = tempfile.mkstemp(
+        prefix=".project-update-",
+        suffix=".tmp",
+        dir=os.path.dirname(project_path),
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, project_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def update_project(
+    project_root: str,
+    *,
+    expected_installed_version: str | None = None,
+) -> MaintenanceResult:
+    """用当前包直接覆盖一个旧项目的静态管理文件，不备份也不回滚。"""
+    status = inspect_skeleton_for_update(project_root, PRODUCT_VERSION)
+    if status.state != "installed":
+        return MaintenanceResult(False, failures=status.problems)
+    if (
+        expected_installed_version is not None
+        and status.installed_version != expected_installed_version
+    ):
+        return MaintenanceResult(
+            False,
+            failures=[
+                "项目版本在确认后发生变化："
+                f"确认时是 {expected_installed_version}，现在是 {status.installed_version}"
+            ],
+        )
+    if not status.needs_update:
+        return MaintenanceResult(True)
+
+    changed: list[str] = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="workflow_loop_update_") as staging_root:
+            problems = _prepare_update_staging(staging_root)
+            if problems:
+                return MaintenanceResult(False, failures=problems)
+
+            agents_destination = os.path.join(project_root, AGENTS_MD_FILENAME)
+            _replace_plain_file(
+                os.path.join(staging_root, AGENTS_MD_FILENAME),
+                agents_destination,
+            )
+            changed.append(AGENTS_MD_FILENAME)
+
+            for dirname in (TEMPLATE_DIRNAME, STANDARDIZED_DIRNAME):
+                destination = os.path.join(project_root, WORKFLOW_LOOP_DIRNAME, dirname)
+                source = os.path.join(staging_root, WORKFLOW_LOOP_DIRNAME, dirname)
+                # 同步可能在异常前已经覆盖部分内容，先登记为可能已变化以保持报告真实。
+                changed.append(f"{WORKFLOW_LOOP_DIRNAME}/{dirname}")
+                _sync_plain_tree(source, destination)
+
+            _set_project_installer_version(project_root, PRODUCT_VERSION)
+            changed.append(f"{WORKFLOW_LOOP_DIRNAME}/project.json:installer_version")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return MaintenanceResult(
+            False,
+            changed_paths=changed,
+            failures=[str(exc)],
+        )
+
+    final = check_skeleton(project_root)
+    if final.state != "installed":
+        return MaintenanceResult(
+            False,
+            changed_paths=changed,
+            failures=["更新后项目复核失败: " + "; ".join(final.problems)],
+        )
+    return MaintenanceResult(True, changed_paths=changed)
+
+
+def inspect_uninstall_scope(project_root: str) -> UninstallScope:
+    """只查看项目根下的固定管理路径；不读取轮次状态或其它项目内容。"""
+    existing = [
+        path
+        for path in PROJECT_UNINSTALL_PATHS
+        if os.path.lexists(os.path.join(project_root, path))
+    ]
+    return UninstallScope(project_root=os.path.realpath(project_root), existing_paths=existing)
+
+
+def uninstall_project(project_root: str) -> MaintenanceResult:
+    """强制删除当前项目固定管理范围，失败时不恢复已经删除的内容。"""
+    changed: list[str] = []
+    failures: list[str] = []
+    for relative_path in PROJECT_UNINSTALL_PATHS:
+        path = os.path.join(project_root, relative_path)
+        if not os.path.lexists(path):
+            continue
+        try:
+            if os.path.islink(path) or not os.path.isdir(path):
+                os.unlink(path)
+            else:
+                shutil.rmtree(path)
+        except OSError as exc:
+            failures.append(f"{relative_path}: {exc}")
+        else:
+            changed.append(relative_path)
+    return MaintenanceResult(
+        success=not failures,
+        changed_paths=changed,
+        failures=failures,
+    )
