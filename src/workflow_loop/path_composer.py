@@ -110,8 +110,7 @@ BUGFIX_BASE = [
 ]
 
 # 正式互斥意图列表（start --intent 的合法值）
-# docs_only 暂不作为正式意图
-INTENT_CHOICES = ["from_scratch", "product_change", "bugfix"]
+INTENT_CHOICES = ["from_scratch", "product_change", "bugfix", "light_task"]
 
 
 # 根据 intent 和项目事实返回 stage 列表（CONTEXT.md "Path Composer"）
@@ -119,6 +118,9 @@ INTENT_CHOICES = ["from_scratch", "product_change", "bugfix"]
 # 在 start --intent 时调一次，结果存入 state.stage_path，后续命令读 state.stage_path
 # 不在每次命令调用时重新跑 PathComposer（条件在 start 时就固定）
 def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
+    # light_task（无需开发任务）走独立简单流程，不应被伪装成空的研发阶段路径。
+    if intent == "light_task":
+        raise ValueError("light_task（无需开发任务）不使用研发 stage 路径")
     # 从零做：直接返回 FROM_SCRATCH_PATH 的实例列表
     # from_scratch 不走 project_design_init（那只有 product_change/bugfix 走）
     # from_scratch 在 spec + code_design 都 --confirmed 后写 project_design_initialized=true

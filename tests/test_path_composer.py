@@ -116,7 +116,7 @@ def test_invalid_intent_raises(tmp_path):
         assert "invalid" in str(e).lower() or "未知" in str(e)
 
 
-# 测试 INTENT_CHOICES 常量包含三种合法意图
+# 测试 INTENT_CHOICES 常量包含四种合法意图
 def test_intent_choices():
     # 验证意图列表顺序与内容
-    assert INTENT_CHOICES == ["from_scratch", "product_change", "bugfix"]
+    assert INTENT_CHOICES == ["from_scratch", "product_change", "bugfix", "light_task"]

@@ -89,6 +89,49 @@ def stage_label(stage_name: str) -> str:
     return f"{stage_name}（{label}）" if label else stage_name
 
 
+def is_light_task(wf_state: state_mod.WorkflowState) -> bool:
+    """判断当前轮次是否为 light_task（无需开发任务）简单流程。"""
+    return wf_state.intent == "light_task"
+
+
+def light_task_next_instruction(wf_state: state_mod.WorkflowState) -> str:
+    """根据无需开发任务的三个步骤返回唯一下一步。"""
+    light_state = wf_state.light_task
+    if light_state is None:
+        return "当前无需开发任务状态缺失；先检查 `.workflow_loop/state.json`，不要继续执行任务"
+    if light_state.phase == "discussion":
+        return (
+            "由 AI 调查任务现状，按第一性原理每次只问用户一个问题并给出建议；"
+            "用户明确确认讨论完毕后，由 AI 执行 "
+            "`workflow light --discuss-done --task \"约定任务\" --verification \"核对方法\"`"
+        )
+    if light_state.phase == "execution":
+        return (
+            "由 AI 严格执行已约定任务；执行 commit（本地提交）、push（推送远端）、发布、删除等"
+            "难撤销操作前，先向用户说明准确操作并单独确认，再执行 "
+            "`workflow light --approve-action \"准确操作\"` 记录批准；完成后核对真实结果并交给用户，"
+            "用户确认后执行 `workflow light --confirmed --result \"实际结果\"`"
+        )
+    if light_state.phase == "result_confirmed":
+        return "由 AI 执行 `workflow done` 正式收工，不再重复询问"
+    return f"未知的无需开发任务步骤 {light_state.phase!r}；先检查 `.workflow_loop/state.json`"
+
+
+def refuse_full_flow_command_for_light(
+    wf_state: state_mod.WorkflowState,
+    command_name: str,
+) -> bool:
+    """阻止无需开发任务误入研发阶段命令。"""
+    if not is_light_task(wf_state):
+        return False
+    print(
+        f"错误：`workflow {command_name}` 只用于三种完整研发流程；"
+        "当前是 light_task（无需开发任务）简单流程。"
+    )
+    print_next_step(light_task_next_instruction(wf_state))
+    return True
+
+
 def confirmation_next_step(stage_name: str) -> str:
     """第二道门通过后，用用户真正需要判断的问题说明第三道门。"""
     command = f"`workflow gate {stage_name} --confirmed`"
@@ -443,6 +486,8 @@ def ensure_stage_artifact_baseline(
 
 def ensure_stage_path_current(project_root: str, wf_state: state_mod.WorkflowState) -> bool:
     """让当前状态中的阶段路径和现行阶段定义保持一致。"""
+    if is_light_task(wf_state):
+        return False
     stage_instances = build_stage_path(wf_state.intent, project_root)
 
     # project_design_init（项目设计初始化）只在开工时决定是否加入路径。
@@ -590,6 +635,7 @@ INTENT_LABELS = {
     "from_scratch": "从零做：几乎空着手交付新能力或新项目",
     "product_change": "改产品：在已有产品上修改设计或增加功能",
     "bugfix": "修 bug：定位并修复一个具体缺陷",
+    "light_task": "无需开发任务：不改产品规则、产品代码、测试代码或影响运行的配置",
 }
 
 
@@ -685,22 +731,28 @@ def cmd_start(args) -> None:
         # 有进行中 Run → 说明须继续原流程，禁止提示开新 Run
         if existing is not None and existing.run_status == "active":
             print(f"有进行中的工作轮次（编号: {existing.workflow_id}）")
-            print(f"当前环节: {stage_label(existing.current_stage)}")
             intent_label = INTENT_LABELS.get(existing.intent, existing.intent)
             print(f"工作意图: {existing.intent}（{intent_label.split('：')[0]}）")
+            if is_light_task(existing):
+                phase = existing.light_task.phase if existing.light_task else "状态缺失"
+                print(f"当前步骤: {phase}")
+                print_next_step(light_task_next_instruction(existing))
+                return
+            print(f"当前环节: {stage_label(existing.current_stage)}")
             print_next_step(
                 "由 AI 执行 `workflow status` 查看详情并继续当前环节；"
                 "用户想结束本轮时，由 AI 执行 `workflow done`（正式收工）或 "
                 "`workflow abort`（整轮作废并恢复项目内容）"
             )
             return
-        # 无进行中 Run → 列出三种意图及一句话说明
+        # 无进行中 Run → 列出四种互斥意图及一句话说明
         print("当前没有进行中的工作轮次。可选工作意图：")
         for intent in INTENT_CHOICES:
             print(f"  {intent}（{INTENT_LABELS.get(intent, intent)}）")
         print_next_step(
-            "AI 根据用户需求确认工作意图后，执行 "
-            "`workflow start --intent from_scratch|product_change|bugfix` 开始新一轮工作；"
+            "AI 先调查现状、推荐四种路线之一，并逐个问题与用户达成共识；"
+            "用户明确确认要进入该路线后，AI 执行 "
+            "`workflow start --intent from_scratch|product_change|bugfix|light_task` 开始新一轮工作；"
             "这一步只初始化流程状态，不修改产品代码"
         )
         return
@@ -736,6 +788,31 @@ def cmd_start(args) -> None:
     # 去掉冒号避免文件名问题
     time_part = now[11:16].replace(":", "")
     workflow_id = f"{date_part}-{time_part}-{intent}"
+
+    # 无需开发任务直接进入简单讨论步骤，不创建研发阶段、正式产物副本或回退基线。
+    if intent == "light_task":
+        wf_state = state_mod.WorkflowState(
+            workflow_id=workflow_id,
+            intent=intent,
+            run_status="active",
+            started_at=now,
+            light_task=state_mod.LightTaskState(),
+        )
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "工作流启动",
+            "ai",
+            workflow_id=workflow_id,
+            intent=intent,
+        )
+        print("═══ 无需开发任务已启动 ═══")
+        print(f"workflow_id: {workflow_id}")
+        print("intent: light_task（无需开发任务）")
+        print("当前步骤: discussion（讨论中）")
+        print("说明: 本路线不创建研发 stage（三道门环节）和回退副本，也不会自动执行任务。")
+        print_next_step(light_task_next_instruction(wf_state))
+        return
 
     # 新轮次第一次持久写入前：保存受管正式文档、项目字段和开工前 state.json。
     # 副本保存在本轮回退目录中，同时作为整轮作废（abort）的开工基线。
@@ -874,6 +951,8 @@ def cmd_discuss(args) -> None:
     # Run 已结束 → 不能 discuss
     if wf_state.run_status != "active":
         print(f"错误：Run 已 {wf_state.run_status}，无法 discuss。")
+        sys.exit(1)
+    if refuse_full_flow_command_for_light(wf_state, "discuss"):
         sys.exit(1)
     if ensure_stage_path_current(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
@@ -1272,7 +1351,11 @@ def regression_failure_next_step() -> str:
     )
 
 
-def _load_active_workflow_for_command(project_root: str) -> state_mod.WorkflowState:
+def _load_active_workflow_for_command(
+    project_root: str,
+    *,
+    allow_light: bool = False,
+) -> state_mod.WorkflowState:
     refuse_if_pending_start_transaction(project_root)
     workflow_state = state_mod.load_state(project_root)
     if workflow_state is None:
@@ -1281,11 +1364,116 @@ def _load_active_workflow_for_command(project_root: str) -> state_mod.WorkflowSt
     if workflow_state.run_status != "active":
         print(f"错误：Run 已 {workflow_state.run_status}，不能执行当前命令")
         sys.exit(1)
+    if is_light_task(workflow_state) and not allow_light:
+        print("错误：当前命令只用于三种完整研发流程；当前是 light_task（无需开发任务）简单流程。")
+        print_next_step(light_task_next_instruction(workflow_state))
+        sys.exit(1)
+    if is_light_task(workflow_state):
+        return workflow_state
     if restore_recovery_context_from_journal(project_root, workflow_state):
         state_mod.save_state(project_root, workflow_state)
     if ensure_impl_recovery_baseline(project_root, workflow_state):
         state_mod.save_state(project_root, workflow_state)
     return workflow_state
+
+
+def cmd_light(args) -> None:
+    """记录无需开发任务中已经由用户确认的三个关键事实。"""
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("错误：找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    wf_state = _load_active_workflow_for_command(project_root, allow_light=True)
+    if not is_light_task(wf_state) or wf_state.light_task is None:
+        print("错误：`workflow light` 只用于 light_task（无需开发任务）轮次。")
+        print_next_step(current_stage_next_instruction(wf_state))
+        sys.exit(1)
+
+    light_state = wf_state.light_task
+    if args.discuss_done:
+        if light_state.phase != "discussion":
+            print("错误：只有 discussion（讨论中）步骤可以确认讨论完毕。")
+            print_next_step(light_task_next_instruction(wf_state))
+            sys.exit(1)
+        task_summary = (args.task or "").strip()
+        verification_method = (args.verification or "").strip()
+        if not task_summary or not verification_method:
+            print("错误：确认讨论完毕时，必须同时写明约定任务和核对方法。")
+            sys.exit(1)
+        if args.result:
+            print("错误：确认讨论完毕时不能提前记录实际结果。")
+            sys.exit(1)
+        light_state.task_summary = task_summary
+        light_state.verification_method = verification_method
+        light_state.phase = "execution"
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "无需开发任务讨论完成",
+            "user",
+            workflow_id=wf_state.workflow_id,
+            task_summary=task_summary,
+            verification_method=verification_method,
+        )
+        print("═══ 无需开发任务讨论已完成 ═══")
+        print(f"约定任务: {task_summary}")
+        print(f"核对方法: {verification_method}")
+        print_next_step(light_task_next_instruction(wf_state))
+        return
+
+    if args.approve_action is not None:
+        if light_state.phase != "execution":
+            print("错误：只有 execution（执行中）步骤可以记录难撤销操作批准。")
+            print_next_step(light_task_next_instruction(wf_state))
+            sys.exit(1)
+        approved_action = args.approve_action.strip()
+        if not approved_action:
+            print("错误：必须写明用户批准的准确操作，不能只写笼统的“提交”或“发布”。")
+            sys.exit(1)
+        if args.task or args.verification or args.result:
+            print("错误：记录操作批准时只使用 `--approve-action`，不要混入其它步骤的内容。")
+            sys.exit(1)
+        light_state.last_approved_action = approved_action
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "无需开发任务操作已批准",
+            "user",
+            workflow_id=wf_state.workflow_id,
+            approved_action=approved_action,
+        )
+        print("═══ 难撤销操作批准已记录 ═══")
+        print(f"准确操作: {approved_action}")
+        print("说明: 这里只记录批准，不会自动执行该操作。")
+        print_next_step(light_task_next_instruction(wf_state))
+        return
+
+    if args.confirmed:
+        if light_state.phase != "execution":
+            print("错误：只有 execution（执行中）步骤可以确认实际结果。")
+            print_next_step(light_task_next_instruction(wf_state))
+            sys.exit(1)
+        result_summary = (args.result or "").strip()
+        if not result_summary:
+            print("错误：必须写明用户已经核对的实际结果。")
+            sys.exit(1)
+        if args.task or args.verification:
+            print("错误：确认实际结果时只使用 `--confirmed --result`。")
+            sys.exit(1)
+        light_state.result_summary = result_summary
+        light_state.phase = "result_confirmed"
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "无需开发任务结果已确认",
+            "user",
+            workflow_id=wf_state.workflow_id,
+            result_summary=result_summary,
+        )
+        print("═══ 无需开发任务结果已确认 ═══")
+        print(f"实际结果: {result_summary}")
+        print_next_step(light_task_next_instruction(wf_state))
+        return
 
 
 def _test_execution_inputs_are_current(
@@ -1814,6 +2002,8 @@ def cmd_gate(args) -> None:
         print(f"错误：Run 已 {wf_state.run_status}，无法 gate。")
         sys.exit(1)
     refuse_if_pending_start_transaction(project_root)
+    if refuse_full_flow_command_for_light(wf_state, "gate"):
+        sys.exit(1)
     if ensure_stage_path_current(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
     if restore_recovery_context_from_journal(project_root, wf_state):
@@ -2753,6 +2943,37 @@ def cmd_status(args) -> None:
     if wf_state is None:
         print("还没启动工作流。调 `workflow start` 查看可选意图。")
         return
+    if is_light_task(wf_state):
+        light_state = wf_state.light_task
+        print("═══ 无需开发任务状态 ═══")
+        print(f"workflow_id: {wf_state.workflow_id}")
+        print("intent: light_task（无需开发任务）")
+        print(f"run_status: {wf_state.run_status}")
+        print(f"当前步骤: {light_state.phase if light_state else '（状态缺失）'}")
+        print(f"约定任务: {light_state.task_summary if light_state and light_state.task_summary else '（尚未确认）'}")
+        print(
+            "核对方法: "
+            f"{light_state.verification_method if light_state and light_state.verification_method else '（尚未确认）'}"
+        )
+        print(
+            "最近批准的难撤销操作: "
+            f"{light_state.last_approved_action if light_state and light_state.last_approved_action else '（无）'}"
+        )
+        print(f"实际结果: {light_state.result_summary if light_state and light_state.result_summary else '（尚未确认）'}")
+        print(f"启动时间: {wf_state.started_at}")
+        print(f"结束时间: {wf_state.ended_at or '（未完成）'}")
+        print(f"作废时间: {wf_state.aborted_at or '（未作废）'}")
+        print("\n最近 journal 记录：")
+        for entry in journal_mod.read_recent(project_root, count=10):
+            print(f"  [{entry.get('ts', '')}] {entry.get('action', '')} ({entry.get('actor', '')})")
+        if wf_state.run_status == "active":
+            next_instruction = light_task_next_instruction(wf_state)
+        elif wf_state.run_status == "completed":
+            next_instruction = "本轮已经完成；有新任务时先由 AI 调查并推荐路线，再由用户确认进入哪种任务"
+        else:
+            next_instruction = "本轮已经作废；由 AI 根据当前真实状态重新调查并推荐路线，用户确认后再开始新轮次"
+        print(f"\n下一步：{next_instruction}")
+        return
     if wf_state.run_status == "active" and ensure_stage_path_current(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
     if restore_recovery_context_from_journal(project_root, wf_state):
@@ -2825,6 +3046,28 @@ def cmd_done(args) -> None:
     if wf_state.run_status == "aborted":
         print("错误：Run 已经是 aborted 状态")
         sys.exit(1)
+    if is_light_task(wf_state):
+        if wf_state.light_task is None or wf_state.light_task.phase != "result_confirmed":
+            print("错误：无需开发任务必须先让用户核对并确认实际结果，才能正式收工。")
+            print_next_step(light_task_next_instruction(wf_state))
+            sys.exit(1)
+        wf_state.run_status = "completed"
+        wf_state.ended_at = state_mod.now_iso()
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "Run 完成",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            intent=wf_state.intent,
+            result_summary=wf_state.light_task.result_summary,
+        )
+        print("═══ 无需开发任务完成 ═══")
+        print(f"workflow_id: {wf_state.workflow_id}")
+        print(f"实际结果: {wf_state.light_task.result_summary}")
+        print(f"完成时间: {wf_state.ended_at}")
+        print_next_step("工作流完成。本次 workflow 结束。")
+        return
     # 前置检查：current_stage 必须是 "completed"（末段 --confirmed 推进后）
     if wf_state.current_stage != "completed":
         print(f"错误：还有未完成的 stage（当前: {wf_state.current_stage}），"
@@ -2875,6 +3118,45 @@ def cmd_abort(args) -> None:
             f"错误：当前轮次状态为 {wf_state.run_status}，"
             "只有 active（仍在进行）才能执行 abort（整轮作废）"
         )
+        sys.exit(1)
+
+    if is_light_task(wf_state):
+        actual_summary = (args.summary or "").strip()
+        if not actual_summary:
+            print("错误：作废无需开发任务时，必须用 `--summary` 写明当前真实状态。")
+            print_next_step(
+                "先核对哪些操作已完成、哪些未执行、哪些失败，再执行 "
+                "`workflow abort --summary \"当前真实状态\"`；程序不会自动回滚"
+            )
+            sys.exit(1)
+        if wf_state.light_task is None:
+            print("错误：当前无需开发任务状态缺失，不能覆盖现场信息。")
+            sys.exit(1)
+        wf_state.light_task.result_summary = actual_summary
+        wf_state.run_status = "aborted"
+        wf_state.aborted_at = state_mod.now_iso()
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "无需开发任务已作废",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            actual_state_summary=actual_summary,
+            aborted_at=wf_state.aborted_at,
+        )
+        print("═══ 无需开发任务已作废 ═══")
+        print(f"workflow_id: {wf_state.workflow_id}")
+        print(f"当前真实状态: {actual_summary}")
+        print(f"作废时间: {wf_state.aborted_at}")
+        print("说明: 已发生的本地修改和外部操作全部保留，程序没有创建或执行回滚。")
+        print_next_step(
+            "由 AI 根据当前真实状态重新调查并推荐四种路线之一；"
+            "用户明确确认后，AI 才开始新的任务轮次"
+        )
+        return
+
+    if args.summary is not None:
+        print("错误：`--summary` 只用于 light_task（无需开发任务）；完整研发流程仍按回退清单作废。")
         sys.exit(1)
 
     restored_paths: list[str] = []
@@ -3335,7 +3617,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(
         dest="command",
         help="可用命令",
-        metavar="{start,discuss,test,acceptance,gate,status,done,abort,return,update,uninstall}",
+        metavar="{start,light,discuss,test,acceptance,gate,status,done,abort,return,update,uninstall}",
     )
 
     # start 命令
@@ -3349,6 +3631,27 @@ def main() -> None:
 
     # discuss 命令（无参数，读 state.current_stage）
     subparsers.add_parser("discuss", help="加载当前 stage 提示词")
+
+    # light 命令：无需开发任务只记录讨论、难撤销操作批准和结果确认。
+    light_parser = subparsers.add_parser("light", help="推进无需开发任务的简单流程")
+    light_actions = light_parser.add_mutually_exclusive_group(required=True)
+    light_actions.add_argument(
+        "--discuss-done",
+        action="store_true",
+        help="记录用户确认讨论完毕，并进入执行步骤",
+    )
+    light_actions.add_argument(
+        "--approve-action",
+        help="记录用户单独批准的一项准确难撤销操作；只记录，不自动执行",
+    )
+    light_actions.add_argument(
+        "--confirmed",
+        action="store_true",
+        help="记录用户已经核对实际结果",
+    )
+    light_parser.add_argument("--task", help="讨论完成后双方约定的准确任务")
+    light_parser.add_argument("--verification", help="任务完成后核对真实结果的方法")
+    light_parser.add_argument("--result", help="用户已经核对的实际结果")
 
     # test 命令：测试计划阶段登记项目入口；测试执行阶段登记并执行主题测试。
     test_parser = subparsers.add_parser("test", help="登记项目测试入口、登记或执行主题测试")
@@ -3473,7 +3776,11 @@ def main() -> None:
     # done 命令
     subparsers.add_parser("done", help="标记完成")
     # abort 命令
-    subparsers.add_parser("abort", help="作废当前 Run")
+    abort_parser = subparsers.add_parser("abort", help="作废当前 Run")
+    abort_parser.add_argument(
+        "--summary",
+        help="无需开发任务作废时的当前真实状态；完整研发流程不使用",
+    )
 
     # return 命令：测试失败或发现上游问题时，由用户确认后退回对应阶段。
     return_parser = subparsers.add_parser("return", help="退回当前阶段之前的指定阶段")
@@ -3543,6 +3850,8 @@ def main() -> None:
     # 分发到对应 handler
     if args.command == "start":
         cmd_start(args)
+    elif args.command == "light":
+        cmd_light(args)
     elif args.command == "discuss":
         cmd_discuss(args)
     elif args.command == "test":

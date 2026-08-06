@@ -254,13 +254,29 @@ class RollbackState:
     cleanup_completed_at: str | None = None
 
 
+@dataclass
+class LightTaskState:
+    """无需开发任务的最小状态，不使用研发阶段和三道门。"""
+
+    # discussion（讨论中）→ execution（执行中）→ result_confirmed（结果已确认）
+    phase: str = "discussion"
+    # 用户确认讨论完成时，记录双方达成共识的任务范围
+    task_summary: str = ""
+    # 用户确认讨论完成时，记录完成后如何核对真实结果
+    verification_method: str = ""
+    # 最近一次由用户单独批准的难撤销操作；完整历史保存在 journal.jsonl
+    last_approved_action: str = ""
+    # 用户核对并确认的实际结果；作废时则记录当时的真实状态
+    result_summary: str = ""
+
+
 # 整个 workflow Run 的当前快照，对应 state.json 的完整结构
 # 每次 CLI 调用都是新进程，state 必须落盘，下次进程启动时读回来
 @dataclass
 class WorkflowState:
     # 启动时生成，格式 YYYY-MM-DD-HHmm-<intent>，用于 journal 追溯和文件名
     workflow_id: str
-    # 工作意图：from_scratch / product_change / bugfix（替代旧 entry/scenario）
+    # 工作意图：from_scratch / product_change / bugfix / light_task（替代旧 entry/scenario）
     intent: str
     # Run 生命周期：active（进行中）/ completed（done 收工）/ aborted（abort 作废）
     # 替代用 current_stage=completed 推断 Run 状态的旧模型
@@ -298,6 +314,8 @@ class WorkflowState:
     rollback: RollbackState = field(default_factory=RollbackState)
     # 上游失效或用户主动退回后的恢复说明；用于 status 和“下一步”解释当前阶段
     recovery: RecoveryContext = field(default_factory=RecoveryContext)
+    # 无需开发任务的简单流程状态；三种完整研发意图中为空
+    light_task: LightTaskState | None = None
     # 自由扩展口子（hooks 等后面用，第一版为空）
     meta: dict = field(default_factory=dict)
 
@@ -464,6 +482,8 @@ def state_from_dict(data: dict) -> WorkflowState:
     rollback_data = data.get("rollback", {})
     # 读 recovery 字段；旧 state.json 没有时表示当前不是失效恢复流程
     recovery_data = data.get("recovery", {})
+    # 读无需开发任务状态；旧状态和三种完整研发意图中为空
+    light_task_data = data.get("light_task")
     # 兼容旧版单主题 state.json：没有 topics 时把 topic 转成单元素列表。
     legacy_topic = data.get("topic")
     topics = data.get("topics", [])
@@ -524,6 +544,17 @@ def state_from_dict(data: dict) -> WorkflowState:
             affected_stages=recovery_data.get("affected_stages", []),
             affected_topics=recovery_data.get("affected_topics", []),
             created_at=recovery_data.get("created_at"),
+        ),
+        light_task=(
+            LightTaskState(
+                phase=light_task_data.get("phase", "discussion"),
+                task_summary=light_task_data.get("task_summary", ""),
+                verification_method=light_task_data.get("verification_method", ""),
+                last_approved_action=light_task_data.get("last_approved_action", ""),
+                result_summary=light_task_data.get("result_summary", ""),
+            )
+            if isinstance(light_task_data, dict)
+            else None
         ),
         meta=data.get("meta", {}),
     )
