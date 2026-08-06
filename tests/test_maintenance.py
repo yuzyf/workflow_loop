@@ -184,7 +184,8 @@ def test_update_version_resolution_accepts_only_matching_stable_releases(monkeyp
     assert cli._resolve_update_version(None) == "0.2.0"
     assert cli._resolve_update_version("0.2.0") == "0.2.0"
     github["tag_name"] = "v0.1.0"
-    assert cli._resolve_update_version("0.1.0") == "0.1.0"
+    with pytest.raises(ValueError, match="不允许降级"):
+        cli._resolve_update_version("0.1.0")
 
     github["tag_name"] = "v0.0.9"
     with pytest.raises(ValueError, match="不允许降级"):

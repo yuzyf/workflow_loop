@@ -4,6 +4,7 @@ import os
 from workflow_loop.project import (
     ProjectState, load_project, save_project, is_project_design_initialized,
     set_project_design_initialized, is_installed, create_project, register_topics,
+    INSTALLER_VERSION,
 )
 
 
@@ -12,7 +13,7 @@ def test_create_project(tmp_path):
     # 在空目录创建项目
     project = create_project(str(tmp_path))
     # 验证 installer_version 默认值
-    assert project.installer_version == "0.1.0"
+    assert project.installer_version == INSTALLER_VERSION
     # 验证 project_design_initialized 默认 False（未做过 project_design_init）
     assert project.project_design_initialized is False
     assert project.topic_history == []

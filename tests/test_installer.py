@@ -122,7 +122,7 @@ def test_token_requires_fixed_product_version_and_write_scope(tmp_path, capsys):
 
     assert installer.install_project_transaction(str(tmp_path), str(token_path)) == 1
     assert not (tmp_path / ".workflow_loop").exists()
-    assert "当前产品固定为 '0.1.0'" in capsys.readouterr().out
+    assert f"当前产品固定为 '{installer.PRODUCT_VERSION}'" in capsys.readouterr().out
 
 
 def test_failed_install_restores_existing_content(tmp_path, monkeypatch, capsys):
