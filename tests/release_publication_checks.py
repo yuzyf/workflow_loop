@@ -495,7 +495,6 @@ def test_clean_install_uses_public_pypi_package():
             "--isolated",
             "--disable-pip-version-check",
             "--no-cache-dir",
-            "--no-deps",
             "--index-url",
             "https://pypi.org/simple",
             "--report",
