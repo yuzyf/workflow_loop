@@ -1,6 +1,6 @@
-# workflow-loop v0.1.0 正式发布任务
-# 手动触发只执行：版本身份核对 → 全量测试 → 构建 → 三平台安装验证。
-# 标签 v0.1.0 在同一验证通过后才把原样构建包发布到 PyPI，并公开 GitHub Release。
+# workflow-loop v0.2.0 正式发布任务
+# 手动触发只执行：版本身份核对 → 全量测试 → 构建 → 三平台安装、更新和卸载验证。
+# 标签 v0.2.0 在同一验证通过后才把原样构建包发布到 PyPI，并公开 GitHub Release。
 # 任一步失败都不能上传未经验证的包；不保存长期 PyPI 密码或上传令牌。
 name: release
 
@@ -8,13 +8,13 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "v0.1.0"
+      - "v0.2.0"
 
 env:
-  PRODUCT_VERSION: "0.1.0"
+  PRODUCT_VERSION: "0.2.0"
 
 jobs:
-  # 版本身份核对 + 全量测试：所有位置都必须严格等于 0.1.0
+  # 版本身份核对 + 全量测试：所有位置都必须严格等于 0.2.0
   verify-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -23,16 +23,21 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          grep -q 'version = "0.1.0"' pyproject.toml || { echo "pyproject.toml 版本不是 0.1.0"; fail=1; }
-          grep -q '__version__ = "0.1.0"' src/workflow_loop/__init__.py || { echo "__init__.py 版本不是 0.1.0"; fail=1; }
-          grep -q 'PRODUCT_VERSION="0.1.0"' install.sh || { echo "install.sh 版本不是 0.1.0"; fail=1; }
-          grep -q '\$ProductVersion = "0.1.0"' install.ps1 || { echo "install.ps1 版本不是 0.1.0"; fail=1; }
-          grep -q 'SCRIPT_VERSION="0.1.0"' update.sh || { echo "update.sh 版本不是 0.1.0"; fail=1; }
-          grep -q '\$ScriptVersion = "0.1.0"' update.ps1 || { echo "update.ps1 版本不是 0.1.0"; fail=1; }
-          grep -q 'PRODUCT_VERSION="0.1.0"' uninstall.sh || { echo "uninstall.sh 版本不是 0.1.0"; fail=1; }
-          grep -q '\$ProductVersion = "0.1.0"' uninstall.ps1 || { echo "uninstall.ps1 版本不是 0.1.0"; fail=1; }
+          grep -q 'version = "0.2.0"' pyproject.toml || { echo "pyproject.toml 版本不是 0.2.0"; fail=1; }
+          grep -A2 'name = "workflow-loop"' uv.lock | grep -q 'version = "0.2.0"' || { echo "uv.lock 版本不是 0.2.0"; fail=1; }
+          grep -q '__version__ = "0.2.0"' src/workflow_loop/__init__.py || { echo "__init__.py 版本不是 0.2.0"; fail=1; }
+          grep -q '"installer_version": "0.2.0"' .workflow_loop/project.json || { echo "project.json 安装版本不是 0.2.0"; fail=1; }
+          grep -q '## 安装 0.2.0' README.md || { echo "README 安装版本不是 0.2.0"; fail=1; }
+          grep -q '/releases/download/v0.2.0/install.sh' README.md || { echo "README shell 安装地址不是 v0.2.0"; fail=1; }
+          grep -q '/releases/download/v0.2.0/install.ps1' README.md || { echo "README PowerShell 安装地址不是 v0.2.0"; fail=1; }
+          grep -q 'PRODUCT_VERSION="0.2.0"' install.sh || { echo "install.sh 版本不是 0.2.0"; fail=1; }
+          grep -q '\$ProductVersion = "0.2.0"' install.ps1 || { echo "install.ps1 版本不是 0.2.0"; fail=1; }
+          grep -q 'SCRIPT_VERSION="0.2.0"' update.sh || { echo "update.sh 版本不是 0.2.0"; fail=1; }
+          grep -q '\$ScriptVersion = "0.2.0"' update.ps1 || { echo "update.ps1 版本不是 0.2.0"; fail=1; }
+          grep -q 'PRODUCT_VERSION="0.2.0"' uninstall.sh || { echo "uninstall.sh 版本不是 0.2.0"; fail=1; }
+          grep -q '\$ProductVersion = "0.2.0"' uninstall.ps1 || { echo "uninstall.ps1 版本不是 0.2.0"; fail=1; }
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            [ "${GITHUB_REF_NAME}" = "v0.1.0" ] || { echo "标签不是 v0.1.0"; fail=1; }
+            [ "${GITHUB_REF_NAME}" = "v0.2.0" ] || { echo "标签不是 v0.2.0"; fail=1; }
           fi
           exit $fail
       - uses: actions/setup-python@v5
@@ -61,16 +66,16 @@ jobs:
           name: dist
           path: dist/
 
-  # PyPI 可信发布：检测到 PyPI 已存在 0.1.0 时只能停止，不能删除、覆盖或重发
+  # PyPI 可信发布：检测到 PyPI 已存在 0.2.0 时只能停止，不能删除、覆盖或重发
   publish-pypi:
-    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.0'
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.2.0'
     needs: prepublish-smoke
     runs-on: ubuntu-latest
     permissions:
       # PyPI Trusted Publishing（可信发布）使用 OIDC 身份，不保存长期令牌
       id-token: write
     steps:
-      - name: 检查 PyPI 是否已存在 0.1.0
+      - name: 检查 PyPI 是否已存在 0.2.0
         run: |
           set -euo pipefail
           status=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/workflow-loop/${PRODUCT_VERSION}/json")
@@ -86,7 +91,7 @@ jobs:
       - name: 上传到 PyPI（Trusted Publishing）
         uses: pypa/gh-action-pypi-publish@release/v1
 
-  # 发布前三平台冒烟：安装脚本通过 UV_FIND_LINKS 使用本次构建的同一份 0.1.0 包
+  # 发布前三平台冒烟：安装脚本通过 UV_FIND_LINKS 使用本次构建的同一份 0.2.0 包
   prepublish-smoke:
     needs: build
     strategy:
@@ -209,7 +214,7 @@ jobs:
           printf 'business-sentinel' > "$proj/business.txt"
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/update.sh" --version "${PRODUCT_VERSION}" --confirmed)
-          grep -q '"installer_version": "0.1.0"' "$proj/.workflow_loop/project.json"
+          grep -q '"installer_version": "0.2.0"' "$proj/.workflow_loop/project.json"
           [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --confirmed)
           [ ! -e "$proj/.workflow_loop" ]
@@ -286,7 +291,7 @@ jobs:
           printf 'business-sentinel' > "$proj/business.txt"
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/update.sh" --version "${PRODUCT_VERSION}" --confirmed)
-          grep -q '"installer_version": "0.1.0"' "$proj/.workflow_loop/project.json"
+          grep -q '"installer_version": "0.2.0"' "$proj/.workflow_loop/project.json"
           [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --confirmed)
           [ ! -e "$proj/.workflow_loop" ]
@@ -404,25 +409,26 @@ jobs:
 
   # 全部通过后才创建带安装、更新和卸载脚本的公开 GitHub Release
   github-release:
-    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.0'
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.2.0'
     needs: publish-pypi
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: 创建 v0.1.0 GitHub Release
+      - name: 创建 v0.2.0 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.0
-          name: Workflow Loop 0.1.0
+          tag_name: v0.2.0
+          name: Workflow Loop 0.2.0
           body: |
-            Workflow Loop 0.1.0 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。
+            Workflow Loop 0.2.0 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。
 
             - 支持 macOS、Linux 和原生 Windows 使用一条命令完成安装。
             - 支持更新电脑全局命令和当前项目，并分别卸载项目或电脑全局命令。
-            - 支持从零创建、修改产品和修复缺陷三种工作意图。
-            - 每个正式环节依次经过讨论完成、程序检查和用户确认三道门。
+            - 支持从零创建、修改产品、修复缺陷和无需开发任务四种工作意图。
+            - 完整研发任务的每个正式环节依次经过讨论完成、程序检查和用户确认三道门。
+            - 无需开发任务按调查讨论、执行约定任务、核对结果和用户确认结果的简单流程处理。
             - 通过需求交付追踪表关联设计、验收、测试和实施结果。
             - 正式测试由程序保存命令、环境、时间、退出码和代码版本等机器执行记录。
             - 支持返回上游修正、本轮修改回退和整轮作废恢复。

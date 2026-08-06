@@ -20,12 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 OWNER = "yuzyf"
 REPOSITORY = "workflow_loop"
 PACKAGE = "workflow-loop"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 TAG = f"v{VERSION}"
 GITHUB_API = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}"
 PYPI_API = f"https://pypi.org/pypi/{PACKAGE}/{VERSION}/json"
 RELEASE_SIGNAL = (
-    Path(tempfile.gettempdir()) / "workflow-loop-release-v0.1.0-preflight.json"
+    Path(tempfile.gettempdir()) / "workflow-loop-release-v0.2.0-preflight.json"
 )
 EXPECTED_DESCRIPTION = "为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。"
 EXPECTED_JOBS = {
@@ -152,8 +152,14 @@ def _required_tag_files() -> set[str]:
         "README.md",
         "LICENSE",
         "pyproject.toml",
+        "uv.lock",
+        ".workflow_loop/project.json",
         "install.sh",
         "install.ps1",
+        "update.sh",
+        "update.ps1",
+        "uninstall.sh",
+        "uninstall.ps1",
         ".github/workflows/release.yml",
         "tests/test_public_project.py",
         "tests/public_repository_checks.py",
@@ -271,10 +277,11 @@ def _wait_for_public_release(timeout_seconds: int = 600) -> tuple[dict, dict]:
 
 def _release_body_requirements() -> tuple[str, ...]:
     return (
-        "Workflow Loop 0.1.0 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。",
+        "Workflow Loop 0.2.0 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。",
         "支持 macOS、Linux 和原生 Windows 使用一条命令完成安装。",
-        "支持从零创建、修改产品和修复缺陷三种工作意图。",
-        "讨论完成、程序检查和用户确认三道门",
+        "支持从零创建、修改产品、修复缺陷和无需开发任务四种工作意图。",
+        "完整研发任务的每个正式环节依次经过讨论完成、程序检查和用户确认三道门",
+        "无需开发任务按调查讨论、执行约定任务、核对结果和用户确认结果的简单流程处理。",
         "需求交付追踪表",
         "机器执行记录",
         "返回上游修正、本轮修改回退和整轮作废恢复",
@@ -284,14 +291,14 @@ def _release_body_requirements() -> tuple[str, ...]:
 
 def test_public_version_is_absent_and_local_tag_is_ready():
     """Workflow-Test
-    主题：0.1.0 在 GitHub 和 PyPI 完成正式发布
-    测试项：TC-02 发布前公共版本空缺且标签准备正确
-    验收条件：AC-01 最终发布身份和前置条件一致
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-02 发布前公共版本空缺且最终标签指向正确
+    验收条件：AC-01 全部发布身份统一为 0.2.0
     测试方式：自动化测试 + 人工验收
     测试层级：接口测试
-    测试目标：在远程标签推送前确认两个公开渠道均无 0.1.0，且本地标签准确指向已推送的最终主分支提交
+    测试目标：在远程标签推送前确认两个公开渠道均无 0.2.0，且本地标签准确指向已推送的最终主分支提交
     测试入口：tests/release_publication_checks.py::test_public_version_is_absent_and_local_tag_is_ready
-    代码入口：本地 HEAD、main 和 v0.1.0；Git origin；GitHub 与 PyPI 公开接口
+    代码入口：本地 HEAD、main 和 v0.2.0；Git origin；GitHub 与 PyPI 公开接口
     """
     RELEASE_SIGNAL.unlink(missing_ok=True)
     head_commit = _git("rev-parse", "HEAD")
@@ -346,14 +353,14 @@ def test_public_version_is_absent_and_local_tag_is_ready():
 
 def test_final_tag_workflow_succeeds():
     """Workflow-Test
-    主题：0.1.0 在 GitHub 和 PyPI 完成正式发布
-    测试项：TC-04 最终标签任务全部成功
-    验收条件：AC-02 最终标签任务全部成功
-    测试方式：自动化测试
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-05 v0.2.0 标签对应的真实发布任务全部成功
+    验收条件：AC-03 最终标签任务全部成功
+    测试方式：自动化测试 + 人工验收
     测试层级：端到端测试
     测试目标：等待用户批准后推送的最终标签，并确认该提交触发的全部发布作业和要求步骤真实成功
     测试入口：tests/release_publication_checks.py::test_final_tag_workflow_succeeds
-    代码入口：Git origin 的 v0.1.0 标签；GitHub Actions release.yml 运行与作业接口
+    代码入口：Git origin 的 v0.2.0 标签；GitHub Actions release.yml 运行与作业接口
     """
     expected_commit = _local_tag_commit()
     _wait_for_remote_tag(expected_commit)
@@ -373,14 +380,14 @@ def test_final_tag_workflow_succeeds():
 
 def test_pypi_and_github_release_contents_match():
     """Workflow-Test
-    主题：0.1.0 在 GitHub 和 PyPI 完成正式发布
-    测试项：TC-05 PyPI 与 GitHub 正式发布内容一致
-    验收条件：AC-03 两个公开渠道内容一致
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-06 PyPI 与 GitHub Release 内容和附件一致
+    验收条件：AC-04 两个公开渠道内容一致并提供六个脚本
     测试方式：自动化测试
     测试层级：接口测试
-    测试目标：确认 PyPI 包元数据和 GitHub 正式发布名称、说明与附件共同公开同一份 0.1.0
+    测试目标：确认 PyPI 包元数据和 GitHub 正式发布名称、说明与附件共同公开同一份 0.2.0
     测试入口：tests/release_publication_checks.py::test_pypi_and_github_release_contents_match
-    代码入口：PyPI workflow-loop 0.1.0 JSON 接口；GitHub v0.1.0 Release 接口
+    代码入口：PyPI workflow-loop 0.2.0 JSON 接口；GitHub v0.2.0 Release 接口
     """
     pypi, release = _wait_for_public_release()
     info = pypi["info"]
@@ -399,8 +406,8 @@ def test_pypi_and_github_release_contents_match():
 
     distributions = {(item["packagetype"], item["filename"]): item for item in pypi["urls"]}
     expected_distributions = {
-        ("bdist_wheel", "workflow_loop-0.1.0-py3-none-any.whl"),
-        ("sdist", "workflow_loop-0.1.0.tar.gz"),
+        ("bdist_wheel", "workflow_loop-0.2.0-py3-none-any.whl"),
+        ("sdist", "workflow_loop-0.2.0.tar.gz"),
     }
     assert set(distributions) == expected_distributions
     for distribution in distributions.values():
@@ -408,7 +415,7 @@ def test_pypi_and_github_release_contents_match():
         assert len(distribution["digests"]["sha256"]) == 64
 
     assert release["tag_name"] == TAG
-    assert release["name"] == "Workflow Loop 0.1.0"
+    assert release["name"] == "Workflow Loop 0.2.0"
     assert release["draft"] is False
     assert release["prerelease"] is False
     assert release["html_url"] == (
@@ -416,7 +423,14 @@ def test_pypi_and_github_release_contents_match():
     )
     assert all(requirement in release["body"] for requirement in _release_body_requirements())
     assets = {asset["name"]: asset for asset in release["assets"]}
-    assert set(assets) == {"install.sh", "install.ps1"}
+    assert set(assets) == {
+        "install.sh",
+        "install.ps1",
+        "update.sh",
+        "update.ps1",
+        "uninstall.sh",
+        "uninstall.ps1",
+    }
 
     evidence = {
         "github": {
@@ -440,14 +454,14 @@ def test_pypi_and_github_release_contents_match():
 
 def test_clean_install_uses_public_pypi_package():
     """Workflow-Test
-    主题：0.1.0 在 GitHub 和 PyPI 完成正式发布
-    测试项：TC-06 从公网全新安装得到正确命令身份
-    验收条件：AC-04 公开安装得到正确版本
-    测试方式：自动化测试
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-07 公网全新安装得到 0.2.0（本次不执行 0.1.0 升级）
+    验收条件：AC-05 公网安装和从 0.1.0 更新后得到 0.2.0
+    测试方式：自动化测试 + 人工验收
     测试层级：端到端测试
-    测试目标：禁用本地源码和缓存后从 PyPI 全新安装明确版本，并执行实际 workflow 命令确认身份
+    测试目标：禁用本地源码和缓存后从 PyPI 全新安装明确版本，并执行实际 workflow 命令确认身份；本次不执行 0.1.0 公网升级
     测试入口：tests/release_publication_checks.py::test_clean_install_uses_public_pypi_package
-    代码入口：https://pypi.org/simple；workflow-loop==0.1.0；安装后的 workflow --version
+    代码入口：https://pypi.org/simple；workflow-loop==0.2.0；安装后的 workflow --version
     """
     with tempfile.TemporaryDirectory(prefix="workflow-loop-public-install-") as directory:
         temporary_root = Path(directory)
@@ -526,20 +540,27 @@ def test_clean_install_uses_public_pypi_package():
 
 def test_release_assets_and_platform_evidence_match_final_tag():
     """Workflow-Test
-    主题：0.1.0 在 GitHub 和 PyPI 完成正式发布
-    测试项：TC-07 两个附件可下载且三平台证据属于最终标签
-    验收条件：AC-04 公开安装得到正确版本
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-06 PyPI 与 GitHub Release 内容和附件一致
+    验收条件：AC-04 两个公开渠道内容一致并提供六个脚本
     测试方式：自动化测试
     测试层级：端到端测试
-    测试目标：逐字节核对两个公开安装附件与最终标签源码，并确认四种平台步骤属于同一最终任务
+    测试目标：逐字节核对六个公开维护脚本与最终标签源码，并确认四种平台步骤属于同一最终任务
     测试入口：tests/release_publication_checks.py::test_release_assets_and_platform_evidence_match_final_tag
-    代码入口：GitHub v0.1.0 Release 附件；v0.1.0 标签源码；最终 GitHub Actions 作业步骤
+    代码入口：GitHub v0.2.0 Release 附件；v0.2.0 标签源码；最终 GitHub Actions 作业步骤
     """
     release_response = _get(f"{GITHUB_API}/releases/tags/{TAG}", github=True)
     assert release_response.status == 200
     release = release_response.json()
     assets = {asset["name"]: asset for asset in release["assets"]}
-    assert set(assets) == {"install.sh", "install.ps1"}
+    assert set(assets) == {
+        "install.sh",
+        "install.ps1",
+        "update.sh",
+        "update.ps1",
+        "uninstall.sh",
+        "uninstall.ps1",
+    }
 
     asset_evidence = {}
     for name, asset in assets.items():

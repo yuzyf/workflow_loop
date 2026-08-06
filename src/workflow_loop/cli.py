@@ -3610,7 +3610,7 @@ def main() -> None:
         description="workflow_loop 工作流管理 CLI",
         prog="workflow",
     )
-    # --version：固定产品身份查询，输出 "workflow-loop 0.1.0"
+    # --version：固定产品身份查询，输出 "workflow-loop 0.2.0"
     # 安装脚本用它核对同名命令身份和兼容版本
     parser.add_argument("--version", action="version", version=PRODUCT_IDENTITY)
     # 子命令。metavar 固定列出公开命令，内部维护入口不出现在普通帮助中

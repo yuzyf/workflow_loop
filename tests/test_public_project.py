@@ -18,7 +18,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 DESCRIPTION = "为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。"
 REPOSITORY_URL = "https://github.com/yuzyf/workflow_loop"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def _project_metadata() -> dict:
@@ -202,7 +202,7 @@ def test_readme_has_the_confirmed_chinese_structure_and_entries():
         "### 不做什么",
         "## 工作流程",
         "## 环境要求",
-        "## 安装 0.1.0",
+        "## 安装 0.2.0",
         "### macOS",
         "### Linux",
         "### 原生 Windows",
@@ -217,7 +217,12 @@ def test_readme_has_the_confirmed_chinese_structure_and_entries():
 
     assert "```mermaid" in readme
     assert "flowchart TD" in readme
-    for intent in ("from_scratch：从零创建", "product_change：修改产品", "bugfix：修复缺陷"):
+    for intent in (
+        "from_scratch：从零创建",
+        "product_change：修改产品",
+        "bugfix：修复缺陷",
+        "light_task：无需开发任务",
+    ):
         assert intent in readme
     for gate in ("第一道门：讨论完成", "第二道门：程序检查", "第三道门：用户确认"):
         assert gate in readme

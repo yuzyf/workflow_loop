@@ -16,7 +16,7 @@ from . import __version__ as PRODUCT_VERSION
 PROJECT_FILE = os.path.join(".workflow_loop", "project.json")
 
 # 安装器版本号，用于重复安装保护判断
-# 严格等于产品版本 0.1.0，不存在兼容版本范围
+# 严格等于产品版本 0.2.0，不存在兼容版本范围
 INSTALLER_VERSION = PRODUCT_VERSION
 # 项目全量测试入口是"操作系统 → 命令参数数组"的映射；新安装项目默认为空。
 # 旧开发状态可能仍是字符串脚本路径；读取时原样保留，由受控迁移转换。
@@ -65,7 +65,7 @@ class ProjectState:
 
 
 # 项目骨架检查结果：
-# state 取值 "installed"（完整安装 0.1.0）/ "uninstalled"（干净未安装）/ "broken"（残缺或版本异常）
+# state 取值 "installed"（完整安装 0.2.0）/ "uninstalled"（干净未安装）/ "broken"（残缺或版本异常）
 # problems 保存 broken 时的具体缺项，供安装脚本和日常命令直接打印
 @dataclass
 class SkeletonStatus:
@@ -278,7 +278,7 @@ def _required_repository_files(dirname: str) -> list[str]:
 
 
 # 检查项目骨架完整性，区分三种状态：
-# - installed：项目标记、模板仓库、规范仓库和 AGENTS.md 共同构成完整骨架，且版本严格等于 0.1.0
+# - installed：项目标记、模板仓库、规范仓库和 AGENTS.md 共同构成完整骨架，且版本严格等于 0.2.0
 # - uninstalled：.workflow_loop/ 完全不存在（干净目录，可以首次安装）
 # - broken：骨架部分存在、版本不符或 project.json 无法读取；任何写入前必须停止
 def check_skeleton(project_root: str) -> SkeletonStatus:
@@ -291,7 +291,7 @@ def check_skeleton(project_root: str) -> SkeletonStatus:
 
     problems: list[str] = []
 
-    # project.json：必须存在、可解析、版本严格等于 0.1.0
+    # project.json：必须存在、可解析、版本严格等于 0.2.0
     if not os.path.isfile(project_json):
         problems.append(f"缺少安装版本标记 {PROJECT_FILE}")
     else:
@@ -506,7 +506,7 @@ def register_test_entry(project_root: str, entry_config: dict) -> None:
 
 
 # 判断项目是否已安装（安装事务和 start 命令用）
-# 完整骨架 + 版本严格等于 0.1.0 才算已安装；残缺骨架不算
+# 完整骨架 + 版本严格等于 0.2.0 才算已安装；残缺骨架不算
 # 未安装时 start 命令报错，提示用户先跑官方安装脚本
 def is_installed(project_root: str) -> bool:
     return check_skeleton(project_root).state == "installed"

@@ -29,36 +29,36 @@ def _print_evidence(label: str, evidence: dict) -> None:
 
 def test_release_identity_and_publish_order_are_fixed():
     """Workflow-Test
-    主题：一次安装后可在三种操作系统开始使用工作流
-    测试项：TC-03 固定工具摘要和产品身份一致
-    验收条件：AC-03 安装来源和产品身份固定
-    测试方式：自动化测试 + 人工验收
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-04 发布作业顺序、平台矩阵和六个附件配置完整
+    验收条件：AC-03 最终标签任务全部成功
+    测试方式：自动化测试
     测试层级：模块测试
-    测试目标：同一固定版本构建包必须先完成三平台安装验证才允许发布
+    测试目标：同一固定版本构建包必须先完成四种托管环境安装、更新和卸载验证才允许发布
     测试入口：tests/test_release_workflow.py::test_release_identity_and_publish_order_are_fixed
     代码入口：.github/workflows/release.yml
     """
     workflow = _workflow()
     jobs = workflow["jobs"]
 
-    assert workflow["env"]["PRODUCT_VERSION"] == "0.1.0"
-    assert workflow["on"]["push"]["tags"] == ["v0.1.0"]
+    assert workflow["env"]["PRODUCT_VERSION"] == "0.2.0"
+    assert workflow["on"]["push"]["tags"] == ["v0.2.0"]
     assert jobs["build"]["needs"] == "verify-and-test"
     assert jobs["prepublish-smoke"]["needs"] == "build"
     assert jobs["publish-pypi"]["needs"] == "prepublish-smoke"
     assert jobs["github-release"]["needs"] == "publish-pypi"
-    assert "refs/tags/v0.1.0" in jobs["publish-pypi"]["if"]
-    assert "refs/tags/v0.1.0" in jobs["github-release"]["if"]
+    assert "refs/tags/v0.2.0" in jobs["publish-pypi"]["if"]
+    assert "refs/tags/v0.2.0" in jobs["github-release"]["if"]
 
 
 def test_manual_release_run_verifies_without_publishing():
     """Workflow-Test
-    主题：一次安装后可在三种操作系统开始使用工作流
-    测试项：TC-02 三平台一条命令完成完整安装
-    验收条件：AC-02 一条命令完成三平台安装
-    测试方式：自动化测试 + 人工验收
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-03 手动任务和普通分支不能公开发布
+    验收条件：AC-02 只有 v0.2.0 标签可以公开发布
+    测试方式：自动化测试
     测试层级：模块测试
-    测试目标：手动任务可完整验证三平台安装但发布任务只能由固定标签触发
+    测试目标：手动任务和普通分支只验证，不上传 PyPI 或创建 GitHub Release
     测试入口：tests/test_release_workflow.py::test_manual_release_run_verifies_without_publishing
     代码入口：.github/workflows/release.yml
     """
@@ -73,10 +73,10 @@ def test_manual_release_run_verifies_without_publishing():
 
 def test_prepublish_matrix_covers_platforms_and_partial_install_states():
     """Workflow-Test
-    主题：一次安装后可在三种操作系统开始使用工作流
-    测试项：TC-05 重复安装只补缺失一侧
-    验收条件：AC-05 重复安装只补缺少部分
-    测试方式：自动化测试 + 人工验收
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-04 发布作业顺序、平台矩阵和六个附件配置完整
+    验收条件：AC-03 最终标签任务全部成功
+    测试方式：自动化测试
     测试层级：模块测试
     测试目标：发布前任务在三种系统使用同一构建包验证取消、完整和缺失一侧场景
     测试入口：tests/test_release_workflow.py::test_prepublish_matrix_covers_platforms_and_partial_install_states
@@ -106,17 +106,17 @@ def test_prepublish_matrix_covers_platforms_and_partial_install_states():
 
 def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
     """Workflow-Test
-    主题：0.1.0 在 GitHub 和 PyPI 完成正式发布
-    测试项：TC-01 本次版本身份和非标签发布规则一致
-    验收条件：AC-01 最终发布身份和前置条件一致
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-01 本地版本身份和发布配置统一为 0.2.0
+    验收条件：AC-01 全部发布身份统一为 0.2.0
     测试方式：自动化测试
     测试层级：集成测试
-    测试目标：本次全部版本身份固定为 0.1.0，非标签任务不能发布，未来公开修改必须使用未被 PyPI 占用的新版本号
+    测试目标：本次全部版本身份固定为 0.2.0，非标签任务不能发布，未来公开修改必须使用未被 PyPI 占用的新版本号
     测试入口：tests/test_release_workflow.py::test_current_release_identity_and_non_tag_publish_rules_are_consistent
     代码入口：workflow_loop.cli.main；.github/workflows/release.yml jobs.verify-and-test；install.sh；install.ps1
     """
-    expected_version = "0.1.0"
-    expected_identity = "workflow-loop 0.1.0"
+    expected_version = "0.2.0"
+    expected_identity = "workflow-loop 0.2.0"
     workflow = _workflow()
     jobs = workflow["jobs"]
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -133,12 +133,12 @@ def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
     assert PRODUCT_IDENTITY == expected_identity
     assert INSTALLER_VERSION == expected_version
     assert project_marker["installer_version"] == expected_version
-    assert 'PRODUCT_VERSION="0.1.0"' in install_sh
+    assert 'PRODUCT_VERSION="0.2.0"' in install_sh
     assert '"${PRODUCT_NAME}==${PRODUCT_VERSION}"' in install_sh
-    assert '$ProductVersion = "0.1.0"' in install_ps1
+    assert '$ProductVersion = "0.2.0"' in install_ps1
     assert '"$ProductName==$ProductVersion"' in install_ps1
     assert workflow["env"]["PRODUCT_VERSION"] == expected_version
-    assert workflow["on"]["push"] == {"tags": ["v0.1.0"]}
+    assert workflow["on"]["push"] == {"tags": ["v0.2.0"]}
 
     actual_identity = subprocess.run(
         [sys.executable, "-m", "workflow_loop.cli", "--version"],
@@ -154,7 +154,7 @@ def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
     for job_name in ("publish-pypi", "github-release"):
         publish_condition = jobs[job_name]["if"]
         assert "github.event_name == 'push'" in publish_condition
-        assert "github.ref == 'refs/tags/v0.1.0'" in publish_condition
+        assert "github.ref == 'refs/tags/v0.2.0'" in publish_condition
     assert "if" not in jobs["prepublish-smoke"]
 
     version_strategy = {
@@ -208,9 +208,9 @@ def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
 
 def test_release_gate_matrix_and_assets_are_structurally_complete():
     """Workflow-Test
-    主题：0.1.0 在 GitHub 和 PyPI 完成正式发布
-    测试项：TC-03 发布任务门控平台矩阵和附件配置正确
-    验收条件：AC-02 最终标签任务全部成功
+    主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
+    测试项：TC-04 发布作业顺序、平台矩阵和六个附件配置完整
+    验收条件：AC-03 最终标签任务全部成功
     测试方式：自动化测试
     测试层级：模块测试
     测试目标：发布配置只有在完整测试、构建和四种托管环境验证成功后才依次发布 PyPI 包和带六个维护脚本的 GitHub 正式版本
@@ -224,9 +224,13 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
     assert jobs["prepublish-smoke"]["needs"] == "build"
     assert jobs["publish-pypi"]["needs"] == "prepublish-smoke"
     assert jobs["github-release"]["needs"] == "publish-pypi"
-    assert "python -m pytest -q" in "\n".join(
+    verify_script = "\n".join(
         step.get("run", "") for step in jobs["verify-and-test"]["steps"]
     )
+    assert "python -m pytest -q" in verify_script
+    assert 'uv.lock' in verify_script
+    assert '.workflow_loop/project.json' in verify_script
+    assert 'README.md' in verify_script
     assert "python -m build" in "\n".join(
         step.get("run", "") for step in jobs["build"]["steps"]
     )
@@ -266,13 +270,13 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
     assert powershell_step["shell"] == "pwsh"
     assert '"y" | powershell -NoProfile' in powershell_step["run"]
 
-    tag_condition = "github.event_name == 'push' && github.ref == 'refs/tags/v0.1.0'"
+    tag_condition = "github.event_name == 'push' && github.ref == 'refs/tags/v0.2.0'"
     assert jobs["publish-pypi"]["if"] == tag_condition
     assert jobs["github-release"]["if"] == tag_condition
     assert jobs["publish-pypi"]["permissions"] == {"id-token": "write"}
     publish_steps = jobs["publish-pypi"]["steps"]
     duplicate_check = publish_steps[0]
-    assert duplicate_check["name"] == "检查 PyPI 是否已存在 0.1.0"
+    assert duplicate_check["name"] == "检查 PyPI 是否已存在 0.2.0"
     assert (
         "https://pypi.org/pypi/workflow-loop/${PRODUCT_VERSION}/json"
         in duplicate_check["run"]
@@ -290,13 +294,14 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
         if step.get("uses") == "softprops/action-gh-release@v2"
     )
     release_config = release_step["with"]
-    assert release_config["tag_name"] == "v0.1.0"
-    assert release_config["name"] == "Workflow Loop 0.1.0"
+    assert release_config["tag_name"] == "v0.2.0"
+    assert release_config["name"] == "Workflow Loop 0.2.0"
     release_body = release_config["body"]
     for expected_text in (
         "macOS、Linux 和原生 Windows 使用一条命令完成安装",
-        "从零创建、修改产品和修复缺陷三种工作意图",
-        "讨论完成、程序检查和用户确认三道门",
+        "支持从零创建、修改产品、修复缺陷和无需开发任务四种工作意图",
+        "完整研发任务的每个正式环节依次经过讨论完成、程序检查和用户确认三道门",
+        "无需开发任务按调查讨论、执行约定任务、核对结果和用户确认结果的简单流程处理",
         "需求交付追踪表",
         "命令、环境、时间、退出码和代码版本等机器执行记录",
         "返回上游修正、本轮修改回退和整轮作废恢复",
@@ -324,8 +329,9 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
                 "assets": release_config["files"].splitlines(),
                 "body_requirements": [
                     "macOS、Linux 和原生 Windows 使用一条命令完成安装",
-                    "从零创建、修改产品和修复缺陷三种工作意图",
-                    "讨论完成、程序检查和用户确认三道门",
+                    "支持从零创建、修改产品、修复缺陷和无需开发任务四种工作意图",
+                    "完整研发任务的每个正式环节依次经过讨论完成、程序检查和用户确认三道门",
+                    "无需开发任务按调查讨论、执行约定任务、核对结果和用户确认结果的简单流程处理",
                     "需求交付追踪表",
                     "命令、环境、时间、退出码和代码版本等机器执行记录",
                     "返回上游修正、本轮修改回退和整轮作废恢复",

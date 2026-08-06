@@ -71,29 +71,29 @@ flowchart TD
 - 安装时能够访问 GitHub 和 PyPI（Python 公共软件包仓库）。
 - 执行安装命令前，先进入要由 Workflow Loop 管理的项目根目录。
 
-## 安装 0.1.0
+## 安装 0.2.0
 
 安装器先进行只读检查并列出项目侧和电脑侧可能发生的全部持久修改。用户确认一次后，安装器才安装或复用全局 `workflow` 命令，并把智能体契约、产物模板和工作规范写入当前项目；用户取消或安装失败时不会留下只完成一部分的安装。
 
 ### macOS
 
 ```bash
-curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.1.0/install.sh | bash
+curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.2.0/install.sh | bash
 ```
 
 ### Linux
 
 ```bash
-curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.1.0/install.sh | bash
+curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.2.0/install.sh | bash
 ```
 
 ### 原生 Windows
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop/releases/download/v0.1.0/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop/releases/download/v0.2.0/install.ps1 | iex"
 ```
 
-安装命令固定读取 `v0.1.0` 正式发布中的脚本；不会跟随内容可能变化的 `latest`（最新版本）地址。
+安装命令固定读取 `v0.2.0` 正式发布中的脚本；不会跟随内容可能变化的 `latest`（最新版本）地址。
 
 ## 更新与卸载
 

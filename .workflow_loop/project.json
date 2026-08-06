@@ -1,5 +1,5 @@
 {
-  "installer_version": "0.1.0",
+  "installer_version": "0.2.0",
   "installed_at": "2026-07-20T08:10:28+00:00",
   "project_design_initialized": true,
   "topic_history": [
@@ -18,7 +18,8 @@
     "已安装项目一条命令更新到目标正式版本",
     "从当前项目强制卸载 Workflow Loop",
     "单独卸载电脑全局 Workflow Loop 命令",
-    "无需开发任务按确认流程完成并保持边界"
+    "无需开发任务按确认流程完成并保持边界",
+    "0.2.0 在 GitHub 和 PyPI 完成正式发布"
   ],
   "test_entry": {
     "windows": [
@@ -71,7 +72,8 @@
       "已安装项目一条命令更新到目标正式版本": "已安装项目一条命令更新到目标正式版本",
       "从当前项目强制卸载 Workflow Loop": "从当前项目强制卸载_Workflow_Loop",
       "单独卸载电脑全局 Workflow Loop 命令": "单独卸载电脑全局_Workflow_Loop_命令",
-      "无需开发任务按确认流程完成并保持边界": "无需开发任务按确认流程完成并保持边界"
+      "无需开发任务按确认流程完成并保持边界": "无需开发任务按确认流程完成并保持边界",
+      "0.2.0 在 GitHub 和 PyPI 完成正式发布": "0_2_0_在_GitHub_和_PyPI_完成正式发布"
     }
   }
 }
