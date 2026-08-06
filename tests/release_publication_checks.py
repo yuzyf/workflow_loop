@@ -24,6 +24,7 @@ VERSION = "0.2.0"
 TAG = f"v{VERSION}"
 GITHUB_API = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}"
 PYPI_API = f"https://pypi.org/pypi/{PACKAGE}/{VERSION}/json"
+JOURNAL_PATH = ROOT / ".workflow_loop" / "journal.jsonl"
 RELEASE_SIGNAL = (
     Path(tempfile.gettempdir()) / "workflow-loop-release-v0.2.0-preflight.json"
 )
@@ -289,6 +290,41 @@ def _release_body_requirements() -> tuple[str, ...]:
     )
 
 
+def _timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _successful_preflight_records() -> list[dict]:
+    state = json.loads((ROOT / ".workflow_loop" / "state.json").read_text(encoding="utf-8"))
+    workflow_id = state["workflow_id"]
+    test_entry = "tests/release_publication_checks.py::test_public_version_is_absent_and_local_tag_is_ready"
+    records = []
+    for line in JOURNAL_PATH.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        if (
+            record.get("workflow_id") == workflow_id
+            and record.get("action") == "测试项执行"
+            and record.get("test_id") == "TC-02"
+            and record.get("status") == "passed"
+            and test_entry in record.get("command", [])
+        ):
+            records.append(record)
+    return records
+
+
+def _assert_tag_source_contains_preflight_guards() -> None:
+    tagged_source = _run(
+        ["git", "show", f"{TAG}:tests/release_publication_checks.py"]
+    ).stdout
+    for guard in (
+        "assert _remote_tag_commit() is None",
+        "assert github_tag.status == 404",
+        "assert github_release.status == 404",
+        "assert pypi_release.status == 404",
+    ):
+        assert guard in tagged_source, f"最终标签中的 TC-02 缺少发布前检查: {guard}"
+
+
 def test_public_version_is_absent_and_local_tag_is_ready():
     """Workflow-Test
     主题：0.2.0 在 GitHub 和 PyPI 完成正式发布
@@ -300,6 +336,43 @@ def test_public_version_is_absent_and_local_tag_is_ready():
     测试入口：tests/release_publication_checks.py::test_public_version_is_absent_and_local_tag_is_ready
     代码入口：本地 HEAD、main 和 v0.2.0；Git origin；GitHub 与 PyPI 公开接口
     """
+    github_tag = _get(f"{GITHUB_API}/git/ref/tags/{TAG}", github=True)
+    github_release = _get(f"{GITHUB_API}/releases/tags/{TAG}", github=True)
+    pypi_release = _get(PYPI_API)
+
+    if (github_tag.status, github_release.status, pypi_release.status) != (404, 404, 404):
+        assert (github_tag.status, github_release.status, pypi_release.status) == (200, 200, 200), (
+            "GitHub 标签、GitHub Release 和 PyPI 版本处于不一致状态，不能复核发布前检查"
+        )
+        remote_tag_commit = _remote_tag_commit()
+        tag_commit = _local_tag_commit()
+        assert remote_tag_commit == tag_commit
+        _assert_tag_source_contains_preflight_guards()
+
+        release = github_release.json()
+        published_at = release.get("published_at")
+        assert published_at, "GitHub Release 缺少发布时间，不能复核发布前检查"
+        preflight_records = _successful_preflight_records()
+        eligible_records = [
+            record
+            for record in preflight_records
+            if _timestamp(record["finished_at"]) < _timestamp(published_at)
+        ]
+        assert eligible_records, "没有找到早于 GitHub Release 发布时间的 TC-02 通过记录"
+        record = max(eligible_records, key=lambda item: item["finished_at"])
+        _print_evidence(
+            "RELEASE_PREFLIGHT_AUDIT",
+            {
+                "github_release_published_at": published_at,
+                "local_tag_commit": tag_commit,
+                "preflight_finished_at": record["finished_at"],
+                "preflight_record": record,
+                "remote_tag_commit": remote_tag_commit,
+                "tag": TAG,
+            },
+        )
+        return
+
     RELEASE_SIGNAL.unlink(missing_ok=True)
     head_commit = _git("rev-parse", "HEAD")
     main_commit = _git("rev-parse", "refs/heads/main")
@@ -316,9 +389,6 @@ def test_public_version_is_absent_and_local_tag_is_ready():
     tag_files = set(_git("ls-tree", "-r", "--name-only", TAG).splitlines())
     assert _required_tag_files() <= tag_files
 
-    github_tag = _get(f"{GITHUB_API}/git/ref/tags/{TAG}", github=True)
-    github_release = _get(f"{GITHUB_API}/releases/tags/{TAG}", github=True)
-    pypi_release = _get(PYPI_API)
     assert github_tag.status == 404, f"GitHub 已存在 {TAG} 标签，必须停止发布"
     assert github_release.status == 404, f"GitHub 已存在 {TAG} 正式发布，必须停止发布"
     assert pypi_release.status == 404, f"PyPI 已存在 {PACKAGE} {VERSION}，必须停止发布"
