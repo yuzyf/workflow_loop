@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProductName = "workflow-loop"
-$ScriptVersion = "0.2.0"
+$ScriptVersion = "0.3.0"
 $UvVersion = "0.11.33"
 $UvBaseUrl = "https://github.com/astral-sh/uv/releases/download/$UvVersion"
 $ShaWindowsX64 = "c253ce868ad48d29327b661452ce184c9e333e6d6f5bc8d6fcfbf4dd52b83442"

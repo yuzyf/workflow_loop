@@ -71,29 +71,29 @@ flowchart TD
 - 安装时能够访问 GitHub 和 PyPI（Python 公共软件包仓库）。
 - 执行安装命令前，先进入要由 Workflow Loop 管理的项目根目录。
 
-## 安装 0.2.0
+## 安装 0.3.0
 
 安装器先进行只读检查并列出项目侧和电脑侧可能发生的全部持久修改。用户确认一次后，安装器才安装或复用全局 `workflow` 命令，并把智能体契约、产物模板和工作规范写入当前项目；用户取消或安装失败时不会留下只完成一部分的安装。
 
 ### macOS
 
 ```bash
-curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.2.0/install.sh | bash
+curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.3.0/install.sh | bash
 ```
 
 ### Linux
 
 ```bash
-curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.2.0/install.sh | bash
+curl -fsSL https://github.com/yuzyf/workflow_loop/releases/download/v0.3.0/install.sh | bash
 ```
 
 ### 原生 Windows
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop/releases/download/v0.2.0/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/yuzyf/workflow_loop/releases/download/v0.3.0/install.ps1 | iex"
 ```
 
-安装命令固定读取 `v0.2.0` 正式发布中的脚本；不会跟随内容可能变化的 `latest`（最新版本）地址。
+安装命令固定读取 `v0.3.0` 正式发布中的脚本；不会跟随内容可能变化的 `latest`（最新版本）地址。
 
 ## 更新与卸载
 
@@ -101,7 +101,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/y
 
 ```bash
 workflow update
-workflow update --version 0.2.0
+workflow update --version 0.3.0
 ```
 
 更新按需补齐电脑全局命令和当前项目，只直接覆盖项目根 `AGENTS.md`、`.workflow_loop/Template_Repository/`、`.workflow_loop/Standardized_Repository/`，以及 `.workflow_loop/project.json` 中的安装版本字段。更新不创建备份，不回滚已经完成的步骤；当前轮次状态、历史、回退资料、业务代码和正式产物保持不变。失败后重新执行同一命令即可继续补齐。
