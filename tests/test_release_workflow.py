@@ -41,14 +41,14 @@ def test_release_identity_and_publish_order_are_fixed():
     workflow = _workflow()
     jobs = workflow["jobs"]
 
-    assert workflow["env"]["PRODUCT_VERSION"] == "0.2.0"
-    assert workflow["on"]["push"]["tags"] == ["v0.2.0"]
+    assert workflow["env"]["PRODUCT_VERSION"] == __version__
+    assert workflow["on"]["push"]["tags"] == [f"v{__version__}"]
     assert jobs["build"]["needs"] == "verify-and-test"
     assert jobs["prepublish-smoke"]["needs"] == "build"
     assert jobs["publish-pypi"]["needs"] == "prepublish-smoke"
     assert jobs["github-release"]["needs"] == "publish-pypi"
-    assert "refs/tags/v0.2.0" in jobs["publish-pypi"]["if"]
-    assert "refs/tags/v0.2.0" in jobs["github-release"]["if"]
+    assert f"refs/tags/v{__version__}" in jobs["publish-pypi"]["if"]
+    assert f"refs/tags/v{__version__}" in jobs["github-release"]["if"]
 
 
 def test_manual_release_run_verifies_without_publishing():
@@ -115,8 +115,8 @@ def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
     测试入口：tests/test_release_workflow.py::test_current_release_identity_and_non_tag_publish_rules_are_consistent
     代码入口：workflow_loop.cli.main；.github/workflows/release.yml jobs.verify-and-test；install.sh；install.ps1
     """
-    expected_version = "0.2.0"
-    expected_identity = "workflow-loop 0.2.0"
+    expected_version = __version__
+    expected_identity = f"workflow-loop {expected_version}"
     workflow = _workflow()
     jobs = workflow["jobs"]
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -133,12 +133,12 @@ def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
     assert PRODUCT_IDENTITY == expected_identity
     assert INSTALLER_VERSION == expected_version
     assert project_marker["installer_version"] == expected_version
-    assert 'PRODUCT_VERSION="0.2.0"' in install_sh
+    assert f'PRODUCT_VERSION="{expected_version}"' in install_sh
     assert '"${PRODUCT_NAME}==${PRODUCT_VERSION}"' in install_sh
-    assert '$ProductVersion = "0.2.0"' in install_ps1
+    assert f'$ProductVersion = "{expected_version}"' in install_ps1
     assert '"$ProductName==$ProductVersion"' in install_ps1
     assert workflow["env"]["PRODUCT_VERSION"] == expected_version
-    assert workflow["on"]["push"] == {"tags": ["v0.2.0"]}
+    assert workflow["on"]["push"] == {"tags": [f"v{expected_version}"]}
 
     actual_identity = subprocess.run(
         [sys.executable, "-m", "workflow_loop.cli", "--version"],
@@ -154,7 +154,7 @@ def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
     for job_name in ("publish-pypi", "github-release"):
         publish_condition = jobs[job_name]["if"]
         assert "github.event_name == 'push'" in publish_condition
-        assert "github.ref == 'refs/tags/v0.2.0'" in publish_condition
+        assert f"github.ref == 'refs/tags/v{expected_version}'" in publish_condition
     assert "if" not in jobs["prepublish-smoke"]
 
     version_strategy = {
@@ -270,13 +270,16 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
     assert powershell_step["shell"] == "pwsh"
     assert '"y" | powershell -NoProfile' in powershell_step["run"]
 
-    tag_condition = "github.event_name == 'push' && github.ref == 'refs/tags/v0.2.0'"
+    tag_condition = (
+        "github.event_name == 'push' && "
+        f"github.ref == 'refs/tags/v{__version__}'"
+    )
     assert jobs["publish-pypi"]["if"] == tag_condition
     assert jobs["github-release"]["if"] == tag_condition
     assert jobs["publish-pypi"]["permissions"] == {"id-token": "write"}
     publish_steps = jobs["publish-pypi"]["steps"]
     duplicate_check = publish_steps[0]
-    assert duplicate_check["name"] == "检查 PyPI 是否已存在 0.2.0"
+    assert duplicate_check["name"] == f"检查 PyPI 是否已存在 {__version__}"
     assert (
         "https://pypi.org/pypi/workflow-loop/${PRODUCT_VERSION}/json"
         in duplicate_check["run"]
@@ -294,8 +297,8 @@ def test_release_gate_matrix_and_assets_are_structurally_complete():
         if step.get("uses") == "softprops/action-gh-release@v2"
     )
     release_config = release_step["with"]
-    assert release_config["tag_name"] == "v0.2.0"
-    assert release_config["name"] == "Workflow Loop 0.2.0"
+    assert release_config["tag_name"] == f"v{__version__}"
+    assert release_config["name"] == f"Workflow Loop {__version__}"
     release_body = release_config["body"]
     for expected_text in (
         "macOS、Linux 和原生 Windows 使用一条命令完成安装",
@@ -386,7 +389,7 @@ def test_update_release_assets_and_readme_entries_are_consistent():
     assert f'SCRIPT_VERSION="{__version__}"' in shell
     assert f'$ScriptVersion = "{__version__}"' in powershell
     assert "workflow update" in readme
-    assert "workflow update --version 0.2.0" in readme
+    assert f"workflow update --version {__version__}" in readme
     assert "/releases/latest/download/update.sh" in readme
     assert "/releases/latest/download/update.ps1" in readme
     assert "不创建备份" in readme and "重新执行同一命令" in readme

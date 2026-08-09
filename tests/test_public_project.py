@@ -14,11 +14,13 @@ import tarfile
 import tomllib
 import zipfile
 
+from workflow_loop import __version__
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DESCRIPTION = "为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。"
 REPOSITORY_URL = "https://github.com/yuzyf/workflow_loop"
-VERSION = "0.2.0"
+VERSION = __version__
 
 
 def _project_metadata() -> dict:
@@ -202,7 +204,7 @@ def test_readme_has_the_confirmed_chinese_structure_and_entries():
         "### 不做什么",
         "## 工作流程",
         "## 环境要求",
-        "## 安装 0.2.0",
+        f"## 安装 {VERSION}",
         "### macOS",
         "### Linux",
         "### 原生 Windows",
