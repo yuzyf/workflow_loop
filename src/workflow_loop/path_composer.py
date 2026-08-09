@@ -20,9 +20,9 @@ from .stages.base import StageStrategy
 
 # from_scratch（从零做）的完整 stage 路径
 # 顺序固定：先产品设计与功能拆分、后初步架构（先定做什么，再定怎么搭）
-# 然后验证技术不确定性 → 验收计划 → 测试计划 → 实施/记录 → 写测试代码 → 执行测试 → 主题验收
+# 然后验证技术不确定性 → 验收计划 → 实施/记录 → 测试计划 → 写测试代码 → 执行测试 → 主题验收
 # → 最终全量回归 → 整体验收 → 最终设计同步
-# 共享后半截：acceptance_plan → test_plan → impl → test_code → test_execution
+# 共享后半截：acceptance_plan → impl → test_plan → test_code → test_execution
 # → topic_acceptance → regression_test → overall_acceptance → update_code_design
 FROM_SCRATCH_PATH = [
     # 产品设计阶段：产出 spec/product.md + spec/feature_*.md
@@ -34,10 +34,10 @@ FROM_SCRATCH_PATH = [
     SpikeStage,
     # 验收计划阶段：制定什么算完成，产出 traceability.md + acceptance/index.md + acceptance/<topic>_plan.md
     AcceptancePlanStage,
-    # 测试计划阶段：把验收条件转为可执行测试范围，产出 qa/<topic>_plan.md
-    TestPlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
+    # 测试计划阶段：依据验收条件、真实代码和实施记录制定可执行测试范围
+    TestPlanStage,
     # 按验收计划编写测试代码；本阶段不执行测试、不产出测试结果
     TestCodeStage,
     # 执行测试代码并记录主题测试结果
@@ -66,10 +66,10 @@ PRODUCT_CHANGE_BASE = [
     SpikeStage,
     # 验收计划阶段
     AcceptancePlanStage,
-    # 测试计划阶段
-    TestPlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
+    # 实施确认后，根据真实代码和实施记录制定测试计划
+    TestPlanStage,
     # 先编写测试代码，再执行测试，再按主题验收
     TestCodeStage,
     TestExecutionStage,
@@ -93,10 +93,10 @@ BUGFIX_BASE = [
     SpikeStage,
     # 验收计划阶段
     AcceptancePlanStage,
-    # 测试计划阶段
-    TestPlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
+    # 修复实施确认后，根据真实代码和实施记录制定测试计划
+    TestPlanStage,
     # 先编写测试代码，再执行测试，再按主题验收
     TestCodeStage,
     TestExecutionStage,

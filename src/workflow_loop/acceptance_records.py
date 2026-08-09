@@ -87,8 +87,8 @@ def record_is_current(
             task = tasks.get(test_id)
             if (
                 task is None
-                or task.current_record is None
-                or task.current_record.status != "passed"
+                or not state_mod.execution_task_has_current_success(task)
+                or not task.current_record
                 or not task.current_record.record_id
             ):
                 return False
@@ -113,11 +113,10 @@ def _automated_items_are_current(
     record_ids: list[str] = []
     for test_id in test_ids:
         task = tasks.get(test_id)
-        if task is None or task.status != "passed" or task.current_record is None:
+        if task is None or not state_mod.execution_task_has_current_success(task):
             return False, f"{topic} / {test_id} 没有当前有效的通过记录", []
         record = task.current_record
-        if record.status != "passed" or record.exit_code != 0:
-            return False, f"{topic} / {test_id} 当前测试记录不是通过状态", []
+        assert record is not None
         if not record.record_id:
             return False, f"{topic} / {test_id} 的执行记录缺少机器记录编号，必须重新执行", []
         record_ids.append(record.record_id)

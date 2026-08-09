@@ -6,6 +6,8 @@ from workflow_loop.state import (
     RecoveryContext, RollbackState,
     TestExecutionRecord as ExecutionRecord,
     TestTaskState as ExecutionTask,
+    compute_test_execution_record_id,
+    execution_task_has_current_success,
     state_to_dict, state_from_dict, load_state, save_state,
     is_active_run, now_iso,
 )
@@ -38,17 +40,27 @@ def test_state_round_trip(tmp_path):
                     "上传文件": {
                         "TC-01": ExecutionTask(
                             test_entries=["tests/test_upload.py::test_upload"],
-                            command=["pytest", "tests/test_upload.py::test_upload"],
+                            command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
                             dependencies=[],
                             timeout_seconds=30,
+                            report_adapter="pytest-junitxml",
+                            report_path=".workflow_loop/test_reports/upload.xml",
                             status="passed",
                             current_record=ExecutionRecord(
                                 test_entries=["tests/test_upload.py::test_upload"],
-                                command=["pytest", "tests/test_upload.py::test_upload"],
+                                command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
                                 exit_code=0,
                                 status="passed",
                                 code_snapshot_hash="code-123",
                                 test_code_hash="test-123",
+                                report_adapter="pytest-junitxml",
+                                report_hash="a" * 64,
+                                report_size=1024,
+                                executed_count=1,
+                                skipped_count=0,
+                                failed_count=0,
+                                error_count=0,
+                                matched_test_entries=["tests/test_upload.py::test_upload"],
                             ),
                         )
                     }
@@ -113,9 +125,14 @@ def test_state_round_trip(tmp_path):
     test_task = loaded.stages["test_execution"].test_tasks["上传文件"]["TC-01"]
     assert loaded.stages["test_execution"].discussion_material_hash == "materials-123"
     assert loaded.stages["test_execution"].existing_test_code_accepted_hash == "test-code-accepted-123"
-    assert test_task.command == ["pytest", "tests/test_upload.py::test_upload"]
+    assert test_task.command == ["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"]
+    assert test_task.report_adapter == "pytest-junitxml"
+    assert test_task.report_path == ".workflow_loop/test_reports/upload.xml"
     assert test_task.current_record is not None
     assert test_task.current_record.code_snapshot_hash == "code-123"
+    assert test_task.current_record.report_hash == "a" * 64
+    assert test_task.current_record.executed_count == 1
+    assert execution_task_has_current_success(test_task)
     # 验证嵌套 gate.code_validated 往返一致
     assert loaded.stages["spec"].gate.code_validated is False
     # 验证 architecture.preliminary_done 往返一致
@@ -298,6 +315,83 @@ def test_old_stage_without_artifact_baseline_is_compatible():
 
     assert loaded.stages["spec"].artifact_baseline_captured_at is None
     assert loaded.stages["spec"].artifact_baseline_hashes == {}
+
+
+def test_old_success_without_structured_report_facts_is_not_current():
+    loaded = state_from_dict({
+        "workflow_id": "legacy",
+        "intent": "product_change",
+        "current_stage": "test_execution",
+        "stages": {
+            "test_execution": {
+                "test_tasks": {
+                    "上传文件": {
+                        "TC-01": {
+                            "test_entries": ["tests/test_upload.py::test_upload"],
+                            "command": ["pytest", "tests/test_upload.py::test_upload"],
+                            "status": "passed",
+                            "current_record": {
+                                "test_entries": ["tests/test_upload.py::test_upload"],
+                                "command": ["pytest", "tests/test_upload.py::test_upload"],
+                                "status": "passed",
+                                "exit_code": 0,
+                                "code_snapshot_hash": "code",
+                                "test_code_hash": "tests",
+                            },
+                        }
+                    }
+                },
+                "gate": {},
+            }
+        },
+    })
+
+    task = loaded.stages["test_execution"].test_tasks["上传文件"]["TC-01"]
+    assert task.report_adapter is None
+    assert task.current_record is not None
+    assert task.current_record.report_hash is None
+    assert task.current_record.executed_count is None
+    assert execution_task_has_current_success(task) is False
+
+
+def test_strict_success_and_record_id_include_all_report_facts():
+    entry = "tests/test_upload.py::test_upload"
+    task = ExecutionTask(
+        test_entries=[entry],
+        command=["pytest", entry, "--junitxml=report.xml"],
+        report_adapter="pytest-junitxml",
+        report_path=".workflow_loop/test_reports/report.xml",
+        status="passed",
+        current_record=ExecutionRecord(
+            test_entries=[entry],
+            command=["pytest", entry, "--junitxml=report.xml"],
+            started_at="2026-08-08T00:00:00+00:00",
+            status="passed",
+            exit_code=0,
+            code_snapshot_hash="code",
+            test_code_hash="tests",
+            report_adapter="pytest-junitxml",
+            report_hash="b" * 64,
+            report_size=200,
+            executed_count=1,
+            skipped_count=0,
+            failed_count=0,
+            error_count=0,
+            matched_test_entries=[entry],
+        ),
+    )
+
+    assert execution_task_has_current_success(task)
+    record = task.current_record
+    assert record is not None
+    first_id = compute_test_execution_record_id(record, "上传文件", "TC-01")
+    record.report_hash = "c" * 64
+    second_id = compute_test_execution_record_id(record, "上传文件", "TC-01")
+    assert first_id != second_id
+
+    record.report_hash = "b" * 64
+    record.skipped_count = 1
+    assert execution_task_has_current_success(task) is False
 
 
 def test_old_single_topic_state_migrates_to_topics_list():

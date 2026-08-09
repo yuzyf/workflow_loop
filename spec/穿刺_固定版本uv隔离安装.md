@@ -78,6 +78,7 @@ shasum -a 256 /Users/yu/.local/bin/workflow /Users/yu/.zshrc /Users/yu/.zprofile
 - 验证前后，用户现有 `/Users/yu/.local/bin/workflow`、`.zshrc` 和 `.zprofile` 的 SHA-256 分别保持为 `5b454658ba7448118cc006d4a4a6145d65f5be2ce5807ca7cd79a02eb4943676`、`a708ddf27e917c2c44274651affd1cf39a136da50d50556bad50261d298e15f5` 和 `01a10534ef168af8b982ad4363a7355ecc6a3dd9cce0d6b14a00b690dedecc48`。
 - 用户现有 `/Users/yu/.local/bin/workflow` 仍指向 `/Users/yu/.local/share/uv/tools/workflow-loop/bin/workflow`，没有被本次临时安装替换。
 
+<a id="7-结论"></a>
 ## 7. 结论
 
 - 结果状态：已确认

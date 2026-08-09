@@ -1,9 +1,14 @@
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from workflow_loop import PRODUCT_NAME, __version__
+from workflow_loop import cli as cli_mod
 from workflow_loop import installer as installer_mod
 from workflow_loop.state import WorkflowState, load_state, save_state
 
@@ -106,8 +111,8 @@ def test_three_intents_produce_complete_project_specific_paths(tmp_path):
     """
     expected_tail = [
         "acceptance_plan",
-        "test_plan",
         "impl",
+        "test_plan",
         "test_code",
         "test_execution",
         "topic_acceptance",
@@ -286,7 +291,8 @@ def test_return_requires_explicit_directly_affected_topic_scope(tmp_path):
     before = _state_at_impl(tmp_path)
 
     code, out, err = _run(
-        ["return", "--to", "test_plan", "--reason", "测试计划需修正"], tmp_path
+        ["return", "--to", "acceptance_plan", "--reason", "验收计划需修正"],
+        tmp_path,
     )
     after = load_state(str(tmp_path))
 
@@ -356,6 +362,174 @@ def test_done_refuses_incomplete_run(tmp_path):
     assert load_state(str(tmp_path)).run_status == "active"
 
 
+def _prepare_accept_existing_command(
+    tmp_path,
+    monkeypatch,
+    *,
+    changed_paths: list[str],
+    existing_result: tuple[bool, str] = (True, "既有实现路径一致"),
+):
+    stage_state = cli_mod.state_mod.StageState(
+        status="in_progress",
+        discussion_material_hash="materials",
+        code_baseline_hash="original-baseline",
+    )
+    stage_state.gate.discussion_complete = True
+    workflow_state = WorkflowState(
+        workflow_id="wf",
+        intent="product_change",
+        run_status="active",
+        current_stage="impl",
+        stage_path=["impl"],
+        topics=["上传文件"],
+        stages={"impl": stage_state},
+    )
+
+    class ImplStrategy:
+        def validate_implementation_records(self, _root, _state):
+            return True, "实施文档和追踪关系完整", ["上传文件"]
+
+    saved_states: list[WorkflowState] = []
+    journal_entries: list[tuple[object, ...]] = []
+    monkeypatch.setattr(cli_mod, "resolve_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(cli_mod.state_mod, "load_state", lambda _root: workflow_state)
+    monkeypatch.setattr(
+        cli_mod.state_mod,
+        "save_state",
+        lambda _root, state: saved_states.append(state),
+    )
+    monkeypatch.setattr(cli_mod, "refuse_if_pending_start_transaction", lambda _root: None)
+    monkeypatch.setattr(cli_mod, "ensure_stage_path_current", lambda _root, _state: False)
+    monkeypatch.setattr(
+        cli_mod,
+        "restore_recovery_context_from_journal",
+        lambda _root, _state: False,
+    )
+    monkeypatch.setattr(cli_mod, "clear_completed_material_recovery", lambda _root, _state: None)
+    monkeypatch.setattr(cli_mod, "ensure_impl_recovery_baseline", lambda _root, _state: False)
+    monkeypatch.setattr(cli_mod, "build_stage_path", lambda _intent, _root: [])
+    monkeypatch.setattr(
+        cli_mod,
+        "get_stage_strategy",
+        lambda _name, _state, _instances: ImplStrategy(),
+    )
+    monkeypatch.setattr(cli_mod, "compute_stage_material_hash", lambda _root, _stage: "materials")
+    monkeypatch.setattr(
+        cli_mod.rollback_mod,
+        "validate_prepared",
+        lambda _root, _state: (True, "回退依据完整", {"prepares": [{}]}),
+    )
+    monkeypatch.setattr(
+        cli_mod.rollback_mod,
+        "implementation_changed_paths_since_prepare",
+        lambda _root, _manifest: changed_paths,
+    )
+    monkeypatch.setattr(
+        cli_mod.rollback_mod,
+        "validate_implementation_changes",
+        lambda _root, _state: (True, "三方文件集合完全一致"),
+    )
+    monkeypatch.setattr(
+        cli_mod.rollback_mod,
+        "validate_existing_implementation_paths",
+        lambda _root, _state: existing_result,
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "compute_non_test_code_snapshot_hash",
+        lambda _root: "current-code-hash",
+    )
+    monkeypatch.setattr(
+        cli_mod.journal_mod,
+        "append_entry",
+        lambda *args, **kwargs: journal_entries.append((args, kwargs)),
+    )
+    args = SimpleNamespace(
+        stage="impl",
+        rebaseline=False,
+        prepare_code=False,
+        accept_existing_code=True,
+        accept_existing_test_code=False,
+        skip=False,
+        discuss_done=False,
+        confirmed=False,
+    )
+    return workflow_state, stage_state, saved_states, journal_entries, args
+
+
+def test_accept_existing_code_refuses_post_baseline_changes(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """既有代码确认只能用于基线后零修改，不能遮住本轮真实变化。"""
+    _, stage_state, saved_states, journal_entries, args = _prepare_accept_existing_command(
+        tmp_path,
+        monkeypatch,
+        changed_paths=["src/upload.py", "tests/test_upload.py"],
+    )
+
+    cli_mod.cmd_gate(args)
+    output = capsys.readouterr().out
+
+    assert "既有代码例外不适用" in output
+    assert "src/upload.py" in output and "tests/test_upload.py" in output
+    assert "下一步命令: workflow gate impl" in output
+    assert stage_state.existing_code_accepted_hash is None
+    assert saved_states == []
+    assert journal_entries == []
+
+
+def test_accept_existing_code_rejects_invalid_scope_without_state_change(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """零修改也必须先核对计划、记录和当前文件，失败时状态保持原样。"""
+    _, stage_state, saved_states, journal_entries, args = _prepare_accept_existing_command(
+        tmp_path,
+        monkeypatch,
+        changed_paths=[],
+        existing_result=(
+            False,
+            "1. 实施计划文件未写入实施后记录：['src/missing.py']\n"
+            "2. 既有实现路径不是当前项目内普通文件：src/missing.py",
+        ),
+    )
+
+    cli_mod.cmd_gate(args)
+    output = capsys.readouterr().out
+
+    assert "实施计划文件未写入实施后记录" in output
+    assert "既有实现路径不是当前项目内普通文件" in output
+    assert stage_state.code_baseline_hash == "original-baseline"
+    assert stage_state.existing_code_accepted_hash is None
+    assert saved_states == []
+    assert journal_entries == []
+
+
+def test_accept_existing_code_preserves_original_baseline(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """合法既有代码确认只写确认哈希，不覆盖实施前原始基线。"""
+    _, stage_state, saved_states, journal_entries, args = _prepare_accept_existing_command(
+        tmp_path,
+        monkeypatch,
+        changed_paths=[],
+    )
+
+    cli_mod.cmd_gate(args)
+    output = capsys.readouterr().out
+
+    assert "既有实施代码已确认" in output
+    assert stage_state.code_baseline_hash == "original-baseline"
+    assert stage_state.existing_code_accepted_hash == "current-code-hash"
+    assert len(saved_states) == 1
+    assert len(journal_entries) == 1
+
+
 def test_done_marks_completed_and_preserves_formal_documents(tmp_path):
     """Workflow-Test
     主题：主题验收、全量回归和最终同步完成后正式收工
@@ -371,14 +545,17 @@ def test_done_marks_completed_and_preserves_formal_documents(tmp_path):
     formal = tmp_path / "spec" / "产品总说明.md"
     formal.parent.mkdir()
     formal.write_text("formal", encoding="utf-8")
-    state = WorkflowState(
-        workflow_id="done-workflow",
-        intent="product_change",
-        run_status="active",
-        current_stage="completed",
-        stage_path=[],
-        stages={},
+    start_code, start_out, start_err = _run(
+        ["start", "--intent", "product_change"], tmp_path
     )
+    assert start_code == 0, start_out + start_err
+    state = load_state(str(tmp_path))
+    state.current_stage = "completed"
+    for stage_state in state.stages.values():
+        stage_state.status = "done"
+        stage_state.gate.discussion_complete = True
+        stage_state.gate.code_validated = True
+        stage_state.gate.user_confirmed = True
     save_state(str(tmp_path), state)
 
     code, out, err = _run(["done"], tmp_path)
@@ -389,3 +566,413 @@ def test_done_marks_completed_and_preserves_formal_documents(tmp_path):
     assert completed.ended_at
     assert formal.read_text(encoding="utf-8") == "formal"
     assert "工作流完成" in out
+
+
+def _write_legacy_order_run(root: Path):
+    """建立含旧测试和验收事实的旧顺序活动轮次。"""
+    _install_project(root)
+    code, out, err = _run(["start", "--intent", "product_change"], root)
+    assert code == 0, out + err
+    state = load_state(str(root))
+    topic = "旧顺序迁移主题"
+    state.topics = [topic]
+    state.stage_path.remove("test_plan")
+    state.stage_path.insert(state.stage_path.index("impl"), "test_plan")
+    state.current_stage = "regression_test"
+    for stage_name in state.stage_path[state.stage_path.index("acceptance_plan") :]:
+        stage_state = state.stages[stage_name]
+        stage_state.status = "done"
+        stage_state.gate = cli_mod.state_mod.GateState(True, True, True)
+    state.stages["test_execution"].test_tasks = {
+        topic: {
+            "TC-01": cli_mod.state_mod.TestTaskState(
+                command=["pytest", "tests/test_old.py"],
+                status="passed",
+            )
+        }
+    }
+    state.stages["topic_acceptance"].acceptance_records = {
+        topic: {
+            "AC-01": cli_mod.state_mod.AcceptanceCriterionRecord(
+                topic=topic,
+                criterion_id="AC-01",
+                method="自动化测试",
+                result="passed",
+            )
+        }
+    }
+    state.regression_test = cli_mod.state_mod.RegressionTestState(
+        entry=["pytest"],
+        command=["pytest"],
+        status="passed",
+        exit_code=0,
+        record_id="REG-old",
+    )
+    state.verification.impl_hash = "impl-old"
+    state.verification.test_plan_hash = "plan-old"
+    state.verification.test_code_hash = "test-code-old"
+    state.verification.test_result_hash = "test-result-old"
+    state.verification.acceptance_result_hash = "acceptance-result-old"
+    state.verification.regression_test_result_hash = "regression-old"
+    save_state(str(root), state)
+    cli_mod.journal_mod.append_entry(
+        str(root),
+        "旧轮次测试完成",
+        "workflow.py",
+        workflow_id=state.workflow_id,
+    )
+
+    paths = cli_mod.topic_mod.topic_paths(str(root), topic)
+    for key in ("test_result", "acceptance_result"):
+        result_path = root / paths[key]
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(f"old {key}\n", encoding="utf-8")
+
+    trace_path = root / cli_mod.artifact_paths_mod.TRACEABILITY_DOC
+    headers = cli_mod.traceability_mod.TRACEABILITY_HEADERS
+    row = [
+        "[需求](./spec/产品总说明.md)",
+        f"[{topic}](./{paths['acceptance_plan']})",
+        f"[AC-01](./{paths['acceptance_plan']}#ac-01)",
+        f"[TC-01](./{paths['test_plan']}#tc-01)",
+        f"[实施计划](./{paths['impl_doc']})",
+        f"[实施记录](./{paths['impl_doc']})",
+        f"[测试结果](./{paths['test_result']})<br>最终全量回归：通过（机器记录 REG-old）",
+        f"[验收结果](./{paths['acceptance_result']})<br>整体验收：用户已确认",
+        "[代码设计](./spec/代码架构设计.md)",
+    ]
+    trace_path.write_text(
+        "# 需求交付追踪表\n\n"
+        f"## {state.workflow_id}\n\n"
+        + "| " + " | ".join(headers) + " |\n"
+        + "| " + " | ".join(["---"] * len(headers)) + " |\n"
+        + "| " + " | ".join(row) + " |\n",
+        encoding="utf-8",
+    )
+    return state, paths
+
+
+def _migration_bytes(root: Path, paths: dict[str, str]) -> dict[str, bytes | None]:
+    relative_paths = [
+        ".workflow_loop/state.json",
+        ".workflow_loop/journal.jsonl",
+        cli_mod.artifact_paths_mod.TRACEABILITY_DOC,
+        paths["test_result"],
+        paths["acceptance_result"],
+    ]
+    return {
+        relative_path: (
+            (root / relative_path).read_bytes()
+            if (root / relative_path).is_file()
+            else None
+        )
+        for relative_path in relative_paths
+    }
+
+
+def test_legacy_order_status_preview_is_zero_write(tmp_path):
+    _state, paths = _write_legacy_order_run(tmp_path)
+    before = _migration_bytes(tmp_path, paths)
+
+    code, out, err = _run(["status"], tmp_path)
+
+    assert code == 0, out + err
+    assert "旧顺序迁移预览" in out
+    assert "本次只读，写入 0 个文件" in out
+    assert "已有产品代码不删除" in out
+    assert _migration_bytes(tmp_path, paths) == before
+
+
+def test_legacy_order_migration_clears_old_facts_and_is_idempotent(tmp_path):
+    state, paths = _write_legacy_order_run(tmp_path)
+
+    assert cli_mod.ensure_stage_path_current(str(tmp_path), state) is True
+
+    migrated = load_state(str(tmp_path))
+    assert migrated.current_stage == "impl"
+    assert migrated.stage_path.index("impl") < migrated.stage_path.index("test_plan")
+    assert migrated.stages["test_execution"].test_tasks == {}
+    assert migrated.stages["topic_acceptance"].acceptance_records == {}
+    assert migrated.regression_test == cli_mod.state_mod.RegressionTestState()
+    assert migrated.verification.test_plan_hash is None
+    assert migrated.verification.test_result_hash is None
+    assert migrated.verification.acceptance_result_hash is None
+    assert migrated.verification.regression_test_result_hash is None
+    assert not (tmp_path / paths["test_result"]).exists()
+    assert not (tmp_path / paths["acceptance_result"]).exists()
+    trace = (tmp_path / cli_mod.artifact_paths_mod.TRACEABILITY_DOC).read_text(
+        encoding="utf-8"
+    )
+    assert "待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新" in trace
+    assert sum(
+        entry.get("action") == "阶段路径迁移"
+        for entry in cli_mod.journal_mod.read_all(str(tmp_path))
+    ) == 1
+
+    before_second_call = _migration_bytes(tmp_path, paths)
+    assert cli_mod.ensure_stage_path_current(str(tmp_path), migrated) is False
+    assert _migration_bytes(tmp_path, paths) == before_second_call
+
+
+@pytest.mark.parametrize("failed_step", ["save_state", "journal"])
+def test_legacy_order_migration_failure_restores_every_original_byte(
+    tmp_path,
+    monkeypatch,
+    failed_step,
+):
+    state, paths = _write_legacy_order_run(tmp_path)
+    original_path = list(state.stage_path)
+    before = _migration_bytes(tmp_path, paths)
+
+    if failed_step == "save_state":
+        original_save = cli_mod.state_mod.save_state
+
+        def fail_after_save(project_root, workflow_state):
+            original_save(project_root, workflow_state)
+            raise OSError("injected save failure")
+
+        monkeypatch.setattr(cli_mod.state_mod, "save_state", fail_after_save)
+    else:
+        original_append = cli_mod.journal_mod.append_entry
+
+        def fail_after_append(project_root, action, actor, **kwargs):
+            original_append(project_root, action, actor, **kwargs)
+            raise OSError("injected journal failure")
+
+        monkeypatch.setattr(cli_mod.journal_mod, "append_entry", fail_after_append)
+
+    with pytest.raises(cli_mod.StagePathMigrationError, match="迁移失败"):
+        cli_mod.ensure_stage_path_current(str(tmp_path), state)
+
+    assert state.stage_path == original_path
+    assert _migration_bytes(tmp_path, paths) == before
+
+
+def _write_link_repair_fixture(root: Path, *, unresolved: bool = False) -> Path:
+    _install_project(root)
+    spec_dir = root / "spec"
+    spec_dir.mkdir(exist_ok=True)
+    missing_link = "\n[缺失](./功能_缺失.md)\n" if unresolved else ""
+    (spec_dir / "产品总说明.md").write_text(
+        f"[规则](./功能_目标.md#ac-01)\n{missing_link}",
+        encoding="utf-8",
+    )
+    target = spec_dir / "功能_目标.md"
+    target.write_text("### AC-01：可检查规则\n正文\n", encoding="utf-8")
+    return target
+
+
+def test_repair_links_preview_is_zero_write_and_lists_every_unresolved_issue(tmp_path):
+    target = _write_link_repair_fixture(tmp_path, unresolved=True)
+    target_before = target.read_bytes()
+    project_path = tmp_path / ".workflow_loop" / "project.json"
+    project_before = project_path.read_bytes()
+
+    code, out, err = _run(["repair-links"], tmp_path)
+
+    assert code == 0, out + err
+    assert re.search(r"预览哈希: [0-9a-f]{64}", out)
+    assert "可自动修复: 1 个定位，涉及 1 个文件" in out
+    assert "不可自动修复: 1 个" in out
+    assert "链接 './功能_缺失.md'" in out
+    assert "目标不是现有普通文件" in out
+    assert "预览写入: 0 个正式文档" in out
+    assert target.read_bytes() == target_before
+    assert project_path.read_bytes() == project_before
+    assert not (tmp_path / ".workflow_loop" / "state.json").exists()
+    assert not (tmp_path / ".workflow_loop" / "link_repair").exists()
+
+
+def test_repair_links_wrong_hash_fails_without_writing(tmp_path):
+    target = _write_link_repair_fixture(tmp_path)
+    target_before = target.read_bytes()
+    project_path = tmp_path / ".workflow_loop" / "project.json"
+    project_before = project_path.read_bytes()
+
+    code, out, err = _run(
+        ["repair-links", "--apply", "0" * 64],
+        tmp_path,
+    )
+
+    assert code == 1, out + err
+    assert "预览已经漂移" in out
+    assert "整批零写入" in out
+    assert "下一步命令: workflow repair-links" in out
+    assert target.read_bytes() == target_before
+    assert project_path.read_bytes() == project_before
+    assert not (tmp_path / ".workflow_loop" / "state.json").exists()
+    assert not (tmp_path / ".workflow_loop" / "link_repair").exists()
+
+
+def test_repair_links_matching_hash_applies_only_confirmed_anchor(tmp_path):
+    target = _write_link_repair_fixture(tmp_path)
+    project_path = tmp_path / ".workflow_loop" / "project.json"
+    start_code, start_out, start_err = _run(
+        ["start", "--intent", "product_change"], tmp_path
+    )
+    assert start_code == 0, start_out + start_err
+    project_before = project_path.read_bytes()
+    workflow_state = load_state(str(tmp_path))
+    state_path = tmp_path / ".workflow_loop" / "state.json"
+    state_before = state_path.read_bytes()
+    preview_code, preview_out, preview_err = _run(["repair-links"], tmp_path)
+    assert preview_code == 0, preview_out + preview_err
+    preview_hash = re.search(r"预览哈希: ([0-9a-f]{64})", preview_out)
+    assert preview_hash is not None
+
+    code, out, err = _run(
+        ["repair-links", "--apply", preview_hash.group(1)],
+        tmp_path,
+    )
+
+    assert code == 0, out + err
+    assert "实际修改文件: 1 个" in out
+    assert "spec/功能_目标.md" in out
+    assert "剩余不可自动修复: 0 个" in out
+    assert target.read_text(encoding="utf-8").startswith(
+        '<a id="ac-01"></a>\n### AC-01：可检查规则'
+    )
+    assert project_path.read_bytes() == project_before
+    assert state_path.read_bytes() == state_before
+    assert f"`workflow gate {workflow_state.current_stage}`" in out
+    assert not (tmp_path / ".workflow_loop" / "link_repair").exists()
+
+
+def test_gate_reports_link_and_stage_errors_without_running_regression(
+    tmp_path,
+    monkeypatch,
+):
+    calls = {"stage": 0, "regression": 0}
+
+    class StageWithIndependentError:
+        def code_validate(self, project_root):
+            calls["stage"] += 1
+            return (
+                False,
+                "spec/代码架构设计.md 第 20 行；代码位置列；"
+                "原值为中文说明；预期项目内真实代码文件",
+            )
+
+    def run_regression(project_root, workflow_state):
+        calls["regression"] += 1
+        return True, "不应执行"
+
+    monkeypatch.setattr(
+        cli_mod.markdown_links_mod,
+        "validate_managed_markdown_links",
+        lambda project_root: (
+            False,
+            "受管正式文档存在 2 个链接问题：\n"
+            "1. 来源 spec/产品总说明.md:3；链接 './功能_一.md#ac-01'；"
+            "目标 spec/功能_一.md；原因：缺少完全一致的显式 HTML id\n"
+            "2. 来源 spec/产品总说明.md:4；链接 './功能_缺失.md'；"
+            "目标 spec/功能_缺失.md；原因：目标不是现有普通文件",
+        ),
+    )
+    monkeypatch.setattr(cli_mod.test_runner_mod, "run_final_regression", run_regression)
+    workflow_state = WorkflowState(
+        workflow_id="link-gate-order",
+        intent="product_change",
+        run_status="active",
+    )
+
+    passed, detail = cli_mod.validate_stage_output(
+        str(tmp_path),
+        workflow_state,
+        "regression_test",
+        StageWithIndependentError(),
+    )
+
+    assert not passed
+    assert calls == {"stage": 1, "regression": 0}
+    assert "门禁: 代码校验（链接、阶段事实和依赖动作）" in detail
+    assert "错误 3 项，未检查 1 项" in detail
+    assert "位置: spec/产品总说明.md:3" in detail
+    assert "位置: spec/产品总说明.md:4" in detail
+    assert "spec/代码架构设计.md 第 20 行；代码位置列；原值为中文说明；预期项目内真实代码文件" in detail
+    assert "前置检查失败，本次没有启动最终全量测试进程" in detail
+    assert "下一步命令: workflow repair-links" in detail
+
+
+def test_test_code_unchanged_failure_reports_exact_existing_code_command(
+    tmp_path,
+    monkeypatch,
+):
+    class UnchangedTestCodeStage:
+        def code_validate(self, project_root):
+            return (
+                False,
+                "存在自动化测试项，但测试代码没有变化；如果当前测试代码已经覆盖最新测试计划，"
+                "请由用户执行 workflow gate test_code --accept-existing-test-code 明确确认",
+            )
+
+    monkeypatch.setattr(
+        cli_mod.markdown_links_mod,
+        "validate_managed_markdown_links",
+        lambda project_root: (True, "链接完整"),
+    )
+    workflow_state = WorkflowState(
+        workflow_id="reuse-test-code-command",
+        intent="product_change",
+        run_status="active",
+    )
+
+    passed, detail = cli_mod.validate_stage_output(
+        str(tmp_path),
+        workflow_state,
+        "test_code",
+        UnchangedTestCodeStage(),
+    )
+
+    assert not passed
+    assert (
+        "下一步命令: workflow gate test_code --accept-existing-test-code"
+        in detail
+    )
+    assert "自动动作: 记录用户确认复用当前测试代码" in detail
+    assert (
+        "下一动作: 如果现有测试代码仍覆盖最新测试计划，原样执行 "
+        "`workflow gate test_code --accept-existing-test-code`；否则先修改测试代码"
+        in detail
+    )
+    assert "请按上述每项“下一动作”处理" in detail
+
+
+def test_test_code_multiple_failures_do_not_bypass_required_fixes(
+    tmp_path,
+    monkeypatch,
+):
+    class TestCodeStageWithIndependentErrors:
+        def code_validate(self, project_root):
+            return (
+                False,
+                "- 存在自动化测试项，但测试代码没有变化；如果当前测试代码已经覆盖最新测试计划，"
+                "请由用户执行 workflow gate test_code --accept-existing-test-code 明确确认\n"
+                "- tests/test_feature.py:12 的 Workflow-Test 标识缺少关键断言",
+            )
+
+    monkeypatch.setattr(
+        cli_mod.markdown_links_mod,
+        "validate_managed_markdown_links",
+        lambda project_root: (True, "链接完整"),
+    )
+    workflow_state = WorkflowState(
+        workflow_id="reuse-test-code-with-errors",
+        intent="product_change",
+        run_status="active",
+    )
+
+    passed, detail = cli_mod.validate_stage_output(
+        str(tmp_path),
+        workflow_state,
+        "test_code",
+        TestCodeStageWithIndependentErrors(),
+    )
+
+    assert not passed
+    assert "错误 2 项" in detail
+    assert "下一步命令: workflow gate test_code\n" in detail
+    assert (
+        "下一步命令: workflow gate test_code --accept-existing-test-code"
+        not in detail
+    )

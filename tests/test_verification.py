@@ -1,3 +1,4 @@
+import copy
 import os
 
 from workflow_loop.project import create_project, load_project, register_topics, save_project
@@ -19,13 +20,16 @@ from workflow_loop.verification import (
     compute_product_design_hash, compute_code_design_hash,
     get_linked_product_design_paths, check_invalidation, clear_stage_gates,
     clear_completed_material_recovery, recovery_stage_action,
+    compute_registered_file_snapshot, compute_document_snapshot,
+    compute_test_plan_document_snapshot, compute_acceptance_plan_document_snapshot,
+    inspect_invalidation, apply_invalidation,
 )
 
 
 # 测试辅助函数：构造一个已经进入后半段、带验证哈希的 WorkflowState
 def _make_state(project_root, impl_hash=None, test_plan_hash=None, acceptance_plan_hash=None, test_result_hash=None):
     stage_path = [
-        "acceptance_plan", "test_plan", "impl", "test_code",
+        "acceptance_plan", "impl", "test_plan", "test_code",
         "test_execution", "topic_acceptance",
         "regression_test", "overall_acceptance", "update_code_design",
     ]
@@ -342,6 +346,420 @@ def test_confirmed_test_code_change_returns_to_test_code(tmp_path):
     assert state.verification.test_code_hash is None
 
 
+def test_active_snapshot_ignores_unregistered_build_and_dependency_files(tmp_path):
+    create_project(str(tmp_path))
+    source = tmp_path / "src" / "core.py"
+    source.parent.mkdir()
+    source.write_text("value = 1\n", encoding="utf-8")
+    generated = tmp_path / ".next" / "bundle.js"
+    generated.parent.mkdir()
+    generated.write_text("one\n", encoding="utf-8")
+    dependency = tmp_path / "node_modules" / "pkg.js"
+    dependency.parent.mkdir()
+    dependency.write_text("one\n", encoding="utf-8")
+    state = _make_state(str(tmp_path))
+    state.rollback.planned_paths = ["src/core.py"]
+    save_state(str(tmp_path), state)
+
+    baseline = compute_non_test_code_snapshot_hash(str(tmp_path))
+    generated.write_text("two\n", encoding="utf-8")
+    dependency.write_text("two\n", encoding="utf-8")
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == baseline
+
+    source.write_text("value = 2\n", encoding="utf-8")
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) != baseline
+
+
+def test_active_snapshot_without_registered_paths_does_not_guess_core_code(tmp_path):
+    create_project(str(tmp_path))
+    source = tmp_path / "src" / "core.py"
+    generated = tmp_path / ".next" / "bundle.js"
+    dependency = tmp_path / "node_modules" / "pkg.js"
+    source.parent.mkdir()
+    generated.parent.mkdir()
+    dependency.parent.mkdir()
+    source.write_text("value = 1\n", encoding="utf-8")
+    generated.write_text("one\n", encoding="utf-8")
+    dependency.write_text("one\n", encoding="utf-8")
+    state = _make_state(str(tmp_path))
+    state.topics = []
+    save_state(str(tmp_path), state)
+
+    baseline = compute_non_test_code_snapshot_hash(str(tmp_path))
+    source.write_text("value = 2\n", encoding="utf-8")
+    generated.write_text("two\n", encoding="utf-8")
+    dependency.write_text("two\n", encoding="utf-8")
+
+    assert compute_non_test_code_snapshot_hash(str(tmp_path)) == baseline
+
+
+def test_test_snapshot_uses_only_test_plan_entries_and_registered_runner(tmp_path):
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), ["test_topic"])
+    source = tmp_path / "src" / "core.py"
+    test_file = tmp_path / "tests" / "test_core.py"
+    runner = tmp_path / "tools" / "run_tests.py"
+    generated = tmp_path / ".next" / "test_core.js"
+    for path, content in (
+        (source, "def run():\n    return 1\n"),
+        (test_file, "def test_run():\n    assert True\n"),
+        (runner, "print('run')\n"),
+        (generated, "one\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    qa_plan = tmp_path / "qa" / "test_topic_测试计划.md"
+    qa_plan.parent.mkdir()
+    qa_plan.write_text(
+        """## 1. 验收条件覆盖
+
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：结果可见](../acceptance/test_topic_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 验证结果](#tc-01) | 无 | 自动化测试 | 项目命令 | `src/core.py::run` | `tests/test_core.py::test_run` | 创建隔离数据 | 调用真实入口 | 返回值 | 返回值为 1 | 返回值不是 1 | 结构化报告 |
+""",
+        encoding="utf-8",
+    )
+    state = _make_state(str(tmp_path))
+    state.rollback.planned_paths = ["src/core.py"]
+    save_state(str(tmp_path), state)
+    project = load_project(str(tmp_path))
+    project.test_entry = {"default": ["python", "tools/run_tests.py"]}
+    save_project(str(tmp_path), project)
+
+    baseline = compute_test_code_snapshot_hash(str(tmp_path))
+    generated.write_text("two\n", encoding="utf-8")
+    assert compute_test_code_snapshot_hash(str(tmp_path)) == baseline
+
+    test_file.write_text("def test_run():\n    assert 1 == 1\n", encoding="utf-8")
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != baseline
+    test_baseline = compute_test_code_snapshot_hash(str(tmp_path))
+    runner.write_text("print('changed')\n", encoding="utf-8")
+    assert compute_test_code_snapshot_hash(str(tmp_path)) != test_baseline
+
+
+def test_invalidation_inspection_lists_exact_changes_before_one_apply(tmp_path):
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), ["test_topic"])
+    source = tmp_path / "src" / "core.py"
+    impl_index = tmp_path / "impl" / "索引.md"
+    impl_record = tmp_path / "impl" / "test_topic_实施记录.md"
+    source.parent.mkdir()
+    impl_index.parent.mkdir()
+    source.write_text("value = 1\n", encoding="utf-8")
+    impl_index.write_text("index one\n", encoding="utf-8")
+    impl_record.write_text("record one\n", encoding="utf-8")
+
+    state = _make_state(str(tmp_path))
+    state.rollback.planned_paths = ["src/core.py"]
+    state.verification.test_plan_hash = "later-binding"
+    save_state(str(tmp_path), state)
+    state.verification.impl_hash = compute_impl_hash(str(tmp_path), state.topics)
+    state.meta["registered_snapshots"] = {
+        "impl": compute_registered_file_snapshot(str(tmp_path), scope="product"),
+        "impl_documents": compute_document_snapshot(
+            str(tmp_path),
+            ["impl/索引.md", "impl/test_topic_实施记录.md"],
+        ),
+    }
+    save_state(str(tmp_path), state)
+    source.write_text("value = 2\n", encoding="utf-8")
+    impl_record.write_text("record two\n", encoding="utf-8")
+    before = copy.deepcopy(state)
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+
+    assert inspection.source_stage == "impl"
+    assert state == before
+    locations = {item.location for item in inspection.diagnostics if item.kind == "error"}
+    assert "src/core.py" in locations
+    assert "impl/test_topic_实施记录.md" in locations
+    assert any(
+        item.kind == "not_checked" and "test_plan" in item.check_id
+        for item in inspection.diagnostics
+    )
+
+    invalidations = apply_invalidation(state, str(tmp_path), inspection)
+
+    assert invalidations == [("impl", "impl 及全部后续阶段")]
+    assert state.current_stage == "impl"
+    assert state.verification.impl_hash is None
+    assert state.verification.test_plan_hash is None
+
+
+def _write_two_topic_impl_inputs(tmp_path, topics):
+    (tmp_path / "impl").mkdir(exist_ok=True)
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "impl" / "索引.md").write_text("# 实施索引\n", encoding="utf-8")
+    code_paths = {}
+    for index, topic in enumerate(topics, start=1):
+        code_path = f"src/topic_{index}.py"
+        code_paths[topic] = code_path
+        (tmp_path / code_path).write_text(
+            f"def run_topic_{index}():\n    return {index}\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "impl" / f"{topic}_实施记录.md").write_text(
+            f"""# {topic}实施记录
+
+### 2.2 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改的具体逻辑 | 数据、状态或输出变化 | 对应验收条件 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | {code_path} | run_topic_{index} | 返回旧值 | 返回主题值 | 调用后得到主题值 | AC-01 | 无 |
+""",
+            encoding="utf-8",
+        )
+    return code_paths
+
+
+def _write_two_topic_traceability(tmp_path, topics):
+    rows = [
+        (
+            f"| [产品设计](./spec/产品总说明.md) | "
+            f"[{topic}](./acceptance/{topic}_验收计划.md) | AC-01 | "
+            f"[测试计划 {topic}](./qa/{topic}_测试计划.md) | "
+            f"[实施计划 {topic}](./impl/{topic}_实施记录.md#2-实施前计划) | "
+            f"[实施记录 {topic}](./impl/{topic}_实施记录.md#3-实施后记录) | "
+            f"[测试结果 {topic}](./qa/{topic}_测试结果.md) | "
+            f"[验收结果 {topic}](./acceptance/{topic}_验收结果.md) | 已更新 |"
+        )
+        for topic in topics
+    ]
+    (tmp_path / "需求交付追踪表.md").write_text(
+        """# 需求交付追踪表
+
+## test
+
+### 交付链路
+
+| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
+|---|---|---|---|---|---|---|---|---|
+"""
+        + "\n".join(rows)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_impl_invalidation_only_clears_the_topic_that_owns_changed_code(tmp_path):
+    """Workflow-Test
+    主题：验收测试和实施计划按同一主题完整追踪
+    测试项：TC-03 只使直接受影响主题结果失效
+    验收条件：AC-03 只清除真实受影响的结果
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：两个独立主题中只有一个主题登记的核心代码变化时保留另一个主题事实
+    测试入口：tests/test_verification.py::test_impl_invalidation_only_clears_the_topic_that_owns_changed_code
+    代码入口：workflow_loop.verification.inspect_invalidation 和 apply_invalidation
+    """
+    topics = ["上传文件", "查看状态"]
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), topics)
+    code_paths = _write_two_topic_impl_inputs(tmp_path, topics)
+    _write_two_topic_traceability(tmp_path, topics)
+
+    state = _make_state(str(tmp_path))
+    state.topics = topics
+    state.rollback.planned_paths = list(code_paths.values())
+    save_state(str(tmp_path), state)
+    state.stages["test_execution"].test_tasks = {
+        topic: {"TC-01": ExecutionTask(status="passed")}
+        for topic in topics
+    }
+    state.stages["topic_acceptance"].acceptance_records = {
+        topic: {"AC-01": object()}
+        for topic in topics
+    }
+    state.verification.impl_hash = compute_impl_hash(str(tmp_path), topics)
+    state.meta["registered_snapshots"] = {
+        "impl": compute_registered_file_snapshot(str(tmp_path), scope="product"),
+        "impl_documents": compute_document_snapshot(
+            str(tmp_path),
+            ["impl/索引.md", *[f"impl/{topic}_实施记录.md" for topic in topics]],
+        ),
+    }
+    for topic in topics:
+        for suffix, directory in (("测试结果", "qa"), ("验收结果", "acceptance")):
+            path = tmp_path / directory / f"{topic}_{suffix}.md"
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(f"{topic} old result\n", encoding="utf-8")
+
+    changed_topic, kept_topic = topics
+    (tmp_path / code_paths[changed_topic]).write_text(
+        "def run_topic_1():\n    return 100\n",
+        encoding="utf-8",
+    )
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+
+    assert inspection.source_stage == "impl"
+    assert inspection.affected_topics == (changed_topic,)
+    assert any(
+        item.location == code_paths[changed_topic] and item.actual == "内容修改"
+        for item in inspection.diagnostics
+    )
+
+    apply_invalidation(state, str(tmp_path), inspection)
+
+    assert changed_topic not in state.stages["test_execution"].test_tasks
+    assert kept_topic in state.stages["test_execution"].test_tasks
+    assert changed_topic not in state.stages["topic_acceptance"].acceptance_records
+    assert kept_topic in state.stages["topic_acceptance"].acceptance_records
+    assert not (tmp_path / "qa" / f"{changed_topic}_测试结果.md").exists()
+    assert not (tmp_path / "acceptance" / f"{changed_topic}_验收结果.md").exists()
+    assert (tmp_path / "qa" / f"{kept_topic}_测试结果.md").is_file()
+    assert (tmp_path / "acceptance" / f"{kept_topic}_验收结果.md").is_file()
+    traceability = (tmp_path / "需求交付追踪表.md").read_text(encoding="utf-8")
+    changed_row = next(line for line in traceability.splitlines() if f"acceptance/{changed_topic}_验收计划.md" in line)
+    kept_row = next(line for line in traceability.splitlines() if f"acceptance/{kept_topic}_验收计划.md" in line)
+    assert "待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新" in changed_row
+    assert f"测试结果 {kept_topic}" in kept_row
+    assert state.recovery.affected_topics == [changed_topic]
+
+
+def test_shared_test_plan_index_change_affects_all_topics(tmp_path):
+    topics = ["上传文件", "查看状态"]
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), topics)
+    qa_dir = tmp_path / "qa"
+    qa_dir.mkdir()
+    (qa_dir / "索引.md").write_text("# 测试索引 v1\n", encoding="utf-8")
+    for topic in topics:
+        (qa_dir / f"{topic}_测试计划.md").write_text(
+            f"# {topic}测试计划\n",
+            encoding="utf-8",
+        )
+    state = _make_state(str(tmp_path))
+    state.topics = topics
+    state.verification.test_plan_hash = compute_test_plan_hash(str(tmp_path), topics)
+    state.meta["registered_snapshots"] = {
+        "test_plan_documents": compute_document_snapshot(
+            str(tmp_path),
+            ["qa/索引.md", *[f"qa/{topic}_测试计划.md" for topic in topics]],
+        )
+    }
+    (qa_dir / "索引.md").write_text("# 测试索引 v2\n", encoding="utf-8")
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+
+    assert inspection.source_stage == "test_plan"
+    assert inspection.affected_topics == tuple(topics)
+    assert any(
+        item.location == "qa/索引.md" and item.actual == "内容修改"
+        for item in inspection.diagnostics
+    )
+
+
+def test_test_result_link_transition_does_not_invalidate_test_plan(tmp_path):
+    """测试执行写回结果链接属于下游状态，不应清空已确认测试计划。"""
+    topic = "test_topic"
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), [topic])
+    qa_dir = tmp_path / "qa"
+    qa_dir.mkdir()
+    plan_path = qa_dir / f"{topic}_测试计划.md"
+    plan_path.write_text("# 测试计划\n\n计划内容保持不变\n", encoding="utf-8")
+    index = (
+        "# 测试索引\n\n"
+        "## test\n\n"
+        "| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 实施记录 | 测试计划 | 测试结果 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        f"| 1 | {topic} | 无 | [验收](../acceptance/{topic}_验收计划.md) | "
+        f"[实施](../impl/{topic}_实施记录.md) | [计划](./{topic}_测试计划.md) | "
+        f"`./{topic}_测试结果.md`（待生成） |\n"
+    )
+    (qa_dir / "索引.md").write_text(index, encoding="utf-8")
+
+    state = _make_state(str(tmp_path))
+    state.workflow_id = "test"
+    state.topics = [topic]
+    state.verification.test_plan_hash = compute_test_plan_hash(str(tmp_path), [topic])
+    state.meta["registered_snapshots"] = {
+        "test_plan_documents": compute_test_plan_document_snapshot(str(tmp_path), [topic])
+    }
+
+    before_hash = state.verification.test_plan_hash
+    result_path = qa_dir / f"{topic}_测试结果.md"
+    result_path.write_text("# 结果\n", encoding="utf-8")
+    (qa_dir / "索引.md").write_text(index.replace(
+        f"`./{topic}_测试结果.md`（待生成）",
+        f"[结果](./{topic}_测试结果.md)",
+    ), encoding="utf-8")
+
+    assert compute_test_plan_hash(str(tmp_path), [topic]) == before_hash
+    inspection = inspect_invalidation(state, str(tmp_path))
+    assert inspection.changed is False
+
+
+def test_acceptance_result_link_transition_does_not_invalidate_acceptance_plan(tmp_path):
+    """主题验收写回结果链接属于下游状态，不应清空已确认验收计划。"""
+    topic = "test_topic"
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), [topic])
+    acceptance_dir = tmp_path / "acceptance"
+    acceptance_dir.mkdir()
+    plan_path = acceptance_dir / f"{topic}_验收计划.md"
+    plan_path.write_text("# 验收计划\n\n验收条件保持不变\n", encoding="utf-8")
+    index = (
+        "# 验收索引\n\n"
+        "## test\n\n"
+        "| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |\n"
+        "|---|---|---|---|---|\n"
+        f"| 1 | {topic} | 无 | [计划](./{topic}_验收计划.md) | "
+        f"`./{topic}_验收结果.md`（待生成） |\n"
+    )
+    (acceptance_dir / "索引.md").write_text(index, encoding="utf-8")
+
+    state = _make_state(str(tmp_path))
+    state.workflow_id = "test"
+    state.topics = [topic]
+    state.verification.acceptance_plan_hash = compute_acceptance_plan_hash(
+        str(tmp_path), [topic]
+    )
+    state.meta["registered_snapshots"] = {
+        "acceptance_plan_documents": compute_acceptance_plan_document_snapshot(
+            str(tmp_path), [topic]
+        )
+    }
+
+    before_hash = state.verification.acceptance_plan_hash
+    result_path = acceptance_dir / f"{topic}_验收结果.md"
+    result_path.write_text("# 结果\n", encoding="utf-8")
+    (acceptance_dir / "索引.md").write_text(index.replace(
+        f"`./{topic}_验收结果.md`（待生成）",
+        f"[结果](./{topic}_验收结果.md)",
+    ), encoding="utf-8")
+
+    assert compute_acceptance_plan_hash(str(tmp_path), [topic]) == before_hash
+    inspection = inspect_invalidation(state, str(tmp_path))
+    assert inspection.changed is False
+
+
+def test_test_plan_change_preserves_confirmed_implementation(tmp_path):
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), ["test_topic"])
+    impl_dir = tmp_path / "impl"
+    qa_dir = tmp_path / "qa"
+    impl_dir.mkdir()
+    qa_dir.mkdir()
+    (impl_dir / "test_topic_实施记录.md").write_text("implemented", encoding="utf-8")
+    plan = qa_dir / "test_topic_测试计划.md"
+    plan.write_text("plan one", encoding="utf-8")
+    impl_hash = compute_impl_hash(str(tmp_path), ["test_topic"])
+    plan_hash = compute_test_plan_hash(str(tmp_path), ["test_topic"])
+    state = _make_state(str(tmp_path), impl_hash=impl_hash, test_plan_hash=plan_hash)
+    impl_gate = state.stages["impl"].gate
+    plan.write_text("plan two", encoding="utf-8")
+
+    invalidations = check_invalidation(state, str(tmp_path))
+
+    assert invalidations == [("test_plan", "test_plan 及全部后续阶段（保留 impl）")]
+    assert state.current_stage == "test_plan"
+    assert state.verification.impl_hash == impl_hash
+    assert state.stages["impl"].gate == impl_gate
+    assert state.stages["impl"].status == "done"
+
+
 # 测试 check_invalidation 在无变化时返回空列表（impl 哈希一致）
 def test_check_invalidation_no_change(tmp_path):
     # 创建 impl 目录
@@ -413,7 +831,7 @@ def test_check_invalidation_impl_changed(tmp_path):
     assert not acceptance_result.exists()
     assert state.regression_test.status == "not_run"
     assert state.recovery.source_stage == "impl"
-    assert "原测试和验收结果不能继续代表当前实现" in state.recovery.reason
+    assert "原测试计划、测试和验收结果不能继续代表当前实现" in state.recovery.reason
     assert recovery_stage_action(state, "test_code") is not None
 
 

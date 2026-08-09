@@ -36,9 +36,46 @@ def _impl_document(root: Path, paths: list[str]) -> None:
     )
 
 
+def _append_impl_record(root: Path, paths: list[str]) -> None:
+    document = root / "impl" / "上传文件_实施记录.md"
+    rows = []
+    for path in paths:
+        content = (root / path).read_text(encoding="utf-8")
+        location = next(
+            (line.strip() for line in content.splitlines() if line.strip()),
+            path,
+        )
+        rows.append(
+            f"| {path} | `{location}` | 将该位置更新为实施后的真实内容 | "
+            "读取文件可观察到该位置的当前输出 | AC-01 |"
+        )
+    document.write_text(
+        document.read_text(encoding="utf-8")
+        + f"""
+
+## 3. 实施后记录
+
+### 3.1 实际代码修改
+
+| 文件 | 类、函数或配置项 | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 对应验收条件 |
+| --- | --- | --- | --- | --- |
+{"\n".join(rows)}
+""",
+        encoding="utf-8",
+    )
+
+
 def _impl_state(root: Path, paths: list[str]) -> WorkflowState:
     project_mod.create_project(str(root))
     _impl_document(root, paths)
+    _write(
+        root / "acceptance" / "上传文件_验收计划.md",
+        """# 【验收主题】上传文件
+
+<a id="ac-01"></a>
+### AC-01：上传后可读取结果
+""",
+    )
     state = WorkflowState(
         workflow_id="impl-workflow",
         intent="product_change",
@@ -88,15 +125,15 @@ def test_impl_backup_records_existing_and_originally_missing_files(tmp_path):
     assert not (tmp_path / "src" / "new.py").exists()
 
 
-def test_adjusted_plan_keeps_first_backup_and_only_adds_trustworthy_paths(tmp_path):
+def test_adjusted_plan_rejects_path_without_an_original_snapshot(tmp_path):
     """Workflow-Test
     主题：项目修改可恢复且正式测试结果来自真实执行
     测试项：TC-02 实施计划调整不覆盖最初副本
     验收条件：AC-02 实施始终受当前确认计划约束
     测试方式：自动化测试
     测试层级：集成测试
-    测试目标：计划调整后旧路径首次副本不变且只补尚未修改的新路径
-    测试入口：tests/test_rollback.py::test_adjusted_plan_keeps_first_backup_and_only_adds_trustworthy_paths
+    测试目标：计划调整后旧路径首次副本不变且拒绝没有实施前快照的新路径
+    测试入口：tests/test_rollback.py::test_adjusted_plan_rejects_path_without_an_original_snapshot
     代码入口：workflow_loop.rollback.prepare_impl
     """
     app = tmp_path / "src" / "app.py"
@@ -112,13 +149,13 @@ def test_adjusted_plan_keeps_first_backup_and_only_adds_trustworthy_paths(tmp_pa
 
     app.write_text("implemented\n", encoding="utf-8")
     _impl_document(tmp_path, ["src/app.py", "src/helper.py"])
-    rollback.prepare_impl(str(tmp_path), state)
+    with pytest.raises(ValueError, match="没有可信的实施前原内容：src/helper.py"):
+        rollback.prepare_impl(str(tmp_path), state)
     second = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     assert _sha256(first_backup) == first_hash
-    assert set(second["entries"]) == {"src/app.py", "src/helper.py"}
-    helper_backup = manifest_path.parent / second["entries"]["src/helper.py"]["backup_path"]
-    assert helper_backup.read_text(encoding="utf-8") == "old helper\n"
+    assert set(second["entries"]) == {"src/app.py"}
+    assert helper.read_text(encoding="utf-8") == "old helper\n"
 
 
 def test_confirmed_test_inventory_keeps_first_backup(tmp_path):
@@ -179,20 +216,193 @@ def test_impl_reentry_allows_only_unchanged_confirmed_test_files(tmp_path):
 
     app.write_text("implemented\n", encoding="utf-8")
     test_file.write_text("confirmed test\n", encoding="utf-8")
+    _append_impl_record(tmp_path, ["src/app.py"])
     rollback.finalize_test_code_changes(str(tmp_path), state)
     rollback.accept_test_code_inventory(str(tmp_path), state)
 
     valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
     assert valid is True, detail
     assert "tests/test_app.py" in detail
-    assert "已确认且返回实施后未再变" in detail
+    assert "测试代码阶段登记且未再变化的非实施计划文件" in detail
+    assert rollback.implementation_changed_paths_since_prepare(
+        str(tmp_path),
+        json.loads(
+            (tmp_path / state.rollback.manifest_path).read_text(encoding="utf-8")
+        ),
+    ) == ["src/app.py"]
 
     test_file.write_text("changed after return\n", encoding="utf-8")
     valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
 
     assert valid is False
-    assert "实施计划外的文件变化" in detail
+    assert "实际修改但不在实施计划" in detail
     assert "tests/test_app.py" in detail
+
+
+def test_impl_reentry_ignores_unchanged_unplanned_test_baseline_before_confirmation(
+    tmp_path,
+):
+    """测试代码尚未确认时，未变的非实施入口文件不能被倒算成实施新增。"""
+    app = tmp_path / "src" / "app.py"
+    test_entry = tmp_path / "scripts" / "test_all.sh"
+    _write(app, "old app\n")
+    _write(test_entry, "#!/bin/sh\nexit 0\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    project_mod.register_test_entry(
+        str(tmp_path),
+        {"default": ["scripts/test_all.sh"]},
+    )
+    rollback.prepare_impl(str(tmp_path), state)
+    rollback.prepare_test_code_baseline(str(tmp_path), state)
+    manifest_path = tmp_path / state.rollback.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("core_registered_paths")
+    rollback._write_manifest(str(tmp_path), state, manifest)
+
+    app.write_text("implemented\n", encoding="utf-8")
+    _append_impl_record(tmp_path, ["src/app.py"])
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is True, detail
+    assert "scripts/test_all.sh" in detail
+    assert "测试代码阶段登记且未再变化的非实施计划文件" in detail
+
+    test_entry.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is False
+    assert "实际修改但不在实施计划" in detail
+    assert "scripts/test_all.sh" in detail
+
+
+def test_planned_actual_and_recorded_implementation_paths_must_match(tmp_path):
+    """计划、真实差异和实施记录的四类不一致必须一次全部报告。"""
+    planned_only = tmp_path / "src" / "planned_only.py"
+    actual_unrecorded = tmp_path / "src" / "actual_unrecorded.py"
+    recorded_without_change = tmp_path / "src" / "recorded_without_change.py"
+    outside_plan = tmp_path / "src" / "outside_plan.py"
+    for path in (planned_only, actual_unrecorded, recorded_without_change, outside_plan):
+        _write(path, "before\n")
+    state = _impl_state(
+        tmp_path,
+        [
+            "src/planned_only.py",
+            "src/actual_unrecorded.py",
+            "src/recorded_without_change.py",
+        ],
+    )
+    _write(
+        tmp_path / "spec" / "代码架构设计.md",
+        """## 6. 各产品功能的代码设计
+
+| 图中步骤 | 代码位置 |
+|---|---|
+| 计划外核心路径 | `src/outside_plan.py::run` |
+""",
+    )
+    rollback.prepare_impl(str(tmp_path), state)
+    actual_unrecorded.write_text("after\n", encoding="utf-8")
+    outside_plan.write_text("after\n", encoding="utf-8")
+    _append_impl_record(
+        tmp_path,
+        ["src/recorded_without_change.py", "src/outside_plan.py"],
+    )
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is False
+    assert "计划列出但实际未修改" in detail
+    assert "实际修改但不在实施计划" in detail
+    assert "实际修改但实施后记录未列出" in detail
+    assert "实施后记录列出但没有真实差异" in detail
+
+
+def test_legacy_manifest_does_not_invent_changes_for_unrecorded_core_paths(tmp_path):
+    """旧清单没有采样的路径不得因新版登记范围扩大而被倒推成新增。"""
+    app = tmp_path / "src" / "app.py"
+    architecture_only = tmp_path / "src" / "architecture_only.py"
+    _write(app, "before\n")
+    _write(architecture_only, "unchanged\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    _write(
+        tmp_path / "spec" / "代码架构设计.md",
+        """## 6. 各产品功能的代码设计
+
+| 图中步骤 | 代码位置 |
+|---|---|
+| 已登记但不在本轮计划 | `src/architecture_only.py::run` |
+""",
+    )
+    rollback.prepare_impl(str(tmp_path), state)
+    manifest_path = tmp_path / state.rollback.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert "src/architecture_only.py" in manifest["core_registered_paths"]
+
+    legacy_manifest = json.loads(json.dumps(manifest))
+    legacy_manifest.pop("core_registered_paths")
+    legacy_manifest["initial_inventory"].pop("src/architecture_only.py")
+
+    assert rollback.changed_paths_since_prepare(str(tmp_path), legacy_manifest) == []
+
+    app.write_text("after\n", encoding="utf-8")
+    assert rollback.changed_paths_since_prepare(str(tmp_path), legacy_manifest) == [
+        "src/app.py"
+    ]
+
+
+def test_existing_implementation_checks_plan_record_and_real_files(tmp_path):
+    """既有代码例外只核对计划、记录和当前文件，不声称比较基线差异。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "already implemented\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    _append_impl_record(tmp_path, ["src/app.py"])
+
+    valid, detail = rollback.validate_existing_implementation_paths(str(tmp_path), state)
+
+    assert valid is True, detail
+    assert "没有声称验证基线后的真实差异" in detail
+
+    app.unlink()
+    valid, detail = rollback.validate_existing_implementation_paths(str(tmp_path), state)
+    assert valid is False
+    assert "不是当前项目内普通文件" in detail
+
+
+def test_implementation_record_reports_every_invalid_row_fact_at_once(tmp_path):
+    """同一记录行中的假位置、占位内容和错误 AC 必须一次全部报告。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "def run():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(app, "def run():\n    return 'after'\n")
+    document = tmp_path / "impl" / "上传文件_实施记录.md"
+    document.write_text(
+        document.read_text(encoding="utf-8")
+        + """
+
+## 3. 实施后记录
+
+### 3.1 实际代码修改
+
+| 文件 | 类、函数或配置项 | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 对应验收条件 |
+| --- | --- | --- | --- | --- |
+| src/app.py | `missing_symbol` | TODO | 符合预期 | AC-99 |
+""",
+        encoding="utf-8",
+    )
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is False
+    assert "impl/上传文件_实施记录.md" in detail
+    assert "missing_symbol" in detail
+    assert "代码位置无法在当前文件中定位" in detail
+    assert "实际修改的代码逻辑使用占位内容" in detail
+    assert "数据、状态或输出的实际变化使用占位内容" in detail
+    assert "AC-99" in detail
+    assert "验收计划中不存在" in detail
 
 
 def test_tampered_backup_blocks_restore_before_project_change(tmp_path):

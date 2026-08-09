@@ -44,13 +44,47 @@ def _table_cells(line: str) -> list[str] | None:
     return cells
 
 
-def _link_path(cell: str, allowed_text: set[str] | None = None) -> str:
+PENDING_HEADERS = {"主题验收结果", "验收结果", "测试计划", "测试结果"}
+
+
+def _link_path(
+    cell: str,
+    allowed_text: set[str] | None = None,
+    *,
+    allow_pending: bool = False,
+) -> tuple[str, bool]:
     if allowed_text is not None and cell.strip() in allowed_text:
-        return cell.strip()
+        return cell.strip(), False
     match = re.fullmatch(r"\[[^\]]+\]\(([^)]+)\)", cell.strip())
-    if match is None:
-        raise ValueError(f"索引单元格不是单一 Markdown 链接: {cell}")
-    return match.group(1).strip()
+    if match is not None:
+        return match.group(1).strip(), False
+    pending = re.fullmatch(r"`([^`]+)`\s*[（(]待生成[）)]", cell.strip())
+    if pending is not None and allow_pending:
+        return pending.group(1).strip(), True
+    raise ValueError(
+        "索引单元格必须是单一真实 Markdown 链接"
+        + ("，或“`路径`（待生成）”" if allow_pending else "")
+        + f"：{cell}"
+    )
+
+
+def _expected_topic_path(relative_path: str, header: str, file_key: str) -> str | None:
+    builders = {
+        "验收计划": artifact_paths_mod.topic_acceptance_plan,
+        "主题验收结果": artifact_paths_mod.topic_acceptance_result,
+        "验收结果": artifact_paths_mod.topic_acceptance_result,
+        "测试计划": artifact_paths_mod.topic_test_plan,
+        "测试结果": artifact_paths_mod.topic_test_result,
+        "实施文档": artifact_paths_mod.topic_impl_doc,
+        "实施记录": artifact_paths_mod.topic_impl_doc,
+    }
+    builder = builders.get(header)
+    if builder is None:
+        return None
+    source_dir = os.path.dirname(relative_path) or "."
+    target = builder(file_key)
+    value = os.path.relpath(target, source_dir).replace(os.sep, "/")
+    return value if value.startswith("../") else f"./{value}"
 
 
 def _prerequisites(cell: str) -> tuple[str, ...]:
@@ -90,60 +124,116 @@ def read_topic_index(
     if header_index is None:
         raise ValueError(f"{relative_path} 缺少主题关系表")
 
+    headers = _table_cells(lines[header_index])
+    if headers is None:
+        raise ValueError(f"{relative_path} 缺少可读取的主题关系表头")
+
     relations: list[TopicRelation] = []
-    for line in lines[header_index + 1 :]:
+    row_errors: list[str] = []
+    project = load_project(project_root)
+    for source_line, line in enumerate(
+        lines[header_index + 1 :],
+        start=header_index + 2,
+    ):
         cells = _table_cells(line)
         if cells is None:
             continue
-        headers = _table_cells(lines[header_index])
-        if headers is None or len(cells) != len(headers):
-            raise ValueError(f"{relative_path} 主题关系表列数与表头不一致")
+        location = f"{relative_path} 当前工作流章节第 {source_line} 行"
+        if len(cells) != len(headers):
+            row_errors.append(
+                f"{location}列数与表头不一致：预期 {len(headers)} 列，实际 {len(cells)} 列"
+            )
+            continue
+
+        order: int | None = None
         try:
             order = int(cells[0])
-        except ValueError as exc:
-            raise ValueError(f"{relative_path} 展示顺序必须是整数: {cells[0]}") from exc
+        except ValueError:
+            row_errors.append(f"{location}展示顺序必须是整数：{cells[0]}")
 
-        allowed_values = allowed_text_values or {}
-        link_cells = {
-            header: _link_path(cells[index], allowed_values.get(header))
-            for index, header in enumerate(headers[3:], start=3)
-        }
-        plan_path = link_cells.get("验收计划")
-        if plan_path is None:
-            raise ValueError(f"{relative_path} 缺少验收计划链接列")
-        # 验收主题以显示名称列为准；文件标识只用于核对链接路径，
-        # 不再从文件名反推业务名称（显示名称与文件标识分离）。
         topic = cells[1].strip()
         if not topic:
-            raise ValueError(f"{relative_path} 验收主题不能为空")
-        project = load_project(project_root)
-        expected_key = artifact_paths_mod.resolve_key_for(project, "topic", topic)
-        expected_plan_name = os.path.basename(
-            artifact_paths_mod.topic_acceptance_plan(expected_key)
-        )
-        if os.path.basename(plan_path) != expected_plan_name:
-            raise ValueError(
-                f"{relative_path} 主题“{topic}”的验收计划链接应指向 {expected_plan_name}，"
-                f"实际是 {plan_path}"
+            row_errors.append(f"{location}验收主题不能为空")
+
+        prerequisites: tuple[str, ...] | None = None
+        try:
+            prerequisites = _prerequisites(cells[2])
+        except ValueError as exc:
+            row_errors.append(f"{location}{exc}")
+
+        allowed_values = allowed_text_values or {}
+        parsed_cells: dict[str, tuple[str, bool]] = {}
+        for index, header in enumerate(headers[3:], start=3):
+            try:
+                parsed_cells[header] = _link_path(
+                    cells[index],
+                    allowed_values.get(header),
+                    allow_pending=header in PENDING_HEADERS,
+                )
+            except ValueError as exc:
+                row_errors.append(f"{location}“{header}”列：{exc}")
+        link_cells = {header: parsed[0] for header, parsed in parsed_cells.items()}
+        plan_path = link_cells.get("验收计划")
+        if plan_path is None:
+            row_errors.append(f"{location}缺少可解析的验收计划链接")
+        # 验收主题以显示名称列为准；文件标识只用于核对链接路径，
+        # 不再从文件名反推业务名称（显示名称与文件标识分离）。
+        if topic:
+            expected_key = artifact_paths_mod.resolve_key_for(project, "topic", topic)
+            for header, (actual_path, is_pending) in parsed_cells.items():
+                if actual_path in allowed_values.get(header, set()):
+                    continue
+                expected_path = _expected_topic_path(relative_path, header, expected_key)
+                if expected_path is not None and actual_path != expected_path:
+                    row_errors.append(
+                        f"{location}主题“{topic}”的“{header}”应指向 {expected_path}，"
+                        f"实际是 {actual_path}"
+                    )
+                if header in PENDING_HEADERS and expected_path is not None:
+                    target = os.path.normpath(
+                        os.path.join(os.path.dirname(full_path), actual_path)
+                    )
+                    if is_pending and os.path.isfile(target):
+                        row_errors.append(
+                            f"{location}主题“{topic}”的“{header}”目标已经存在，不能标记待生成"
+                        )
+
+        if (
+            order is not None
+            and topic
+            and prerequisites is not None
+            and len(parsed_cells) == len(headers[3:])
+        ):
+            relations.append(
+                TopicRelation(
+                    order=order,
+                    topic=topic,
+                    prerequisites=prerequisites,
+                    links=link_cells,
+                )
             )
-        relations.append(
-            TopicRelation(
-                order=order,
-                topic=topic,
-                prerequisites=_prerequisites(cells[2]),
-                links=link_cells,
+
+    if row_errors:
+        row_errors.append("主题关系图：未检查：存在无法完整解析的数据行")
+        raise ValueError(
+            "\n".join(
+                f"{index}. {error}"
+                for index, error in enumerate(dict.fromkeys(row_errors), start=1)
             )
         )
 
     if not relations:
         raise ValueError(f"{relative_path} 主题关系表没有数据行")
 
+    errors: list[str] = []
     topics = [relation.topic for relation in relations]
     if len(topics) != len(set(topics)):
-        raise ValueError(f"{relative_path} 存在重复验收主题")
+        duplicates = sorted({topic for topic in topics if topics.count(topic) > 1})
+        errors.append(f"{relative_path} 存在重复验收主题：{duplicates}")
     orders = [relation.order for relation in relations]
     if len(orders) != len(set(orders)):
-        raise ValueError(f"{relative_path} 展示顺序不能重复")
+        duplicates = sorted({order for order in orders if orders.count(order) > 1})
+        errors.append(f"{relative_path} 展示顺序不能重复：{duplicates}")
 
     known = set(topics)
     order_by_topic = {relation.topic: relation.order for relation in relations}
@@ -151,32 +241,42 @@ def read_topic_index(
     for relation in relations:
         for prerequisite in relation.prerequisites:
             if prerequisite not in known:
-                raise ValueError(
+                errors.append(
                     f"{relative_path} 主题“{relation.topic}”引用了不存在的前置主题“{prerequisite}”"
                 )
+                continue
             if prerequisite == relation.topic:
-                raise ValueError(f"{relative_path} 主题“{relation.topic}”不能依赖自己")
+                errors.append(f"{relative_path} 主题“{relation.topic}”不能依赖自己")
             if order_by_topic[prerequisite] >= relation.order:
-                raise ValueError(
+                errors.append(
                     f"{relative_path} 主题“{relation.topic}”的前置主题“{prerequisite}”必须排在前面"
                 )
 
     visiting: set[str] = set()
     visited: set[str] = set()
 
-    def visit(topic: str) -> None:
+    def visit(topic: str) -> bool:
         if topic in visiting:
-            raise ValueError(f"{relative_path} 的主题前置关系存在循环")
+            return False
         if topic in visited:
-            return
+            return True
         visiting.add(topic)
         for prerequisite in dependencies[topic]:
-            visit(prerequisite)
+            if prerequisite in dependencies and not visit(prerequisite):
+                return False
         visiting.remove(topic)
         visited.add(topic)
+        return True
 
-    for topic in topics:
-        visit(topic)
+    if not all(visit(topic) for topic in topics):
+        errors.append(f"{relative_path} 的主题前置关系存在循环")
+    if errors:
+        raise ValueError(
+            "\n".join(
+                f"{index}. {error}"
+                for index, error in enumerate(dict.fromkeys(errors), start=1)
+            )
+        )
     return relations
 
 

@@ -1,10 +1,14 @@
 from pathlib import Path
 
+import pytest
+
 from workflow_loop.project import create_project
 from workflow_loop.state import StageState, WorkflowState, save_state
 from workflow_loop.stages.stages import (
     AcceptancePlanStage,
     ImplStage,
+    ReproduceStage,
+    ReviseCodeDesignStage,
     SpikeStage,
     SpecStage,
     TestCodeStage,
@@ -20,6 +24,34 @@ PLAN_TOPIC = "验收测试和实施计划按同一主题完整追踪"
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def test_stage_prerequisite_failures_list_all_independent_and_unchecked_items(tmp_path):
+    """缺少多个前置事实时，阶段门禁一次列全并标出不能继续的检查。"""
+    cases = [
+        (
+            SpikeStage(),
+            ("工作流状态", "spec/穿刺清单.md 不存在", "穿刺清单和结论：未检查"),
+        ),
+        (
+            ReproduceStage(),
+            ("bug/ 目录不存在", "bug/索引.md 不存在", "缺陷记录内容：未检查"),
+        ),
+        (
+            ReviseCodeDesignStage(),
+            ("spec/代码架构设计.md 不存在", "本阶段修改范围"),
+        ),
+        (
+            TestExecutionStage(),
+            ("工作流状态", "测试代码确认哈希：未检查", "需求交付追踪关系：未检查"),
+        ),
+    ]
+
+    for stage, expected_parts in cases:
+        ok, detail = stage.code_validate(str(tmp_path))
+        assert ok is False
+        for expected in expected_parts:
+            assert expected in detail
 
 
 def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) -> WorkflowState:
@@ -40,7 +72,7 @@ def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) ->
 
 | 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
 | --- | --- | --- | --- | --- |
-| 1 | 上传文件 | 无 | [验收计划](./上传文件_验收计划.md) | [验收结果](./上传文件_验收结果.md) |
+| 1 | 上传文件 | 无 | [验收计划](./上传文件_验收计划.md) | `./上传文件_验收结果.md`（待生成） |
 """,
     )
     expected_result = "" if missing_expected_result else "- 预期结果：文件被保存并返回明确结果。\n"
@@ -65,10 +97,16 @@ def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) ->
 
 ## 4. 验收条件
 
+<a id="ac-01"></a>
 ### AC-01：上传完成
 
+- 开始前状态：用户已进入上传界面且目标文件存在。
+- 触发动作：用户选择有效文件并提交。
+- 可检查结果：目标文件被保存，界面显示成功结果。
+- 通过标准：保存后的文件可读取且内容与输入一致。
+- 不通过标准：文件缺失、内容不一致或界面没有成功结果。
 - 条件与触发：用户选择有效文件并提交。
-{expected_result}- 产品设计依据：[上传功能](../spec/功能_上传文件.md)
+{expected_result}- 产品设计依据：[上传功能](../spec/功能_上传文件.md)，第 4 章 R1。
 
 ## 5. 完成判定
 
@@ -99,25 +137,14 @@ def _impl_fixture(root: Path) -> WorkflowState:
     state.current_stage = "impl"
     state.stages["impl"] = StageState(status="in_progress")
     _write(
-        root / "qa" / "索引.md",
-        """# 测试计划索引
-
-## wf
-
-| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 上传文件 | 无 | [验收计划](../acceptance/上传文件_验收计划.md) | [测试计划](./上传文件_测试计划.md) | [测试结果](./上传文件_测试结果.md) |
-""",
-    )
-    _write(
         root / "impl" / "索引.md",
         """# 实施索引
 
 ## wf
 
-| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 实施文档 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 上传文件 | 无 | [验收计划](../acceptance/上传文件_验收计划.md) | [测试计划](../qa/上传文件_测试计划.md) | [实施文档](./上传文件_实施记录.md) |
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 实施文档 |
+| --- | --- | --- | --- | --- |
+| 1 | 上传文件 | 无 | [验收计划](../acceptance/上传文件_验收计划.md) | [实施文档](./上传文件_实施记录.md) |
 """,
     )
     _write(
@@ -129,7 +156,7 @@ def _impl_fixture(root: Path) -> WorkflowState:
 
 ## 1. 实施依据
 
-- AC-01；TC-01。
+- AC-01。
 
 ## 2. 实施前计划
 
@@ -154,7 +181,6 @@ def _impl_fixture(root: Path) -> WorkflowState:
 ## 4. 上下游文档
 
 - [验收计划](../acceptance/上传文件_验收计划.md)
-- [测试计划](../qa/上传文件_测试计划.md)
 """,
     )
     state.stages["impl"].code_baseline_hash = compute_non_test_code_snapshot_hash(str(root))
@@ -228,6 +254,31 @@ def test_spec_stage_rejects_missing_linked_feature_document(tmp_path):
     assert "链接的功能文档不存在" in detail
 
 
+def test_spec_stage_reports_all_independent_document_errors_once(tmp_path):
+    """同一阶段的两个独立文档问题必须一次列出，不能首错即停。"""
+    create_project(str(tmp_path))
+    save_state(
+        str(tmp_path),
+        WorkflowState(
+            workflow_id="wf",
+            intent="product_change",
+            current_stage="spec",
+            stages={"spec": StageState(status="in_progress")},
+        ),
+    )
+    _write(
+        tmp_path / "spec" / "产品总说明.md",
+        "[缺失功能](./功能_缺失.md)\n[标题错误](./功能_标题错误.md)\n",
+    )
+    _write(tmp_path / "spec" / "功能_标题错误.md", "# 标题错误\n")
+
+    ok, detail = SpecStage().code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "产品总说明链接的功能文档不存在: ['spec/功能_缺失.md']" in detail
+    assert "spec/功能_标题错误.md 的一级标题必须是“# 【功能】<功能名称>”" in detail
+
+
 def test_acceptance_plan_requires_complete_judgable_fields(tmp_path):
     """Workflow-Test
     主题：验收测试和实施计划按同一主题完整追踪
@@ -247,7 +298,46 @@ def test_acceptance_plan_requires_complete_judgable_fields(tmp_path):
     _acceptance_fixture(broken, missing_expected_result=True)
     ok, detail = AcceptancePlanStage().code_validate(str(broken))
     assert ok is False
-    assert "缺少具体“预期结果”" in detail
+    assert "AC-01“预期结果”字段：缺少具体内容" in detail
+
+
+@pytest.mark.parametrize(
+    ("label", "valid_value"),
+    [
+        ("开始前状态", "用户已进入上传界面且目标文件存在。"),
+        ("触发动作", "用户选择有效文件并提交。"),
+        ("可检查结果", "目标文件被保存，界面显示成功结果。"),
+        ("通过标准", "保存后的文件可读取且内容与输入一致。"),
+        ("不通过标准", "文件缺失、内容不一致或界面没有成功结果。"),
+        ("产品设计依据", "[上传功能](../spec/功能_上传文件.md)，第 4 章 R1。"),
+    ],
+)
+def test_acceptance_plan_rejects_each_missing_or_placeholder_outcome_field(
+    tmp_path,
+    label,
+    valid_value,
+):
+    """六个判断字段任一缺失或写占位词时，都必须准确指出主题和字段。"""
+    for case_name, replacement, expected in (
+        ("missing", "", "缺少具体内容"),
+        ("placeholder", "待补充", "是占位词"),
+    ):
+        root = tmp_path / f"{label}-{case_name}"
+        _acceptance_fixture(root)
+        plan = root / "acceptance" / "上传文件_验收计划.md"
+        content = plan.read_text(encoding="utf-8")
+        content = content.replace(
+            f"- {label}：{valid_value}",
+            f"- {label}：{replacement}",
+        )
+        plan.write_text(content, encoding="utf-8")
+
+        ok, detail = AcceptancePlanStage().code_validate(str(root))
+
+        assert ok is False
+        assert "acceptance/上传文件_验收计划.md" in detail
+        assert f"AC-01“{label}”字段" in detail
+        assert expected in detail
 
 
 def test_impl_discussion_requires_every_topic_plan_and_no_unresolved_question(tmp_path):
@@ -275,6 +365,114 @@ def test_impl_discussion_requires_every_topic_plan_and_no_unresolved_question(tm
     ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
     assert ok is False
     assert "仍有未决问题" in detail
+
+
+def test_impl_gate_prefers_real_changes_over_existing_code_marker(tmp_path, monkeypatch):
+    """基线后已有真实修改时，既有代码标记不能绕过三方文件集合核对。"""
+    create_project(str(tmp_path))
+    state = WorkflowState(
+        workflow_id="wf",
+        intent="product_change",
+        current_stage="impl",
+        topics=["上传文件"],
+        stage_path=["impl"],
+        stages={
+            "impl": StageState(
+                status="in_progress",
+                code_baseline_hash="current-hash",
+                existing_code_accepted_hash="current-hash",
+            )
+        },
+    )
+    save_state(str(tmp_path), state)
+    stage = ImplStage()
+    monkeypatch.setattr(
+        stage,
+        "validate_implementation_records",
+        lambda _root, _state: (True, "实施文档完整", ["上传文件"]),
+    )
+    monkeypatch.setattr(
+        "workflow_loop.stages.stages.rollback_mod.validate_prepared",
+        lambda _root, _state: (True, "回退依据完整", {"prepares": [{}]}),
+    )
+    monkeypatch.setattr(
+        "workflow_loop.stages.stages.rollback_mod.implementation_changed_paths_since_prepare",
+        lambda _root, _manifest: ["src/upload.py"],
+    )
+    monkeypatch.setattr(
+        "workflow_loop.stages.stages.rollback_mod.validate_implementation_changes",
+        lambda _root, _state: (
+            True,
+            "实施前计划、基线后真实差异和实施后记录三方文件集合完全一致：['src/upload.py']",
+        ),
+    )
+
+    def existing_code_must_not_be_used(*_args, **_kwargs):
+        raise AssertionError("有真实修改时不得进入既有代码例外")
+
+    monkeypatch.setattr(
+        "workflow_loop.stages.stages.rollback_mod.validate_existing_implementation_paths",
+        existing_code_must_not_be_used,
+    )
+
+    ok, detail = stage.code_validate(str(tmp_path))
+
+    assert ok is True, detail
+    assert "三方文件集合完全一致" in detail
+    assert "既有实现例外" not in detail
+
+
+def test_impl_gate_reports_real_change_mismatch_even_with_existing_code_marker(
+    tmp_path,
+    monkeypatch,
+):
+    """既有代码标记存在时，四类真实差异仍必须完整展示。"""
+    create_project(str(tmp_path))
+    state = WorkflowState(
+        workflow_id="wf",
+        intent="product_change",
+        current_stage="impl",
+        topics=["上传文件"],
+        stage_path=["impl"],
+        stages={
+            "impl": StageState(
+                status="in_progress",
+                code_baseline_hash="current-hash",
+                existing_code_accepted_hash="current-hash",
+            )
+        },
+    )
+    save_state(str(tmp_path), state)
+    stage = ImplStage()
+    monkeypatch.setattr(
+        stage,
+        "validate_implementation_records",
+        lambda _root, _state: (True, "实施文档完整", ["上传文件"]),
+    )
+    monkeypatch.setattr(
+        "workflow_loop.stages.stages.rollback_mod.validate_prepared",
+        lambda _root, _state: (True, "回退依据完整", {"prepares": [{}]}),
+    )
+    monkeypatch.setattr(
+        "workflow_loop.stages.stages.rollback_mod.implementation_changed_paths_since_prepare",
+        lambda _root, _manifest: ["src/unplanned.py", "src/unrecorded.py"],
+    )
+    monkeypatch.setattr(
+        "workflow_loop.stages.stages.rollback_mod.validate_implementation_changes",
+        lambda _root, _state: (
+            False,
+            "1. 实际修改但不在实施计划：['src/unplanned.py']\n"
+            "2. 实际修改但实施后记录未列出：['src/unrecorded.py']",
+        ),
+    )
+
+    ok, detail = stage.code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "实际修改但不在实施计划" in detail
+    assert "实际修改但实施后记录未列出" in detail
+    assert "既有代码例外不适用" in detail
+    assert "src/unplanned.py" in detail and "src/unrecorded.py" in detail
 
 
 def test_stage_artifact_entries_use_confirmed_chinese_formal_paths():

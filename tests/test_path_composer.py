@@ -15,7 +15,7 @@ def test_from_scratch_path(tmp_path):
     # 验证阶段顺序：先实施，再写测试代码、执行测试、主题验收，最后全量回归和整体验收
     assert names == [
         "spec", "code_design", "spike", "acceptance_plan",
-        "test_plan", "impl", "test_code", "test_execution", "topic_acceptance",
+        "impl", "test_plan", "test_code", "test_execution", "topic_acceptance",
         "regression_test", "overall_acceptance", "update_code_design",
     ]
 
@@ -72,9 +72,9 @@ def test_bugfix_with_uninitialized(tmp_path):
     assert names[0] == "project_design_init"
     # 验证第 2 个 stage 是 reproduce（bugfix 特有：先复现）
     assert names[1] == "reproduce"
-    # 验证 reproduce 后先进入可选 spike，再按验收计划、测试计划、修复实施计划推进
+    # 验证 reproduce 后先进入可选 spike，再按验收计划、修复实施、测试计划推进
     assert names[2] == "spike"
-    assert names[3:6] == ["acceptance_plan", "test_plan", "impl"]
+    assert names[3:6] == ["acceptance_plan", "impl", "test_plan"]
     # 验证末段 stage 是 update_code_design
     assert names[-1] == "update_code_design"
     # 验证总 stage 数为 12
@@ -95,9 +95,9 @@ def test_bugfix_with_initialized(tmp_path):
     assert "project_design_init" not in names
     # 验证第 1 个 stage 是 reproduce
     assert names[0] == "reproduce"
-    # 验证第 2 个 stage 是 spike，之后先验收计划、再测试计划、再修复实施计划
+    # 验证第 2 个 stage 是 spike，之后先验收计划、再修复实施、再测试计划
     assert names[1] == "spike"
-    assert names[2:5] == ["acceptance_plan", "test_plan", "impl"]
+    assert names[2:5] == ["acceptance_plan", "impl", "test_plan"]
     # 验证总 stage 数为 11
     assert len(names) == 11
 

@@ -36,6 +36,9 @@ _REGRESSION_CONCLUSION_RE = re.compile(
     r"最终全量回归：通过(?:（机器记录 [^）]+）)?"
 )
 _OVERALL_ACCEPTANCE_CONCLUSION_RE = re.compile(r"整体验收：用户已确认")
+_EXPLICIT_ANCHOR_LINE_PATTERN = (
+    r"<a\s+id=(?:\"[^\"]+\"|'[^']+')\s*>\s*</a>[ \t]*\r?\n"
+)
 
 
 def _trace_relative_path(project_root: str) -> str:
@@ -45,7 +48,8 @@ def _trace_relative_path(project_root: str) -> str:
 
 def _workflow_heading_pattern(workflow_id: str) -> re.Pattern[str]:
     return re.compile(
-        rf"^##\s+{re.escape(workflow_id)}\s*$\n(.*?)(?=^##\s+|\Z)",
+        rf"^##[ \t]+{re.escape(workflow_id)}[ \t]*\r?\n"
+        rf"(.*?)(?=^(?:{_EXPLICIT_ANCHOR_LINE_PATTERN})?##[ \t]+|\Z)",
         re.MULTILINE | re.DOTALL,
     )
 
@@ -191,30 +195,53 @@ def validate_structure(
         if len(cells) == 9 and cells[0] != "需求来源与设计依据":
             rows.append(cells)
 
+    errors: list[str] = []
     if not header_found:
-        return False, f"{TRACEABILITY_PATH} 当前工作流章节缺少九列表头"
+        errors.append(f"{TRACEABILITY_PATH} 当前工作流章节缺少九列表头")
     if not rows:
-        return False, f"{TRACEABILITY_PATH} 当前工作流章节没有九列交付记录"
+        errors.append(f"{TRACEABILITY_PATH} 当前工作流章节没有九列交付记录")
 
     expected_topics = topics or []
     for topic in expected_topics:
+        if not rows:
+            errors.append(
+                f"{TRACEABILITY_PATH} 主题“{topic}”未检查：当前工作流章节没有九列交付记录"
+            )
+            continue
         markers = _topic_markers(project_root, topic)
         topic_rows = [
             row for row in rows if any(marker in row[1] for marker in markers)
         ]
         if not topic_rows:
-            return False, f"{TRACEABILITY_PATH} 缺少主题“{topic}”的交付记录"
+            errors.append(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的交付记录")
+            continue
         if any(not all(cell.strip() for cell in row) for row in topic_rows):
-            return False, f"{TRACEABILITY_PATH} 主题“{topic}”存在空单元格"
+            errors.append(f"{TRACEABILITY_PATH} 主题“{topic}”存在空单元格")
         if require_initial_statuses:
             expected = ["待制定", "待制定", "待执行", "待执行", "待执行", "待更新"]
-            for row in topic_rows:
+            for row_index, row in enumerate(topic_rows, start=1):
                 if row[3:] != expected:
-                    return False, f"{TRACEABILITY_PATH} 主题“{topic}”尚未保持初始状态: {expected}"
+                    errors.append(
+                        f"{TRACEABILITY_PATH} 主题“{topic}”第 {row_index} 条记录尚未保持初始状态："
+                        f"预期 {expected}，实际 {row[3:]}"
+                    )
         if require_completed_updates:
-            for row in topic_rows:
+            for row_index, row in enumerate(topic_rows, start=1):
                 if any(value in _INITIAL_VALUES for value in row[3:]):
-                    return False, f"{TRACEABILITY_PATH} 主题“{topic}”仍有未更新的阶段列"
+                    pending = [
+                        TRACEABILITY_HEADERS[column_index]
+                        for column_index, value in enumerate(row)
+                        if column_index >= 3 and value in _INITIAL_VALUES
+                    ]
+                    errors.append(
+                        f"{TRACEABILITY_PATH} 主题“{topic}”第 {row_index} 条记录仍有未更新的阶段列：{pending}"
+                    )
+
+    if errors:
+        unique = list(dict.fromkeys(errors))
+        return False, "\n".join(
+            f"{index}. {error}" for index, error in enumerate(unique, start=1)
+        )
 
     return True, f"{TRACEABILITY_PATH} 当前工作流包含 {len(rows)} 条九列交付记录"
 
@@ -228,19 +255,21 @@ def _update_stage_rows(
 ) -> str:
     content, relative_path = _read_traceability(project_root)
     match = _workflow_match(content, workflow_id)
-    section_lines = match.group(1).splitlines()
+    section_lines = match.group(1).splitlines(keepends=True)
     changed = 0
 
     for topic in topics:
-        rows = _topic_rows(project_root, "\n".join(section_lines), topic)
+        rows = _topic_rows(project_root, "".join(section_lines), topic)
         if not rows:
             raise ValueError(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的九列记录")
         for line_index, cells in rows:
             cells[column_index] = value_factory(topic, cells)
-            section_lines[line_index] = _format_table_line(cells)
+            original_line = section_lines[line_index]
+            line_ending = original_line[len(original_line.rstrip("\r\n")) :]
+            section_lines[line_index] = _format_table_line(cells) + line_ending
             changed += 1
 
-    updated_section = "\n".join(section_lines)
+    updated_section = "".join(section_lines)
     updated = _replace_workflow_section(content, workflow_id, updated_section)
     if updated != content:
         _write_traceability(project_root, relative_path, updated)
@@ -255,15 +284,17 @@ def reset_after_upstream_invalidation(
 ) -> str:
     """清理当前工作流中已经失效的下游追踪列。
 
-    验收计划或测试计划变化后，原来的下游链接不能继续表示有效结果。
+    验收计划、实施或测试计划变化后，原来的下游链接不能继续表示有效结果。
     这里只改当前工作流，不改旧工作流；后续阶段重新确认时会再写回自己的列。
     """
 
-    reset_from = {
-        "acceptance_plan": 0,
-        "test_plan": 0,
+    reset_columns = {
+        "acceptance_plan": {3, 4, 5, 6, 7, 8},
+        "impl": {3, 4, 5, 6, 7, 8},
+        # 测试计划后置：测试计划失效时，已经确认的实施计划和实施记录仍有效。
+        "test_plan": {3, 6, 7, 8},
     }.get(stage_name)
-    if reset_from is None or not topics:
+    if reset_columns is None or not topics:
         return f"{TRACEABILITY_PATH} 无需重置阶段 {stage_name} 的下游列"
 
     if not (Path(project_root) / _trace_relative_path(project_root)).is_file():
@@ -277,7 +308,7 @@ def reset_after_upstream_invalidation(
     for topic in topics:
         rows = _topic_rows(project_root, "\n".join(section_lines), topic)
         for line_index, cells in rows:
-            for column_index in range(3 + reset_from, 9):
+            for column_index in sorted(reset_columns):
                 cells[column_index] = _INITIAL_ROW_VALUES[column_index - 3]
             section_lines[line_index] = _format_table_line(cells)
             changed += 1
@@ -301,8 +332,9 @@ _RETURN_RESET_COLUMNS: dict[str, dict[int, str]] = {
     "reproduce": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
     "spike": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
     "acceptance_plan": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "test_plan": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "impl": {4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
+    "impl": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
+    # 测试计划位于实施之后，返回测试计划时保留实施计划和实施记录两列。
+    "test_plan": {3: "待制定", 6: "待执行", 7: "待执行", 8: "待更新"},
     "test_code": {6: "待执行", 7: "待执行", 8: "待更新"},
     "test_execution": {6: "待执行", 7: "待执行", 8: "待更新"},
     "topic_acceptance": {7: "待执行", 8: "待更新"},

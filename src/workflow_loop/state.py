@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -53,6 +55,15 @@ class TestExecutionRecord:
     output_bytes: int | None = None
     platform: str = ""
     executable: str = ""
+    # 结构化测试报告机器事实；None 表示旧记录没有该项事实，不能继续算成功。
+    report_adapter: str | None = None
+    report_hash: str | None = None
+    report_size: int | None = None
+    executed_count: int | None = None
+    skipped_count: int | None = None
+    failed_count: int | None = None
+    error_count: int | None = None
+    matched_test_entries: list[str] | None = None
 
 
 @dataclass
@@ -65,6 +76,9 @@ class TestTaskState:
     cwd: str = ""
     dependencies: list[str] = field(default_factory=list)
     timeout_seconds: int = 600
+    # 由程序登记的报告适配器和项目内临时报告路径。
+    report_adapter: str | None = None
+    report_path: str | None = None
     status: str = "pending"
     prepared_at: str | None = None
     last_error: str | None = None
@@ -335,6 +349,69 @@ def state_to_dict(state: WorkflowState) -> dict:
     return asdict(state)
 
 
+def execution_task_has_current_success(task: TestTaskState) -> bool:
+    """统一判断测试任务是否有完整、严格且可复用的当前成功事实。"""
+
+    record = task.current_record
+    if task.status != "passed" or record is None:
+        return False
+    integer_facts = (
+        record.report_size,
+        record.executed_count,
+        record.skipped_count,
+        record.failed_count,
+        record.error_count,
+    )
+    if any(type(value) is not int for value in integer_facts):
+        return False
+    if not task.test_entries or len(set(task.test_entries)) != len(task.test_entries):
+        return False
+    matched = record.matched_test_entries
+    return (
+        record.status == "passed"
+        and record.exit_code == 0
+        and record.command == task.command
+        and len(record.test_entries) == len(task.test_entries)
+        and set(record.test_entries) == set(task.test_entries)
+        and task.report_adapter in {"vitest-junit", "pytest-junitxml"}
+        and record.report_adapter == task.report_adapter
+        and bool(task.report_path)
+        and isinstance(record.report_hash, str)
+        and bool(re.fullmatch(r"[0-9a-f]{64}", record.report_hash))
+        and record.report_size > 0
+        and record.executed_count > 0
+        and record.skipped_count == 0
+        and record.failed_count == 0
+        and record.error_count == 0
+        and isinstance(matched, list)
+        and len(matched) == len(task.test_entries)
+        and set(matched) == set(task.test_entries)
+        and record.executed_count + record.skipped_count == len(matched)
+        and bool(record.code_snapshot_hash)
+        and bool(record.test_code_hash)
+    )
+
+
+def compute_test_execution_record_id(
+    record: TestExecutionRecord,
+    topic: str,
+    test_id: str,
+) -> str:
+    """生成覆盖进程、报告、目标和代码事实的稳定机器记录编号。"""
+
+    payload = asdict(record)
+    payload["record_id"] = None
+    encoded = json.dumps(
+        {"topic": topic, "test_id": test_id, "record": payload},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()[:8]
+    compact_time = (record.started_at or "").replace(":", "").replace("-", "")
+    return f"RUN-{compact_time}-{digest}"
+
+
 def _test_execution_record_from_dict(data: dict | None) -> TestExecutionRecord | None:
     if not isinstance(data, dict):
         return None
@@ -360,6 +437,14 @@ def _test_execution_record_from_dict(data: dict | None) -> TestExecutionRecord |
         output_bytes=data.get("output_bytes"),
         platform=data.get("platform", ""),
         executable=data.get("executable", ""),
+        report_adapter=data.get("report_adapter"),
+        report_hash=data.get("report_hash"),
+        report_size=data.get("report_size"),
+        executed_count=data.get("executed_count"),
+        skipped_count=data.get("skipped_count"),
+        failed_count=data.get("failed_count"),
+        error_count=data.get("error_count"),
+        matched_test_entries=data.get("matched_test_entries"),
     )
 
 
@@ -370,6 +455,8 @@ def _test_task_from_dict(data: dict) -> TestTaskState:
         cwd=data.get("cwd", ""),
         dependencies=data.get("dependencies", []),
         timeout_seconds=data.get("timeout_seconds", 600),
+        report_adapter=data.get("report_adapter"),
+        report_path=data.get("report_path"),
         status=data.get("status", "pending"),
         prepared_at=data.get("prepared_at"),
         last_error=data.get("last_error"),

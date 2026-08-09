@@ -10,6 +10,8 @@ from ..artifact_validation import (
     validate_final_regression_state,
     validate_inherited_topic_index,
     validate_overall_acceptance_prerequisites,
+    validate_product_design_documents,
+    validate_project_design_feature_consistency,
     validate_project_design_init_evidence,
     validate_reproduce_documents,
     validate_test_plan_documents,
@@ -27,6 +29,7 @@ from ..state import load_state
 from ..test_mapping import (
     automated_test_items,
     automated_topics,
+    planned_test_source_paths,
     validate_workflow_test_markers,
 )
 from ..topic import (
@@ -37,12 +40,29 @@ from ..topic import (
 )
 from ..verification import (
     compute_code_snapshot_hash,
+    compute_impl_hash,
     compute_non_test_code_snapshot_hash,
     compute_test_code_snapshot_hash,
     get_linked_product_design_paths,
 )
 from .. import rollback as rollback_mod
 from .base import StageStrategy, clean_spike_tmp
+
+
+def _validation_result(errors: list[str], success: str) -> tuple[bool, str]:
+    """把同一阶段可独立判断的问题一次返回，避免门禁首错即停。"""
+    if not errors:
+        return (True, success)
+    unique_errors = list(dict.fromkeys(error.strip() for error in errors if error.strip()))
+    return (False, "\n".join(f"- {error}" for error in unique_errors))
+
+
+def _validator_error(label: str, result: tuple[bool, str], errors: list[str]) -> bool:
+    """记录下游校验结果；返回值表示该校验是否通过。"""
+    ok, detail = result
+    if not ok:
+        errors.append(f"{label}：{detail}")
+    return ok
 
 
 # 产品设计 stage：工作流第一个环节，产出 spec/产品总说明.md + spec/功能_*.md
@@ -68,29 +88,44 @@ class SpecStage(StageStrategy):
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         overview_rel = artifact_paths_mod.PRODUCT_OVERVIEW_DOC
         overview_path = os.path.join(project_root, overview_rel)
-        if not os.path.exists(overview_path):
-            return (False, f"{overview_rel} 不存在")
+        errors: list[str] = []
+        overview_exists = os.path.isfile(overview_path)
+        if not overview_exists:
+            errors.append(f"{overview_rel} 不存在")
         # 当前有效产品功能只以产品总说明仍然链接的功能文档为准
-        linked_paths = [
-            path
-            for path in get_linked_product_design_paths(project_root)
-            if path != overview_rel
-        ]
+        linked_paths = (
+            [
+                path
+                for path in get_linked_product_design_paths(project_root)
+                if path != overview_rel
+            ]
+            if overview_exists
+            else []
+        )
         if not linked_paths:
-            return (False, f"{overview_rel} 没有链接任何 功能_*.md 功能文档")
+            errors.append(
+                f"产品功能链接：{'未检查：产品总说明不存在' if not overview_exists else overview_rel + ' 没有链接任何 功能_*.md 功能文档'}"
+            )
         missing_features = [
             path
             for path in linked_paths
             if not os.path.isfile(os.path.join(project_root, path))
         ]
         if missing_features:
-            return (False, f"产品总说明链接的功能文档不存在: {missing_features}")
+            errors.append(f"产品总说明链接的功能文档不存在: {missing_features}")
         # 功能文档标题保留完整显示名称
         for path in linked_paths:
+            if path in missing_features:
+                continue
             with open(os.path.join(project_root, path), "r", encoding="utf-8") as stream:
                 first_line = stream.readline().strip()
             if not first_line.startswith("# 【功能】") or len(first_line) <= len("# 【功能】"):
-                return (False, f"{path} 的一级标题必须是“# 【功能】<功能名称>”")
+                errors.append(f"{path} 的一级标题必须是“# 【功能】<功能名称>”")
+        _validator_error(
+            "产品文档内容边界",
+            validate_product_design_documents(project_root),
+            errors,
+        )
 
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
@@ -98,25 +133,23 @@ class SpecStage(StageStrategy):
             self.change_tracked_paths(project_root),
         )
         if not changed_ok:
-            return (False, changed_detail)
+            errors.append(f"本阶段修改范围：{changed_detail}")
 
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
-        normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
-        product_changed = overview_rel in normalized_changed
-        feature_changed = any(
-            path.startswith("spec/功能_") for path in normalized_changed
-        )
-        if state.intent == "from_scratch" and (not product_changed or not feature_changed):
-            return (False, "从零创建产品时，产品总说明和至少一份功能文档都必须在本阶段新建")
-        if state.intent == "product_change" and not product_changed:
-            return (
-                False,
-                "修改产品时，产品总说明必须更新并记录本轮变化",
-            )
-        return (
-            True,
+            errors.append("工作流状态：找不到当前工作流状态")
+        elif not changed_ok:
+            errors.append("按需求类型检查：未检查：本阶段修改范围尚未通过")
+        else:
+            normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
+            product_changed = overview_rel in normalized_changed
+            feature_changed = any(path.startswith("spec/功能_") for path in normalized_changed)
+            if state.intent == "from_scratch" and (not product_changed or not feature_changed):
+                errors.append("从零创建产品时，产品总说明和至少一份功能文档都必须在本阶段新建")
+            if state.intent == "product_change" and not product_changed:
+                errors.append("修改产品时，产品总说明必须更新并记录本轮变化")
+        return _validation_result(
+            errors,
             f"产品设计文档存在并且属于本阶段修改: 产品总说明 + {[os.path.basename(p) for p in linked_paths]}",
         )
 
@@ -172,7 +205,29 @@ class SpikeStage(StageStrategy):
         return "Standardized_Repository/spike/spike.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
-        return validate_spike_stage(project_root)
+        errors: list[str] = []
+        state_exists = load_state(project_root) is not None
+        index_exists = os.path.isfile(
+            os.path.join(project_root, artifact_paths_mod.SPIKE_INDEX_DOC)
+        )
+        if not state_exists:
+            errors.append("工作流状态：找不到当前工作流状态")
+        if not index_exists:
+            errors.append(f"{artifact_paths_mod.SPIKE_INDEX_DOC} 不存在")
+        if state_exists and index_exists:
+            _validator_error(
+                "穿刺清单和结论",
+                validate_spike_stage(project_root),
+                errors,
+            )
+        else:
+            reasons = []
+            if not state_exists:
+                reasons.append("找不到当前工作流状态")
+            if not index_exists:
+                reasons.append(f"{artifact_paths_mod.SPIKE_INDEX_DOC} 不存在")
+            errors.append(f"穿刺清单和结论：未检查：{'；'.join(reasons)}")
+        return _validation_result(errors, "穿刺清单、结论和设计同步状态完整")
 
     def on_advance(self, project_root: str) -> list[str]:
         return clean_spike_tmp(project_root)
@@ -208,29 +263,41 @@ class AcceptancePlanStage(StageStrategy):
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         acc_dir = os.path.join(project_root, "acceptance")
-        if not os.path.exists(acc_dir):
-            return (False, "acceptance/ 目录不存在")
+        errors: list[str] = []
+        acc_dir_exists = os.path.isdir(acc_dir)
+        if not acc_dir_exists:
+            errors.append("acceptance/ 目录不存在")
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            errors.append("工作流状态：找不到当前工作流状态")
+            errors.append("验收主题选择：未检查：无法取得当前需求类型和工作流编号")
+            errors.append("验收计划文档内容：未检查：无法确定当前工作流和主题")
+            return _validation_result(errors, "验收计划文档完整")
 
         if state.intent == "bugfix":
             topics = current_workflow_topics(project_root)
             if not topics:
-                return (False, "修 bug 的验收主题必须先在缺陷复现阶段确定")
+                errors.append("修 bug 的验收主题必须先在缺陷复现阶段确定")
         else:
             # 当前 Run 已记录主题时复核这些主题；否则从历史中排除旧主题，找本次新增主题。
             topics = current_workflow_topics(project_root) or candidate_topics(project_root)
         if not topics:
-            return (False, "没有找到本次新增的验收主题；主题名称不能复用项目历史中的名称")
-        missing = missing_topic_documents(project_root, "acceptance_plan", topics)
-        if missing:
-            return (False, f"缺少验收计划文档: {missing}")
-        return validate_acceptance_plan_documents(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
+            errors.append("没有找到本次新增的验收主题；主题名称不能复用项目历史中的名称")
+        if not acc_dir_exists:
+            errors.append("验收计划文档校验：未检查：acceptance/ 目录不存在")
+        elif not topics:
+            errors.append("验收计划文档校验：未检查：没有可校验的验收主题")
+        else:
+            missing = missing_topic_documents(project_root, "acceptance_plan", topics)
+            if missing:
+                errors.append(f"缺少验收计划文档: {missing}")
+            else:
+                _validator_error(
+                    "验收计划内容",
+                    validate_acceptance_plan_documents(project_root, state.workflow_id, topics),
+                    errors,
+                )
+        return _validation_result(errors, "验收计划文档完整")
 
     def instruction(self) -> str:
         return (
@@ -260,69 +327,105 @@ class TestPlanStage(StageStrategy):
 
     # 门禁的代码侧校验（第 2 道闸）：结构、环境和入口检查，不执行任何测试
     def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        errors: list[str] = []
+        if state is None:
+            errors.append("工作流状态：找不到当前工作流状态")
+            qa_dir = os.path.join(project_root, "qa")
+            if not os.path.isdir(qa_dir):
+                errors.append("qa/ 目录不存在")
+            index_md = os.path.join(project_root, artifact_paths_mod.QA_INDEX_DOC)
+            if not os.path.isfile(index_md):
+                errors.append(f"{artifact_paths_mod.QA_INDEX_DOC} 不存在")
+            argv, entry_detail = test_runner_mod.resolve_regression_entry(project_root)
+            if argv is None:
+                errors.append(f"项目全量测试入口未就绪：{entry_detail}")
+            errors.append("实施确认和实施哈希：未检查：找不到当前工作流状态")
+            errors.append("测试计划内容和追踪关系：未检查：无法确定当前工作流和主题")
+            return _validation_result(errors, "测试计划、实施记录和全量入口均已就绪")
+        impl_state = state.stages.get("impl")
+        impl_confirmed = bool(
+            impl_state is not None
+            and impl_state.status == "done"
+            and impl_state.gate.user_confirmed
+        )
+        if not impl_confirmed:
+            errors.append("test_plan 的前置实施尚未完成并经用户确认；先完成 workflow gate impl --confirmed")
+        impl_hash_current = False
+        if state.verification.impl_hash is None:
+            errors.append("缺少 impl_hash（实施内容哈希），不能证明测试计划基于当前实施")
+        else:
+            current_impl_hash = compute_impl_hash(project_root, state.topics)
+            impl_hash_current = current_impl_hash == state.verification.impl_hash
+            if not impl_hash_current:
+                errors.append("实施代码或实施记录在确认后又发生变化；先返回 impl 核对，不能据此编写测试计划")
         qa_dir = os.path.join(project_root, "qa")
-        if not os.path.exists(qa_dir):
-            return (False, "qa/ 目录不存在")
+        qa_dir_exists = os.path.isdir(qa_dir)
+        if not qa_dir_exists:
+            errors.append("qa/ 目录不存在")
         index_md = os.path.join(project_root, artifact_paths_mod.QA_INDEX_DOC)
-        if not os.path.isfile(index_md):
-            return (False, f"{artifact_paths_mod.QA_INDEX_DOC} 不存在")
+        index_exists = os.path.isfile(index_md)
+        if not index_exists:
+            errors.append(f"{artifact_paths_mod.QA_INDEX_DOC} 不存在")
         topics = current_workflow_topics(project_root)
         if not topics:
-            return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan")
-        missing = missing_topic_documents(project_root, "test_plan", topics)
-        if missing:
-            return (False, f"缺少测试计划文档: {missing}")
-        state = load_state(project_root)
-        if state is None:
-            return (False, "找不到当前工作流状态")
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not trace_ok:
-            return (False, trace_detail)
-        plan_ok, plan_detail = validate_test_plan_documents(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not plan_ok:
-            return (False, plan_detail)
+            errors.append("当前工作流还没有确认验收主题，请先完成 acceptance_plan")
+        plan_detail = "测试计划内容完整"
+        can_validate_plan = qa_dir_exists and index_exists and bool(topics)
+        if not can_validate_plan:
+            reasons = []
+            if not qa_dir_exists:
+                reasons.append("qa/ 目录不存在")
+            if not index_exists:
+                reasons.append(f"{artifact_paths_mod.QA_INDEX_DOC} 不存在")
+            if not topics:
+                reasons.append("没有验收主题")
+            errors.append(f"测试计划内容和追踪关系：未检查：{'；'.join(reasons)}")
+        else:
+            missing = missing_topic_documents(project_root, "test_plan", topics)
+            if missing:
+                errors.append(f"缺少测试计划文档: {missing}")
+            else:
+                _validator_error(
+                    "需求交付追踪关系",
+                    validate_downstream_traceability(project_root, state.workflow_id, topics),
+                    errors,
+                )
+                plan_ok = _validator_error(
+                    "测试计划内容",
+                    validate_test_plan_documents(project_root, state.workflow_id, topics),
+                    errors,
+                )
+                if plan_ok:
+                    plan_detail = "测试计划内容和追踪关系完整"
         # 当前操作系统必须有可用的项目全量入口参数数组；只检查配置，不执行入口
         argv, entry_detail = test_runner_mod.resolve_regression_entry(project_root)
         if argv is None:
-            return (False, f"项目全量测试入口未就绪：{entry_detail}")
-        # 声明的入口脚本必须真实存在
-        for part in argv:
-            if ("/" in part or "\\" in part) and not part.startswith("-"):
-                script_path = os.path.join(project_root, part)
-                if not os.path.isfile(script_path):
-                    return (False, f"项目全量测试入口脚本不存在: {part}")
-        project = load_project(project_root)
-        configured_scripts = test_entry_mod.referenced_project_scripts(
-            project.test_entry if project is not None and isinstance(project.test_entry, dict) else {}
-        )
-        if configured_scripts:
-            start_manifest = rollback_mod.read_start_baseline(
-                project_root,
-                state.workflow_id,
+            errors.append(f"项目全量测试入口未就绪：{entry_detail}")
+        else:
+            # 声明的入口脚本必须真实存在
+            for part in argv:
+                if ("/" in part or "\\" in part) and not part.startswith("-"):
+                    script_path = os.path.join(project_root, part)
+                    if not os.path.isfile(script_path):
+                        errors.append(f"项目全量测试入口脚本不存在: {part}")
+            project = load_project(project_root)
+            configured_scripts = test_entry_mod.referenced_project_scripts(
+                project.test_entry if project is not None and isinstance(project.test_entry, dict) else {}
             )
-            entries = start_manifest.get("entries", {}) if isinstance(start_manifest, dict) else {}
-            missing_backups = [
-                script for script in configured_scripts if script not in entries
-            ]
-            if missing_backups:
-                return (
-                    False,
-                    "项目全量测试入口脚本没有在修改前登记回退依据: "
-                    f"{missing_backups}",
-                )
-        return (True, f"{plan_detail}；当前平台全量入口: {argv}（本阶段不执行）")
+            if configured_scripts:
+                start_manifest = rollback_mod.read_start_baseline(project_root, state.workflow_id)
+                entries = start_manifest.get("entries", {}) if isinstance(start_manifest, dict) else {}
+                missing_backups = [script for script in configured_scripts if script not in entries]
+                if missing_backups:
+                    errors.append("项目全量测试入口脚本没有在修改前登记回退依据: " f"{missing_backups}")
+        if not impl_confirmed or not impl_hash_current:
+            errors.append("测试计划依据当前实施：未检查：实施确认或实施内容哈希未通过")
+        return _validation_result(errors, f"{plan_detail}；当前平台全量入口: {argv}（本阶段不执行）")
 
     def instruction(self) -> str:
         return (
-            "测试计划阶段：对已确认验收条件做测试覆盖审查，"
+            "测试计划阶段：读取已确认验收条件、实施记录和当前真实代码，再做测试覆盖审查，"
             "调查项目真实测试工具链并用 workflow test entry 登记按操作系统的全量入口参数数组；"
             f"产出 qa/<主题文件标识>_测试计划.md + {artifact_paths_mod.QA_INDEX_DOC}；"
             "本阶段不执行修改前全量测试"
@@ -358,41 +461,34 @@ class ImplStage(StageStrategy):
     ) -> tuple[bool, str, list[str]]:
         topics = current_workflow_topics(project_root)
         if not topics:
-            return (False, "当前工作流还没有确认验收主题，请先完成 acceptance_plan", [])
+            errors = ["当前工作流还没有确认验收主题，请先完成 acceptance_plan"]
+            if not os.path.isfile(os.path.join(project_root, artifact_paths_mod.IMPL_INDEX_DOC)):
+                errors.append(f"{artifact_paths_mod.IMPL_INDEX_DOC} 不存在")
+            errors.append("实施索引主题关系：未检查：没有已确认验收主题")
+            errors.append("主题实施文档：未检查：没有已确认验收主题")
+            valid, detail = _validation_result(errors, "")
+            return (valid, detail, [])
 
-        qa_ok, qa_detail = validate_inherited_topic_index(
-            project_root,
-            workflow_state.workflow_id,
-            topics,
-            artifact_paths_mod.QA_INDEX_DOC,
-            ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "测试结果"],
-            {
-                "验收计划": "../acceptance/{key}_验收计划.md",
-                "测试计划": "./{key}_测试计划.md",
-                "测试结果": "./{key}_测试结果.md",
-            },
-            {"测试结果": {"无自动化测试项"}},
-        )
-        if not qa_ok:
-            return (False, qa_detail, topics)
-
+        errors: list[str] = []
         index_path = os.path.join(project_root, artifact_paths_mod.IMPL_INDEX_DOC)
         if not os.path.isfile(index_path):
-            return (False, f"{artifact_paths_mod.IMPL_INDEX_DOC} 不存在", topics)
-        index_ok, index_detail = validate_inherited_topic_index(
-            project_root,
-            workflow_state.workflow_id,
-            topics,
-            artifact_paths_mod.IMPL_INDEX_DOC,
-            ["展示顺序", "验收主题", "前置主题", "验收计划", "测试计划", "实施文档"],
-            {
-                "验收计划": "../acceptance/{key}_验收计划.md",
-                "测试计划": "../qa/{key}_测试计划.md",
-                "实施文档": "./{key}_实施记录.md",
-            },
-        )
-        if not index_ok:
-            return (False, index_detail, topics)
+            errors.append(f"{artifact_paths_mod.IMPL_INDEX_DOC} 不存在")
+        else:
+            _validator_error(
+                "实施索引",
+                validate_inherited_topic_index(
+                    project_root,
+                    workflow_state.workflow_id,
+                    topics,
+                    artifact_paths_mod.IMPL_INDEX_DOC,
+                    ["展示顺序", "验收主题", "前置主题", "验收计划", "实施文档"],
+                    {
+                        "验收计划": "../acceptance/{key}_验收计划.md",
+                        "实施文档": "./{key}_实施记录.md",
+                    },
+                ),
+                errors,
+            )
 
         missing_topics = []
         for topic in topics:
@@ -404,36 +500,37 @@ class ImplStage(StageStrategy):
             with open(topic_path, "r", encoding="utf-8") as stream:
                 topic_content = stream.read()
             if f"- 工作流编号：{workflow_state.workflow_id}" not in topic_content:
-                return (False, f"{topic_rel} 的工作流编号与当前工作流不一致", topics)
+                errors.append(f"{topic_rel} 的工作流编号与当前工作流不一致")
             if f"- 验收主题：{topic}" not in topic_content:
-                return (False, f"{topic_rel} 的验收主题显示名称必须是“{topic}”", topics)
+                errors.append(f"{topic_rel} 的验收主题显示名称必须是“{topic}”")
             if "## 1. 实施依据" not in topic_content:
-                return (False, f"{topic_rel} 缺少“实施依据”", topics)
+                errors.append(f"{topic_rel} 缺少“实施依据”")
             if "## 2. 实施前计划" not in topic_content:
-                return (False, f"{topic_rel} 缺少“实施前计划”", topics)
+                errors.append(f"{topic_rel} 缺少“实施前计划”")
             if "## 4. 计划与实际的差异" in topic_content:
-                return (False, f"{topic_rel} 不得包含“计划与实际的差异”章节", topics)
+                errors.append(f"{topic_rel} 不得包含“计划与实际的差异”章节")
             if "## 4. 上下游文档" not in topic_content:
-                return (False, f"{topic_rel} 缺少“上下游文档”", topics)
+                errors.append(f"{topic_rel} 缺少“上下游文档”")
             unresolved = self._subsection_text(topic_content, "2.4 未决问题")
             if unresolved is None:
-                return (False, f"{topic_rel} 缺少“2.4 未决问题”", topics)
-            if self._has_unresolved_content(unresolved):
-                return (False, f"{topic_rel} 仍有未决问题，不能进入代码实施", topics)
+                errors.append(f"{topic_rel} 缺少“2.4 未决问题”")
+            elif self._has_unresolved_content(unresolved):
+                errors.append(f"{topic_rel} 仍有未决问题，不能进入代码实施")
             if require_execution_record:
                 if "## 3. 实施后记录" not in topic_content:
-                    return (False, f"{topic_rel} 缺少“实施后记录”", topics)
+                    errors.append(f"{topic_rel} 缺少“实施后记录”")
                 if "### 3.3 未完成内容" not in topic_content and "## 3.3 未完成内容" not in topic_content:
-                    return (False, f"{topic_rel} 缺少“3.3 未完成内容”", topics)
+                    errors.append(f"{topic_rel} 缺少“3.3 未完成内容”")
                 unfinished = self._subsection_text(topic_content, "3.3 未完成内容")
-                if unfinished is None or self._has_unresolved_content(unfinished):
-                    return (False, f"{topic_rel} 仍有未完成内容，不能通过实施门禁", topics)
+                if unfinished is not None and self._has_unresolved_content(unfinished):
+                    errors.append(f"{topic_rel} 仍有未完成内容，不能通过实施门禁")
             if "测试结果：通过" in topic_content or "测试结果：失败" in topic_content:
-                return (False, f"{topic_rel} 不能提前填写正式测试结果", topics)
+                errors.append(f"{topic_rel} 不能提前填写正式测试结果")
 
         if missing_topics:
-            return (False, f"缺少主题实施文档: {missing_topics}", topics)
-        return (True, "", topics)
+            errors.append(f"缺少主题实施文档: {missing_topics}")
+        valid, detail = _validation_result(errors, "")
+        return (valid, detail, topics)
 
     @staticmethod
     def _subsection_text(content: str, heading: str) -> str | None:
@@ -460,16 +557,17 @@ class ImplStage(StageStrategy):
             workflow_state,
             require_execution_record=True,
         )
-        if not valid:
-            return (False, detail, topics)
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            workflow_state.workflow_id,
-            topics,
-        )
-        if not trace_ok:
-            return (False, trace_detail, topics)
-        return (True, "实施文档和需求交付追踪关系完整", topics)
+        errors = [] if valid else [detail]
+        if topics:
+            _validator_error(
+                "需求交付追踪关系",
+                validate_downstream_traceability(project_root, workflow_state.workflow_id, topics),
+                errors,
+            )
+        else:
+            errors.append("需求交付追踪关系：未检查：没有验收主题")
+        result, result_detail = _validation_result(errors, "实施文档和需求交付追踪关系完整")
+        return (result, result_detail, topics)
 
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
         # 第一道门确认的是全部实施前计划。
@@ -478,15 +576,14 @@ class ImplStage(StageStrategy):
             workflow_state,
             require_execution_record=False,
         )
-        if not valid:
-            return (False, detail)
-
+        errors = [] if valid else [detail]
         stage_state = workflow_state.stages.get(self.name())
         if stage_state is None or stage_state.code_baseline_hash is None:
-            return (False, "缺少进入 impl 时的代码基线，不能确认计划前没有修改代码")
+            errors.append("缺少进入 impl 时的代码基线，不能确认计划前没有修改代码")
+            return _validation_result(errors, "全部验收主题的实施前计划已就绪，代码尚未修改")
         current_hash = compute_non_test_code_snapshot_hash(project_root)
         if current_hash == stage_state.code_baseline_hash:
-            return (True, "全部验收主题的实施前计划已就绪，代码尚未修改")
+            return _validation_result(errors, "全部验收主题的实施前计划已就绪，代码尚未修改")
         # 实施中重新确认计划：已经保存首次原内容且全部实际变化都在计划内时，
         # 允许在代码已变化的情况下重新通过讨论门（不覆盖首次副本）。
         prepared_ok, prepared_detail, manifest = rollback_mod.validate_prepared(
@@ -498,111 +595,122 @@ class ImplStage(StageStrategy):
             try:
                 changed = rollback_mod.changed_paths_since_prepare(project_root, manifest)
             except ValueError as exc:
-                return (False, str(exc))
+                errors.append(str(exc))
+                changed = []
             planned = set()
             try:
                 planned = set(rollback_mod.planned_code_paths(project_root, workflow_state.topics))
             except ValueError as exc:
-                return (False, str(exc))
+                errors.append(str(exc))
             unexpected = sorted(set(changed) - planned - set(manifest.get("entries", {})))
             if unexpected:
-                return (
-                    False,
-                    f"实施计划确认前存在计划外的代码变化，不能通过 impl 的第一道门: {unexpected}",
-                )
-            return (
-                True,
+                errors.append(f"实施计划确认前存在计划外的代码变化，不能通过 impl 的第一道门: {unexpected}")
+            return _validation_result(
+                errors,
                 "实施计划重新确认：首次原内容已保存，当前变化均在计划内",
             )
-        return (False, "实施计划确认前代码已经变化，不能通过 impl 的第一道门")
+        errors.append("实施计划确认前代码已经变化，不能通过 impl 的第一道门")
+        return _validation_result(errors, "实施计划重新确认完成")
 
     # 门禁的代码侧校验（第 2 道闸）
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            return _validation_result(
+                [
+                    "工作流状态：找不到当前工作流状态",
+                    "主题实施文档：未检查：无法确定当前工作流和主题",
+                    "实施代码基线：未检查：找不到当前工作流状态",
+                    "回退依据和真实差异：未检查：找不到当前工作流状态",
+                    "需求交付追踪关系：未检查：无法确定当前工作流和主题",
+                ],
+                "实施文档、真实代码变化和需求交付追踪关系完整",
+            )
+        errors: list[str] = []
         valid, detail, topics = self.validate_implementation_records(project_root, state)
         if not valid:
-            return (False, detail)
+            errors.append(detail)
 
         stage_state = state.stages.get(self.name())
         if stage_state is None or stage_state.code_baseline_hash is None:
-            return (False, "缺少进入 impl 时的代码基线，不能确认实施代码变化")
-        rollback_ok, rollback_detail, _ = rollback_mod.validate_prepared(
+            errors.append("实施代码基线：缺少进入 impl 时的代码基线，不能确认实施代码变化")
+
+        implementation_detail = ""
+        rollback_ok, rollback_detail, manifest = rollback_mod.validate_prepared(
             project_root,
             state,
         )
         if not rollback_ok:
-            return (False, rollback_detail)
-        current_hash = compute_non_test_code_snapshot_hash(project_root)
-        if stage_state.existing_code_accepted_hash is not None:
-            if current_hash != stage_state.existing_code_accepted_hash:
-                return (False, "用户确认既有代码后代码又发生变化，不能通过实施门禁")
-            return (True, f"{len(topics)} 个验收主题的实施计划和实施记录完整，既有代码未发生变化")
-        if current_hash == stage_state.code_baseline_hash:
-            recovery = getattr(state, "recovery", None)
-            if (
-                recovery is not None
-                and recovery.source_stage
-                and "impl" in recovery.affected_stages
-            ):
-                return (
-                    False,
-                    "当前代码相对恢复基线没有变化；如果现有代码已经是本次实施结果，"
-                    "请先调 workflow gate impl --accept-existing-code 明确确认，"
-                    "否则修改代码后再调 workflow gate impl",
+            errors.append(f"回退依据：{rollback_detail}")
+            errors.append("实施代码变化和计划范围：未检查：回退依据未通过")
+        else:
+            try:
+                changed_paths = rollback_mod.implementation_changed_paths_since_prepare(
+                    project_root,
+                    manifest,
                 )
-            return (False, "实施代码没有相对计划确认时的代码基线发生变化")
+            except ValueError as exc:
+                changed_paths = None
+                errors.append(f"基线后真实文件差异：{exc}")
+                errors.append("实施代码变化和计划范围：未检查：无法计算基线后真实文件差异")
 
-        changes_ok, changes_detail = rollback_mod.validate_implementation_changes(
-            project_root,
-            state,
-        )
-        if not changes_ok:
-            return (False, changes_detail)
+            if changed_paths is not None:
+                changes_ok, changes_detail = rollback_mod.validate_implementation_changes(
+                    project_root,
+                    state,
+                )
+                if changes_ok:
+                    implementation_detail = changes_detail
+                elif (
+                    not changed_paths
+                    and stage_state is not None
+                    and stage_state.existing_code_accepted_hash is not None
+                ):
+                    current_hash = compute_non_test_code_snapshot_hash(project_root)
+                    if current_hash != stage_state.existing_code_accepted_hash:
+                        errors.append(
+                            "既有代码确认快照：用户确认后核心代码又发生变化，不能继续使用既有代码例外"
+                        )
+                    existing_ok, existing_detail = rollback_mod.validate_existing_implementation_paths(
+                        project_root,
+                        state,
+                    )
+                    if not existing_ok:
+                        errors.append(f"既有实现的计划与记录：{existing_detail}")
+                    implementation_detail = existing_detail
+                else:
+                    errors.append(f"实施代码变化和计划范围：{changes_detail}")
+                    implementation_detail = ""
+                    if (
+                        changed_paths
+                        and stage_state is not None
+                        and stage_state.existing_code_accepted_hash is not None
+                    ):
+                        errors.append(
+                            "既有代码例外不适用：实施前基线后检测到真实修改，"
+                            f"必须按三方文件集合核对，变化路径：{changed_paths}"
+                        )
 
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not trace_ok:
-            return (False, trace_detail)
-        return (
-            True,
-            f"{len(topics)} 个验收主题的实施计划和实施记录完整；{changes_detail}",
-        )
+        success_detail = f"{len(topics)} 个验收主题的实施计划和实施记录完整"
+        if rollback_ok and implementation_detail:
+            success_detail += f"；{implementation_detail}"
+
+        return _validation_result(errors, success_detail)
 
     def instruction(self) -> str:
         return (
-            "实施阶段：依据全部验收主题的验收计划和测试计划，先写完实施前计划；"
+            "实施阶段：依据产品设计、代码设计、全部验收主题的验收计划和穿刺结论，先写完实施前计划；"
             "用户确认后再修改真实代码，并在同一份 impl/<主题文件标识>_实施记录.md 中追加实施后记录"
         )
 
 
 def _test_code_paths(project_root: str) -> list[str]:
-    """找出项目中现有的测试代码路径，供 test_code 阶段建立变更基线。"""
-    code_suffixes = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".swift", ".ets"}
-    paths: list[str] = []
-    for root, dirs, files in os.walk(project_root):
-        dirs[:] = [
-            directory
-            for directory in dirs
-            if directory not in {".git", ".workflow_loop", "__pycache__", ".venv", "node_modules"}
-        ]
-        for filename in files:
-            relative_path = os.path.relpath(os.path.join(root, filename), project_root)
-            parts = relative_path.replace(os.sep, "/").split("/")
-            lowered = filename.lower()
-            if os.path.splitext(filename)[1].lower() not in code_suffixes:
-                continue
-            if (
-                "tests" in parts
-                or "test" in parts
-                or lowered.startswith("test_")
-                or lowered.endswith(("_test.py", ".test.js", ".test.ts", ".spec.js", ".spec.ts"))
-            ):
-                paths.append(relative_path)
+    """返回测试计划和项目入口明确登记的测试路径，不遍历项目目录。"""
+    topics = current_workflow_topics(project_root)
+    paths = set(planned_test_source_paths(project_root, topics)) if topics else set()
+    project = load_project(project_root)
+    if project is not None and isinstance(project.test_entry, dict):
+        paths.update(test_entry_mod.referenced_project_scripts(project.test_entry))
     return sorted(paths)
 
 
@@ -639,50 +747,62 @@ class TestCodeStage(StageStrategy):
     ) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            return _validation_result(
+                [
+                    "工作流状态：找不到当前工作流状态",
+                    "测试代码基线和产品代码基线：未检查：找不到当前工作流状态",
+                    "自动化测试项和 Workflow-Test 标识：未检查：无法确定当前工作流和主题",
+                ],
+                "测试代码已覆盖当前自动化测试项",
+            )
+        errors: list[str] = []
         stage_state = state.stages.get(self.name())
         if stage_state is None or stage_state.test_code_baseline_hash is None:
-            return (False, "缺少进入 test_code 时的测试代码基线")
-        if stage_state.non_test_code_baseline_hash is None:
-            return (False, "缺少进入 test_code 时的产品代码基线，请重新完成 test_code 讨论门禁")
-        if compute_non_test_code_snapshot_hash(project_root) != stage_state.non_test_code_baseline_hash:
-            return (False, "test_code 阶段不能修改产品代码；产品代码变化应返回 impl")
+            errors.append("缺少进入 test_code 时的测试代码基线")
+        if stage_state is None or stage_state.non_test_code_baseline_hash is None:
+            errors.append("缺少进入 test_code 时的产品代码基线，请重新完成 test_code 讨论门禁")
+        elif compute_non_test_code_snapshot_hash(project_root) != stage_state.non_test_code_baseline_hash:
+            errors.append("test_code 阶段不能修改产品代码；产品代码变化应返回 impl")
         topics = current_workflow_topics(project_root)
         if not topics:
-            return (False, "当前工作流还没有确认验收主题")
+            errors.append("当前工作流还没有确认验收主题")
+            errors.append("自动化测试项和 Workflow-Test 标识：未检查：没有验收主题")
+            errors.append("测试代码变化范围：未检查：没有验收主题")
+            return _validation_result(errors, "测试代码已覆盖当前自动化测试项")
         try:
             automated_items = automated_test_items(project_root, topics)
         except ValueError as exc:
-            return (False, str(exc))
+            errors.append(str(exc))
+            automated_items = []
         current_test_code_hash = compute_test_code_snapshot_hash(project_root)
-        accepted_hash = stage_state.existing_test_code_accepted_hash
+        accepted_hash = stage_state.existing_test_code_accepted_hash if stage_state is not None else None
         if accepted_hash is not None and current_test_code_hash != accepted_hash:
-            return (False, "既有测试代码确认后又发生变化，需要重新确认或重新修改测试代码")
+            errors.append("既有测试代码确认后又发生变化，需要重新确认或重新修改测试代码")
         if (
             automated_items
+            and stage_state.test_code_baseline_hash is not None
             and current_test_code_hash == stage_state.test_code_baseline_hash
             and accepted_hash != current_test_code_hash
             and not allow_unchanged
         ):
-            return (
-                False,
+            errors.append(
                 "存在自动化测试项，但测试代码没有变化；如果当前测试代码已经覆盖最新测试计划，"
                 "请由用户执行 workflow gate test_code --accept-existing-test-code 明确确认",
             )
         marker_ok, marker_detail = validate_workflow_test_markers(project_root, topics)
         if not marker_ok:
-            return (False, marker_detail)
+            errors.append(f"Workflow-Test 标识：{marker_detail}")
         state_ok, state_detail = validate_downstream_traceability(
             project_root,
             state.workflow_id,
             topics,
         )
         if not state_ok:
-            return (False, state_detail)
+            errors.append(f"需求交付追踪关系：{state_detail}")
         if not automated_items:
-            return (True, f"{len(topics)} 个验收主题都没有自动化测试项，无需新增测试代码")
-        return (
-            True,
+            return _validation_result(errors, f"{len(topics)} 个验收主题都没有自动化测试项，无需新增测试代码")
+        return _validation_result(
+            errors,
             f"测试代码已覆盖 {len(automated_items)} 个自动化测试项；{marker_detail}",
         )
 
@@ -725,29 +845,50 @@ class TestExecutionStage(StageStrategy):
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            return _validation_result(
+                [
+                    "工作流状态：找不到当前工作流状态",
+                    "测试代码确认哈希：未检查：找不到当前工作流状态",
+                    "自动化测试项和主题测试结果：未检查：无法确定当前工作流和主题",
+                    "需求交付追踪关系：未检查：无法确定当前工作流和主题",
+                ],
+                "主题测试结果完整",
+            )
+        errors: list[str] = []
         topics = current_workflow_topics(project_root)
         if not topics:
-            return (False, "当前工作流还没有确认验收主题")
+            errors.append("当前工作流还没有确认验收主题")
         if state.verification.test_code_hash is None:
-            return (False, "缺少 test_code 确认后的测试代码哈希，不能执行正式测试")
-        if compute_test_code_snapshot_hash(project_root) != state.verification.test_code_hash:
-            return (False, "test_code 确认后测试代码或测试配置发生变化，必须返回 test_code")
+            errors.append("缺少 test_code 确认后的测试代码哈希，不能执行正式测试")
+        elif compute_test_code_snapshot_hash(project_root) != state.verification.test_code_hash:
+            errors.append("test_code 确认后测试代码或测试配置发生变化，必须返回 test_code")
+        if not topics:
+            errors.append("自动化测试项和主题测试结果：未检查：没有验收主题")
+            errors.append("需求交付追踪关系：未检查：没有验收主题")
+            return _validation_result(errors, "主题测试结果完整")
         try:
             test_topics = automated_topics(project_root, topics)
         except ValueError as exc:
-            return (False, str(exc))
-        missing = missing_topic_documents(project_root, "test_result", test_topics)
-        if missing:
-            return (False, f"缺少主题测试结果: {missing}；先执行测试并记录正式结果")
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
+            errors.append(str(exc))
+            test_topics = None
+        if test_topics is not None:
+            missing = missing_topic_documents(project_root, "test_result", test_topics)
+            if missing:
+                errors.append(f"缺少主题测试结果: {missing}；先执行测试并记录正式结果")
+        _validator_error(
+            "需求交付追踪关系",
+            validate_downstream_traceability(project_root, state.workflow_id, topics),
+            errors,
         )
-        if not trace_ok:
-            return (False, trace_detail)
-        return validate_test_execution_results(project_root, state.workflow_id, topics)
+        if test_topics is None:
+            errors.append("主题测试执行结果：未检查：自动化测试主题解析失败")
+        else:
+            _validator_error(
+                "主题测试执行结果",
+                validate_test_execution_results(project_root, state.workflow_id, topics),
+                errors,
+            )
+        return _validation_result(errors, "主题测试结果完整")
 
     def instruction(self) -> str:
         return (
@@ -777,28 +918,47 @@ class TopicAcceptanceStage(StageStrategy):
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            return _validation_result(
+                [
+                    "工作流状态：找不到当前工作流状态",
+                    "主题测试结果：未检查：无法确定当前工作流和主题",
+                    "主题验收结果：未检查：无法确定当前工作流和主题",
+                    "需求交付追踪关系：未检查：无法确定当前工作流和主题",
+                ],
+                "主题验收结果完整",
+            )
+        errors: list[str] = []
         topics = current_workflow_topics(project_root)
         if not topics:
-            return (False, "当前工作流还没有确认验收主题")
+            errors.append("当前工作流还没有确认验收主题")
+            errors.append("主题测试结果：未检查：没有验收主题")
+            errors.append("主题验收结果：未检查：没有验收主题")
+            errors.append("需求交付追踪关系：未检查：没有验收主题")
+            return _validation_result(errors, "主题验收结果完整")
         test_ok, test_detail = validate_test_execution_results(
             project_root,
             state.workflow_id,
             topics,
         )
         if not test_ok:
-            return (False, f"主题测试未全部通过，不能开始主题验收: {test_detail}")
+            errors.append(f"主题测试未全部通过，不能开始主题验收: {test_detail}")
         missing = missing_topic_documents(project_root, "acceptance_result", topics)
         if missing:
-            return (False, f"缺少主题验收结果: {missing}")
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
+            errors.append(f"缺少主题验收结果: {missing}")
+        _validator_error(
+            "需求交付追踪关系",
+            validate_downstream_traceability(project_root, state.workflow_id, topics),
+            errors,
         )
-        if not trace_ok:
-            return (False, trace_detail)
-        return validate_topic_acceptance_results(project_root, state.workflow_id, topics)
+        if missing:
+            errors.append("主题验收结果内容：未检查：缺少主题验收结果文档")
+        else:
+            _validator_error(
+                "主题验收结果内容",
+                validate_topic_acceptance_results(project_root, state.workflow_id, topics),
+                errors,
+            )
+        return _validation_result(errors, "主题验收结果完整")
 
     def instruction(self) -> str:
         return (
@@ -835,31 +995,48 @@ class RegressionTestStage(StageStrategy):
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
         """第一道门只确认全部主题通过、当前系统入口和运行条件，不执行回归。"""
         topics = current_workflow_topics(project_root)
-        acceptance_ok, acceptance_detail = validate_topic_acceptance_results(
-            project_root,
-            workflow_state.workflow_id,
-            topics,
-        )
-        if not acceptance_ok:
-            return (False, f"主题验收尚未全部通过，不能进入最终全量回归: {acceptance_detail}")
+        errors: list[str] = []
+        if not topics:
+            errors.append("当前工作流还没有确认验收主题")
+        else:
+            _validator_error(
+                "主题验收",
+                validate_topic_acceptance_results(project_root, workflow_state.workflow_id, topics),
+                errors,
+            )
         argv, entry_detail = test_runner_mod.resolve_regression_entry(project_root)
         if argv is None:
-            return (False, f"项目全量测试入口未就绪：{entry_detail}")
-        return (True, f"全部主题已通过，当前平台全量入口就绪: {argv}")
+            errors.append(f"项目全量测试入口未就绪：{entry_detail}")
+        return _validation_result(errors, f"全部主题已通过，当前平台全量入口就绪: {argv}")
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            return _validation_result(
+                [
+                    "工作流状态：找不到当前工作流状态",
+                    "需求交付追踪关系：未检查：无法确定当前工作流和主题",
+                    "最终全量回归机器记录：未检查：找不到当前工作流状态",
+                ],
+                "最终全量回归状态有效",
+            )
+        errors: list[str] = []
         topics = current_workflow_topics(project_root)
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
+        if not topics:
+            errors.append("当前工作流还没有确认验收主题")
+            errors.append("需求交付追踪关系：未检查：没有验收主题")
+        else:
+            _validator_error(
+                "需求交付追踪关系",
+                validate_downstream_traceability(project_root, state.workflow_id, topics),
+                errors,
+            )
+        _validator_error(
+            "最终全量回归机器记录",
+            validate_final_regression_state(project_root, state.workflow_id),
+            errors,
         )
-        if not trace_ok:
-            return (False, trace_detail)
-        return validate_final_regression_state(project_root, state.workflow_id)
+        return _validation_result(errors, "最终全量回归状态有效")
 
     def instruction(self) -> str:
         return (
@@ -889,20 +1066,31 @@ class OverallAcceptanceStage(StageStrategy):
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            return _validation_result(
+                [
+                    "工作流状态：找不到当前工作流状态",
+                    "需求交付追踪关系：未检查：无法确定当前工作流和主题",
+                    "整体验收前置条件：未检查：找不到当前工作流状态",
+                ],
+                "整体验收前置条件有效",
+            )
+        errors: list[str] = []
         topics = current_workflow_topics(project_root)
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
+        if not topics:
+            errors.append("当前工作流还没有确认验收主题")
+            errors.append("需求交付追踪关系：未检查：没有验收主题")
+        else:
+            _validator_error(
+                "需求交付追踪关系",
+                validate_downstream_traceability(project_root, state.workflow_id, topics),
+                errors,
+            )
+        _validator_error(
+            "整体验收前置条件",
+            validate_overall_acceptance_prerequisites(project_root, state.workflow_id, topics),
+            errors,
         )
-        if not trace_ok:
-            return (False, trace_detail)
-        return validate_overall_acceptance_prerequisites(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
+        return _validation_result(errors, "整体验收前置条件有效")
 
     def instruction(self) -> str:
         return (
@@ -930,15 +1118,17 @@ class UpdateCodeDesignStage(StageStrategy):
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC
-        if not os.path.isfile(os.path.join(project_root, architecture_rel)):
-            return (False, f"{architecture_rel} 不存在")
+        errors: list[str] = []
+        architecture_exists = os.path.isfile(os.path.join(project_root, architecture_rel))
+        if not architecture_exists:
+            errors.append(f"{architecture_rel} 不存在")
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
             self.name(),
             self.change_tracked_paths(project_root),
         )
         if not changed_ok:
-            return (False, changed_detail)
+            errors.append(f"本阶段修改范围：{changed_detail}")
         normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
         changed_product_docs = [
             path
@@ -947,35 +1137,40 @@ class UpdateCodeDesignStage(StageStrategy):
             or path.startswith("spec/功能_")
         ]
         if changed_product_docs:
-            return (
-                False,
+            errors.append(
                 "产品总说明或功能文档在 update_code_design 阶段发生变化："
                 f"{changed_product_docs}；功能变化必须返回 spec，不能在最终设计同步阶段直接修改",
             )
         if architecture_rel not in normalized_changed:
-            return (
-                False,
+            errors.append(
                 f"最终设计同步没有更新 {architecture_rel}；"
                 "即使架构没有变化，也要写入本轮核对结论和真实代码映射",
             )
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
+            errors.append("工作流状态：找不到当前工作流状态")
+            errors.append("需求交付追踪关系：未检查：无法确定当前工作流和主题")
+            errors.append("最终代码架构文档内容：未检查：无法取得当前工作流编号")
+            return _validation_result(errors, "最终代码设计和追踪表一致")
         topics = current_workflow_topics(project_root)
-        trace_ok, trace_detail = validate_downstream_traceability(
-            project_root,
-            state.workflow_id,
-            topics,
-        )
-        if not trace_ok:
-            return (False, trace_detail)
-        document_ok, document_detail = validate_final_code_design_document(
-            project_root,
-            state.workflow_id,
-        )
-        if not document_ok:
-            return (False, document_detail)
-        return (True, f"{document_detail}；追踪表已准备好记录最终代码设计")
+        if not topics:
+            errors.append("当前工作流还没有确认验收主题")
+            errors.append("需求交付追踪关系：未检查：没有验收主题")
+        else:
+            _validator_error(
+                "需求交付追踪关系",
+                validate_downstream_traceability(project_root, state.workflow_id, topics),
+                errors,
+            )
+        if architecture_exists:
+            _validator_error(
+                "最终代码架构文档",
+                validate_final_code_design_document(project_root, state.workflow_id),
+                errors,
+            )
+        else:
+            errors.append("最终代码架构文档内容：未检查：代码架构设计文件不存在")
+        return _validation_result(errors, "最终代码设计和追踪表一致")
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
         return [
@@ -1022,22 +1217,36 @@ class ProjectDesignInitStage(StageStrategy):
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         overview_rel = artifact_paths_mod.PRODUCT_OVERVIEW_DOC
         architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC
-        missing = []
-        if not os.path.exists(os.path.join(project_root, overview_rel)):
+        errors: list[str] = []
+        overview_exists = os.path.isfile(os.path.join(project_root, overview_rel))
+        architecture_exists = os.path.isfile(os.path.join(project_root, architecture_rel))
+        evidence_exists = os.path.isfile(os.path.join(project_root, PROJECT_INIT_EVIDENCE_PATH))
+        missing: list[str] = []
+        if not overview_exists:
             missing.append(overview_rel)
-        if not os.path.exists(os.path.join(project_root, architecture_rel)):
+        if not architecture_exists:
             missing.append(architecture_rel)
-        linked_features = [
-            path
-            for path in get_linked_product_design_paths(project_root)
-            if path != overview_rel
-        ]
+        linked_features = (
+            [
+                path
+                for path in get_linked_product_design_paths(project_root)
+                if path != overview_rel
+            ]
+            if overview_exists
+            else []
+        )
         if not linked_features:
             missing.append("spec/功能_*.md")
-        if not os.path.exists(os.path.join(project_root, PROJECT_INIT_EVIDENCE_PATH)):
+        else:
+            missing.extend(
+                path
+                for path in linked_features
+                if not os.path.isfile(os.path.join(project_root, path))
+            )
+        if not evidence_exists:
             missing.append(PROJECT_INIT_EVIDENCE_PATH)
         if missing:
-            return (False, f"产物未就绪: {missing}")
+            errors.append(f"产物未就绪: {list(dict.fromkeys(missing))}")
 
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
@@ -1045,36 +1254,48 @@ class ProjectDesignInitStage(StageStrategy):
             self.change_tracked_paths(project_root),
         )
         if not changed_ok:
-            return (False, changed_detail)
-
-        normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
-        product_changed = any(
-            path == overview_rel or path.startswith("spec/功能_")
-            for path in normalized_changed
-        )
-        architecture_changed = architecture_rel in normalized_changed
-        evidence_changed = PROJECT_INIT_EVIDENCE_PATH.replace(os.sep, "/") in normalized_changed
-        if not product_changed or not architecture_changed or not evidence_changed:
-            return (
-                False,
-                "项目设计初始化必须在本阶段更新产品设计、代码设计和调查证据三类内容；"
-                f"当前变化文件: {changed_paths}",
+            errors.append(f"本阶段修改范围：{changed_detail}")
+            errors.append(
+                "三类初始化产物变化：未检查：没有可用的阶段产物变化记录"
             )
+        else:
+            normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
+            product_changed = any(
+                path == overview_rel or path.startswith("spec/功能_")
+                for path in normalized_changed
+            )
+            architecture_changed = architecture_rel in normalized_changed
+            evidence_changed = PROJECT_INIT_EVIDENCE_PATH.replace(os.sep, "/") in normalized_changed
+            if not product_changed or not architecture_changed or not evidence_changed:
+                errors.append(
+                    "项目设计初始化必须在本阶段更新产品设计、代码设计和调查证据三类内容；"
+                    f"当前变化文件: {changed_paths}",
+                )
 
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
-        evidence_ok, evidence_detail = validate_project_design_init_evidence(
-            project_root,
-            state.workflow_id,
+            errors.append("工作流状态：找不到当前工作流状态")
+            errors.append("初始化证据内容：未检查：无法取得当前工作流编号")
+        else:
+            _validator_error(
+                "初始化证据内容",
+                validate_project_design_init_evidence(project_root, state.workflow_id),
+                errors,
+            )
+        _validator_error(
+            "产品文档内容边界",
+            validate_product_design_documents(project_root),
+            errors,
         )
-        if not evidence_ok:
-            return (False, evidence_detail)
-        return (
-            True,
+        _validator_error(
+            "初始化功能与产出一致性",
+            validate_project_design_feature_consistency(project_root),
+            errors,
+        )
+        return _validation_result(
+            errors,
             "项目设计初始化产物和调查证据有效: "
-            f"产品总说明 + 代码架构设计 + {[os.path.basename(f) for f in linked_features]}; "
-            f"{evidence_detail}",
+            f"产品总说明 + 代码架构设计 + {[os.path.basename(f) for f in linked_features]}",
         )
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
@@ -1110,16 +1331,17 @@ class ReviseCodeDesignStage(StageStrategy):
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC
+        errors: list[str] = []
         if not os.path.isfile(os.path.join(project_root, architecture_rel)):
-            return (False, f"{architecture_rel} 不存在")
+            errors.append(f"{architecture_rel} 不存在")
         changed_ok, changed_detail, _ = changed_stage_paths(
             project_root,
             self.name(),
             self.change_tracked_paths(project_root),
         )
         if not changed_ok:
-            return (False, changed_detail)
-        return (True, f"{architecture_rel} 已按本阶段产品设计修改")
+            errors.append(f"本阶段修改范围：{changed_detail}")
+        return _validation_result(errors, f"{architecture_rel} 已按本阶段产品设计修改")
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
         return [artifact_paths_mod.CODE_DESIGN_DOC]
@@ -1147,18 +1369,25 @@ class ReproduceStage(StageStrategy):
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         bug_dir = os.path.join(project_root, "bug")
-        if not os.path.exists(bug_dir):
-            return (False, "bug/ 目录不存在")
+        errors: list[str] = []
+        bug_dir_exists = os.path.isdir(bug_dir)
+        if not bug_dir_exists:
+            errors.append("bug/ 目录不存在")
         index_path = os.path.join(project_root, artifact_paths_mod.BUG_INDEX_DOC)
-        if not os.path.isfile(index_path):
-            return (False, f"{artifact_paths_mod.BUG_INDEX_DOC} 不存在")
-        md_files = [
-            f
-            for f in os.listdir(bug_dir)
-            if f.endswith(".md") and f != "索引.md"
-        ]
+        index_exists = os.path.isfile(index_path)
+        if not index_exists:
+            errors.append(f"{artifact_paths_mod.BUG_INDEX_DOC} 不存在")
+        md_files = (
+            [
+                f
+                for f in os.listdir(bug_dir)
+                if f.endswith(".md") and f != "索引.md"
+            ]
+            if bug_dir_exists
+            else []
+        )
         if not md_files:
-            return (False, "bug/ 下没有缺陷记录文档")
+            errors.append("bug/ 下没有缺陷记录文档")
 
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
@@ -1166,12 +1395,31 @@ class ReproduceStage(StageStrategy):
             self.change_tracked_paths(project_root),
         )
         if not changed_ok:
-            return (False, changed_detail)
+            errors.append(f"本阶段修改范围：{changed_detail}")
 
         state = load_state(project_root)
         if state is None:
-            return (False, "找不到当前工作流状态")
-        return validate_reproduce_documents(project_root, changed_paths, state.workflow_id)
+            errors.append("工作流状态：找不到当前工作流状态")
+        if not (bug_dir_exists and index_exists and md_files and changed_ok and state is not None):
+            reasons: list[str] = []
+            if not bug_dir_exists:
+                reasons.append("bug/ 目录不存在")
+            if not index_exists:
+                reasons.append(f"{artifact_paths_mod.BUG_INDEX_DOC} 不存在")
+            if not md_files:
+                reasons.append("没有缺陷记录文档")
+            if not changed_ok:
+                reasons.append("本阶段修改范围不可用")
+            if state is None:
+                reasons.append("找不到当前工作流状态")
+            errors.append(f"缺陷记录内容：未检查：{'；'.join(reasons)}")
+        else:
+            _validator_error(
+                "缺陷记录内容",
+                validate_reproduce_documents(project_root, changed_paths, state.workflow_id),
+                errors,
+            )
+        return _validation_result(errors, "缺陷记录、真实复现证据和根因完整")
 
     def change_tracked_paths(self, project_root: str) -> list[str]:
         bug_dir = os.path.join(project_root, "bug")

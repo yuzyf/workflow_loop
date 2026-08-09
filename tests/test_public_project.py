@@ -342,7 +342,7 @@ def test_license_and_source_distribution_metadata_are_consistent():
         "license": "MIT",
         "license-files": ["LICENSE"],
         "authors": [{"name": "yuzyf"}],
-        "dependencies": ["packaging>=24.0"],
+        "dependencies": ["markdown-it-py>=4.0", "packaging>=24.0"],
         "scripts": {"workflow": "workflow_loop.cli:main"},
         "optional-dependencies": {
             "dev": ["build>=1.2", "pytest>=7.0", "PyYAML>=6.0"]

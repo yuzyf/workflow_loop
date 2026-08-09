@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
 import os
 import re
 
+from . import snapshots as snapshots_mod
 from .topic import topic_paths
 
 
@@ -33,10 +35,6 @@ TEST_SOURCE_SUFFIXES = {
     ".ts", ".tsx", ".vue", ".svelte", ".rb", ".php", ".cs", ".fs",
     ".ets", ".qml", ".sh", ".bash", ".zsh", ".bats",
 }
-EXCLUDED_DIRS = {
-    ".git", ".workflow_loop", ".venv", "node_modules", "__pycache__",
-    ".pytest_cache", "dist", "build",
-}
 TEST_DIRECTORY_NAMES = {
     "tests", "test", "__tests__", "testdata", "test_data",
     "integration_tests", "e2e",
@@ -53,10 +51,23 @@ MARKER_FIELDS = (
     "验收条件",
     "测试方式",
     "测试层级",
-    "测试目标",
+    "产品入口",
     "测试入口",
     "代码入口",
+    "准备数据",
+    "执行动作",
+    "关键断言",
+    "预期证据",
 )
+PLACEHOLDER_VALUES = {
+    "待补充",
+    "待确认",
+    "实施后确认",
+    "符合预期",
+    "正常",
+    "正确处理",
+    "todo",
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +79,15 @@ class TestPlanItem:
     test_name: str
     test_method: str
     dependencies: tuple[str, ...] = ()
+    product_entry: str = ""
+    code_entry: str = ""
+    test_entry: str = ""
+    preparation: str = ""
+    action: str = ""
+    observation: str = ""
+    expected_result: str = ""
+    failure_behavior: str = ""
+    evidence_requirement: str = ""
 
     @property
     def requires_test_code(self) -> bool:
@@ -85,9 +105,17 @@ class WorkflowTestMarker:
     criterion_name: str
     test_method: str
     test_level: str
-    test_target: str
+    product_entry: str
     test_entry: str
     code_entry: str
+    preparation: str
+    action: str
+    key_assertion: str
+    expected_evidence: str
+    definition_line: int = 0
+    definition_end_line: int = 0
+    body_excerpt: str = ""
+    body_sha256: str = ""
 
 
 def _read_text(project_root: str, relative_path: str) -> str:
@@ -130,6 +158,52 @@ def _table_rows(content: str) -> tuple[list[str], list[list[str]]]:
     raise ValueError("缺少验收条件覆盖表")
 
 
+def _entry_parts(value: str, label: str) -> tuple[str, str]:
+    """解析 ``项目相对文件::符号或测试标题``，不从自然语言猜路径。"""
+    normalized = value.strip().strip("`")
+    if normalized.count("::") != 1:
+        raise ValueError(f"{label} 必须写成 `项目相对文件::可定位标识`: {value}")
+    path, target = (part.strip() for part in normalized.split("::", 1))
+    if not path or not target or any(character.isspace() for character in path):
+        raise ValueError(f"{label} 必须同时写明确文件和可定位标识: {value}")
+    return path.replace("\\", "/"), target
+
+
+def _validate_plan_entry(
+    project_root: str,
+    value: str,
+    relative_plan_path: str,
+    test_id: str,
+    label: str,
+    *,
+    allow_missing: bool,
+    require_test_path: bool,
+) -> str:
+    """校验计划登记文件的项目边界、类型和当前存在状态。"""
+    raw_path, _ = _entry_parts(value, label)
+    try:
+        normalized = snapshots_mod.normalize_registered_paths(project_root, [raw_path])[0]
+    except ValueError as exc:
+        raise ValueError(
+            f"{relative_plan_path} 的测试项 {test_id} {label}无效: {exc}"
+        ) from exc
+    if require_test_path and not _is_test_source(normalized):
+        raise ValueError(
+            f"{relative_plan_path} 的测试项 {test_id} {label}必须指向明确测试文件: {normalized}"
+        )
+    full_path = os.path.join(project_root, *normalized.split("/"))
+    if os.path.lexists(full_path):
+        if os.path.islink(full_path) or not os.path.isfile(full_path):
+            raise ValueError(
+                f"{relative_plan_path} 的测试项 {test_id} {label}不是项目内普通文件: {normalized}"
+            )
+    elif not allow_missing:
+        raise ValueError(
+            f"{relative_plan_path} 的测试项 {test_id} {label}文件不存在: {normalized}"
+        )
+    return normalized
+
+
 def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:
     """读取一个主题测试计划中的 AC、TC 和测试方式。"""
 
@@ -147,8 +221,14 @@ def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:
         "测试项",
         "前置测试项",
         "测试方式",
-        "验证方向",
-        "预期观察结果",
+        "产品入口",
+        "代码入口",
+        "测试入口",
+        "准备数据",
+        "执行动作",
+        "观察位置",
+        "预期结果",
+        "不通过表现",
         "证据要求",
     ]
     if headers != required_headers:
@@ -175,6 +255,45 @@ def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:
             raise ValueError(
                 f"{relative_path} 的测试项 {test_id} 测试方式必须是 {sorted(TEST_METHODS)}"
             )
+        field_values = {
+            "产品入口": cells[4],
+            "代码入口": cells[5],
+            "测试入口": cells[6],
+            "准备数据": cells[7],
+            "执行动作": cells[8],
+            "观察位置": cells[9],
+            "预期结果": cells[10],
+            "不通过表现": cells[11],
+            "证据要求": cells[12],
+        }
+        invalid_fields = [
+            label
+            for label, value in field_values.items()
+            if not _has_real_text(value)
+        ]
+        if invalid_fields:
+            raise ValueError(
+                f"{relative_path} 的测试项 {test_id} 缺少可执行内容或仍使用占位值: {invalid_fields}"
+            )
+        _validate_plan_entry(
+            project_root,
+            field_values["代码入口"],
+            relative_path,
+            test_id,
+            "代码入口",
+            allow_missing=False,
+            require_test_path=False,
+        )
+        if test_method in AUTOMATED_TEST_METHODS:
+            _validate_plan_entry(
+                project_root,
+                field_values["测试入口"],
+                relative_path,
+                test_id,
+                "测试入口",
+                allow_missing=True,
+                require_test_path=True,
+            )
         seen_test_ids.add(test_id)
         items.append(
             TestPlanItem(
@@ -185,6 +304,15 @@ def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:
                 test_name=test_name.strip(),
                 test_method=test_method,
                 dependencies=dependencies,
+                product_entry=field_values["产品入口"].strip(),
+                code_entry=field_values["代码入口"].strip(),
+                test_entry=field_values["测试入口"].strip(),
+                preparation=field_values["准备数据"].strip(),
+                action=field_values["执行动作"].strip(),
+                observation=field_values["观察位置"].strip(),
+                expected_result=field_values["预期结果"].strip(),
+                failure_behavior=field_values["不通过表现"].strip(),
+                evidence_requirement=field_values["证据要求"].strip(),
             )
         )
     if not items:
@@ -302,15 +430,23 @@ def _is_test_source(relative_path: str) -> bool:
     )
 
 
-def _test_source_paths(project_root: str) -> list[str]:
+def planned_test_source_paths(project_root: str, topics: list[str]) -> list[str]:
+    """只返回当前测试计划明确登记的测试文件；不遍历项目目录。"""
     paths: list[str] = []
-    for root, dirs, files in os.walk(project_root):
-        dirs[:] = [directory for directory in dirs if directory not in EXCLUDED_DIRS]
-        for filename in files:
-            relative_path = os.path.relpath(os.path.join(root, filename), project_root)
-            if _is_test_source(relative_path):
-                paths.append(relative_path)
-    return sorted(paths)
+    for item in automated_test_items(project_root, topics):
+        plan_path = topic_paths(project_root, item.topic)["test_plan"]
+        paths.append(
+            _validate_plan_entry(
+                project_root,
+                item.test_entry,
+                plan_path,
+                item.test_id,
+                "测试入口",
+                allow_missing=True,
+                require_test_path=True,
+            )
+        )
+    return sorted(set(paths))
 
 
 def _clean_marker_line(line: str) -> str:
@@ -384,7 +520,7 @@ def _parse_marker_lines(
                 )
             continue
         fields: dict[str, str] = {}
-        for raw_line in lines[index + 1 : index + 12]:
+        for raw_line in lines[index + 1 : index + 18]:
             cleaned = _clean_marker_line(raw_line)
             if "Workflow-Test" in cleaned:
                 break
@@ -413,9 +549,13 @@ def _parse_marker_lines(
                 criterion_name=criterion_value[1],
                 test_method=fields.get("测试方式", ""),
                 test_level=fields.get("测试层级", ""),
-                test_target=fields.get("测试目标", ""),
+                product_entry=fields.get("产品入口", ""),
                 test_entry=fields.get("测试入口", ""),
                 code_entry=fields.get("代码入口", ""),
+                preparation=fields.get("准备数据", ""),
+                action=fields.get("执行动作", ""),
+                key_assertion=fields.get("关键断言", ""),
+                expected_evidence=fields.get("预期证据", ""),
             )
         )
     return markers
@@ -462,8 +602,155 @@ def _parse_python_markers(
             raise ValueError(
                 f"{relative_path}:{first_statement.lineno} 一个 Python 测试函数或测试类只能写一个 Workflow-Test 标识"
             )
-        markers.extend(parsed)
+        body = node.body[1:]
+        content_lines = content.splitlines(keepends=True)
+        if body:
+            body_start = body[0].lineno
+            body_end = getattr(body[-1], "end_lineno", body[-1].lineno)
+            body_source = "".join(content_lines[body_start - 1 : body_end])
+        else:
+            body_source = ""
+        body_excerpt = body_source.strip()
+        if len(body_excerpt) > 500:
+            body_excerpt = body_excerpt[:497] + "..."
+        definition_end = getattr(node, "end_lineno", node.lineno)
+        markers.extend(
+            replace(
+                marker,
+                definition_line=node.lineno,
+                definition_end_line=definition_end,
+                body_excerpt=body_excerpt,
+                body_sha256=hashlib.sha256(body_source.encode("utf-8")).hexdigest(),
+            )
+            for marker in parsed
+        )
+        noop_reason = _obvious_python_noop_reason(body)
+        if parsed and noop_reason is not None and errors is not None:
+            errors.append(
+                f"{relative_path}:{node.lineno}-{definition_end} Python 测试 {node.name} "
+                f"没有验证真实行为：文档字符串后{noop_reason}；"
+                "请调用真实目标并断言操作后的可检查状态"
+            )
     return markers
+
+
+def _obvious_python_noop_reason(body: list[ast.stmt]) -> str | None:
+    """只识别无需理解调用关系即可确定的空测试。"""
+    if not body:
+        return "没有测试代码"
+    if len(body) == 1:
+        statement = body[0]
+        if isinstance(statement, ast.Pass):
+            return "只有 pass 空语句"
+        if (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Constant)
+            and statement.value.value is Ellipsis
+        ):
+            return "只有 Ellipsis（...）空语句"
+        if isinstance(statement, ast.Return):
+            if statement.value is None:
+                return "只返回固定常量"
+            try:
+                ast.literal_eval(statement.value)
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                pass
+            else:
+                return "只返回固定常量"
+        if isinstance(statement, ast.Assert):
+            try:
+                literal_value = ast.literal_eval(statement.test)
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                pass
+            else:
+                if bool(literal_value):
+                    return "只有恒真的字面量断言"
+    if _assertions_only_repeat_direct_test_writes(body):
+        return "只断言测试代码刚写入的常量或属性（自造结果）"
+    return None
+
+
+def _assertions_only_repeat_direct_test_writes(body: list[ast.stmt]) -> bool:
+    """拒绝测试自己写值后原样断言；不猜函数调用产生的数据。"""
+    direct_writes: dict[str, ast.expr] = {}
+    assertions: list[ast.Assert] = []
+    for statement in body:
+        if isinstance(statement, ast.Assign) and _is_literal_expression(statement.value):
+            for target in statement.targets:
+                key = _reference_key(target)
+                if key is not None:
+                    direct_writes[key] = statement.value
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and statement.value is not None
+            and _is_literal_expression(statement.value)
+        ):
+            key = _reference_key(statement.target)
+            if key is not None:
+                direct_writes[key] = statement.value
+        elif isinstance(statement, ast.Assert):
+            assertions.append(statement)
+    return bool(assertions) and all(
+        _assertion_repeats_direct_write(statement.test, direct_writes)
+        for statement in assertions
+    )
+
+
+def _reference_key(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return f"name:{node.id}"
+    if isinstance(node, ast.Attribute):
+        owner = _reference_key(node.value)
+        return f"{owner}.attr:{node.attr}" if owner is not None else None
+    if isinstance(node, ast.Subscript):
+        owner = _reference_key(node.value)
+        if owner is None:
+            return None
+        return f"{owner}.item:{ast.dump(node.slice, include_attributes=False)}"
+    return None
+
+
+def _is_literal_expression(node: ast.AST) -> bool:
+    try:
+        ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    return True
+
+
+def _same_literal(first: ast.AST, second: ast.AST) -> bool:
+    if not _is_literal_expression(first) or not _is_literal_expression(second):
+        return False
+    return ast.dump(first, include_attributes=False) == ast.dump(
+        second,
+        include_attributes=False,
+    )
+
+
+def _assertion_repeats_direct_write(
+    expression: ast.expr,
+    direct_writes: dict[str, ast.expr],
+) -> bool:
+    if isinstance(expression, ast.Compare) and len(expression.ops) == 1:
+        if not isinstance(expression.ops[0], (ast.Eq, ast.Is)):
+            return False
+        left, right = expression.left, expression.comparators[0]
+        left_key = _reference_key(left)
+        right_key = _reference_key(right)
+        return (
+            left_key in direct_writes
+            and _same_literal(direct_writes[left_key], right)
+        ) or (
+            right_key in direct_writes
+            and _same_literal(direct_writes[right_key], left)
+        )
+    key = _reference_key(expression)
+    if key not in direct_writes:
+        return False
+    try:
+        return bool(ast.literal_eval(direct_writes[key]))
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
 
 
 def _parse_markers_from_file(
@@ -485,7 +772,12 @@ def _parse_markers_from_file(
 
 def _has_real_text(value: str) -> bool:
     normalized = value.strip()
-    return bool(normalized) and "<" not in normalized and "todo" not in normalized.lower()
+    return (
+        bool(normalized)
+        and "<" not in normalized
+        and normalized.lower() not in PLACEHOLDER_VALUES
+        and "todo" not in normalized.lower()
+    )
 
 
 def validate_workflow_test_markers(
@@ -497,25 +789,25 @@ def validate_workflow_test_markers(
         return True, "当前工作流没有自动化测试项，无需 Workflow-Test 标识"
 
     markers: list[WorkflowTestMarker] = []
-    marker_errors: list[str] = []
+    failures: list[str] = []
     try:
-        for relative_path in _test_source_paths(project_root):
+        for relative_path in planned_test_source_paths(project_root, topics):
+            if not os.path.isfile(os.path.join(project_root, *relative_path.split("/"))):
+                failures.append(f"测试计划登记的测试文件尚未生成: {relative_path}")
+                continue
             markers.extend(
-                _parse_markers_from_file(project_root, relative_path, marker_errors)
+                _parse_markers_from_file(project_root, relative_path, failures)
             )
     except ValueError as exc:
-        return False, str(exc)
-    if marker_errors:
-        return False, "；".join(marker_errors)
+        failures.append(str(exc))
 
     # 当前主题的每个标识都必须完整对应现有测试项；未知测试项和错误名称一律拒绝
     expected_by_key = {(item.topic, item.test_id): item for item in expected_items}
     for marker in markers:
         if marker.topic in topics and (marker.topic, marker.test_id) not in expected_by_key:
-            return (
-                False,
+            failures.append(
                 f"{marker.path}:{marker.line} 标识引用了当前测试计划中不存在的测试项: "
-                f"{marker.topic} / {marker.test_id}",
+                f"{marker.topic} / {marker.test_id}"
             )
 
     for item in expected_items:
@@ -525,9 +817,13 @@ def validate_workflow_test_markers(
             if marker.topic == item.topic and marker.test_id == item.test_id
         ]
         if not candidates:
-            return (
-                False,
+            failures.append(
                 f"测试代码缺少 Workflow-Test 标识: {item.topic} / {item.test_id} {item.test_name}",
+            )
+            continue
+        if len(candidates) != 1:
+            failures.append(
+                f"{item.topic} / {item.test_id} 必须恰好有一个 Workflow-Test 标识，实际 {len(candidates)} 个"
             )
         errors = []
         for marker in candidates:
@@ -542,19 +838,54 @@ def validate_workflow_test_markers(
                 marker_errors.append(f"测试方式应为“{item.test_method}”")
             if marker.test_level not in TEST_LEVELS:
                 marker_errors.append(f"测试层级必须是 {sorted(TEST_LEVELS)}")
-            if not _has_real_text(marker.test_target):
-                marker_errors.append("测试目标缺少具体内容")
-            if not _has_real_text(marker.test_entry):
-                marker_errors.append("测试入口缺少具体内容")
-            if not _has_real_text(marker.code_entry):
-                marker_errors.append("代码入口缺少具体内容")
+            expected_test_path, _ = _entry_parts(item.test_entry, "测试入口")
+            if marker.path.replace("\\", "/") != expected_test_path:
+                marker_errors.append(f"标识文件应为“{expected_test_path}”")
+            exact_fields = (
+                ("产品入口", marker.product_entry, item.product_entry),
+                ("测试入口", marker.test_entry, item.test_entry),
+                ("代码入口", marker.code_entry, item.code_entry),
+                ("准备数据", marker.preparation, item.preparation),
+                ("执行动作", marker.action, item.action),
+                ("关键断言", marker.key_assertion, item.expected_result),
+                ("预期证据", marker.expected_evidence, item.evidence_requirement),
+            )
+            for label, actual, expected in exact_fields:
+                if not _has_real_text(actual):
+                    marker_errors.append(f"{label}缺少具体内容")
+                elif actual != expected:
+                    marker_errors.append(f"{label}应为“{expected}”")
             if marker_errors:
                 errors.append(f"{marker.path}:{marker.line} " + "；".join(marker_errors))
         # 同一测试项的多个标识必须全部完整正确；部分有效的重复标识不能被忽略
         if errors:
-            return False, f"{item.topic} / {item.test_id} 的标识不完整: {'；'.join(errors)}"
+            failures.append(f"{item.topic} / {item.test_id} 的标识不完整: {'；'.join(errors)}")
 
-    return True, f"{len(expected_items)} 个自动化测试项都有完整 Workflow-Test 标识"
+    if failures:
+        unique = sorted(set(failures))
+        return False, "\n".join(f"{index}. {failure}" for index, failure in enumerate(unique, 1))
+    confirmation_facts: list[str] = []
+    for marker in sorted(markers, key=lambda item: (item.topic, item.test_id, item.path, item.line)):
+        if marker.topic not in topics:
+            continue
+        definition = (
+            f"{marker.path}:{marker.definition_line}-{marker.definition_end_line}"
+            if marker.definition_line > 0
+            else f"{marker.path}:标识行 {marker.line}；测试入口 {marker.test_entry}"
+        )
+        body_excerpt = " ".join(marker.body_excerpt.split()) or "非 Python 测试由用户核对真实定义"
+        body_hash = marker.body_sha256 or "非 Python 测试未生成正文哈希"
+        confirmation_facts.append(
+            f"{marker.topic}/{marker.test_id}：产品入口={marker.product_entry}；"
+            f"测试定义={definition}；准备={marker.preparation}；动作={marker.action}；"
+            f"关键断言={marker.key_assertion}；预期证据={marker.expected_evidence}；"
+            f"正文 SHA-256={body_hash}；正文摘要={body_excerpt}"
+        )
+    return (
+        True,
+        f"{len(expected_items)} 个自动化测试项都有完整 Workflow-Test 标识；"
+        "用户确认前逐项核对：\n" + "\n".join(confirmation_facts),
+    )
 
 
 def collect_workflow_test_markers(
@@ -563,6 +894,8 @@ def collect_workflow_test_markers(
 ) -> list[WorkflowTestMarker]:
     """返回当前主题的全部 Workflow-Test 标识，供执行登记读取测试入口。"""
     markers: list[WorkflowTestMarker] = []
-    for relative_path in _test_source_paths(project_root):
+    for relative_path in planned_test_source_paths(project_root, topics):
+        if not os.path.isfile(os.path.join(project_root, *relative_path.split("/"))):
+            continue
         markers.extend(_parse_markers_from_file(project_root, relative_path))
     return [marker for marker in markers if marker.topic in topics]

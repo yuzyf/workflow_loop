@@ -10,6 +10,7 @@ from workflow_loop.test_execution import (
     run_prepared_tasks,
     validate_command,
     validate_command_entries,
+    validate_prepared_tasks,
 )
 from workflow_loop.verification import compute_code_snapshot_hash, compute_test_code_snapshot_hash
 
@@ -24,15 +25,22 @@ def _pytest_command(entry: str) -> list[str]:
 
 def _write_test_documents(tmp_path, *, command_label="通过"):
     (tmp_path / "qa").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "upload.py").write_text(
+        "from pathlib import Path\n\n"
+        "def upload_file(target, content):\n"
+        "    Path(target).write_text(content, encoding='utf-8')\n",
+        encoding="utf-8",
+    )
     (tmp_path / "qa" / f"{TOPIC}_测试计划.md").write_text(
         f"""# {TOPIC}测试计划
 
 ## 1. 验收条件覆盖
 
-| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
-|---|---|---|---|---|---|---|
-| [AC-01：上传完成](../acceptance/{TOPIC}_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证上传完成](#tc-01) | 无 | 自动化测试 | 检查上传结果 | 文件被保存 | 保留执行证据 |
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：上传完成](../acceptance/{TOPIC}_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证上传完成](#tc-01) | 无 | 自动化测试 | 上传命令 | `src/upload.py::upload_file` | `tests/test_upload.py::test_upload` | 创建隔离临时目录 | 调用上传入口写入文件 | 临时目录中的目标文件 | 目标文件存在且内容正确 | 文件缺失或内容错误 | 结构化报告和目标文件内容 |
 
 ## 2. 针对性回归范围
 
@@ -53,18 +61,27 @@ def _write_test_documents(tmp_path, *, command_label="通过"):
         encoding="utf-8",
     )
     (tmp_path / "tests" / "test_upload.py").write_text(
-        """def test_upload():
+        """from src.upload import upload_file
+
+
+def test_upload(tmp_path):
     \"\"\"Workflow-Test
     主题：上传文件
     测试项：TC-01 验证上传完成
     验收条件：AC-01 上传完成
     测试方式：自动化测试
     测试层级：命令测试
-    测试目标：运行上传命令后检查文件已经保存
-    测试入口：tests/test_upload.py::test_upload
-    代码入口：src/upload.py 的 upload_file()
+    产品入口：上传命令
+    测试入口：`tests/test_upload.py::test_upload`
+    代码入口：`src/upload.py::upload_file`
+    准备数据：创建隔离临时目录
+    执行动作：调用上传入口写入文件
+    关键断言：目标文件存在且内容正确
+    预期证据：结构化报告和目标文件内容
     \"\"\"
-    assert True
+    target = tmp_path / "uploaded.txt"
+    upload_file(target, "saved")
+    assert target.read_text(encoding="utf-8") == "saved"
 """,
         encoding="utf-8",
     )
@@ -75,9 +92,9 @@ def _write_test_documents(tmp_path, *, command_label="通过"):
 
 ### 主题关系
 
-| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
-|---|---|---|---|---|---|
-| 1 | {TOPIC} | 无 | [{TOPIC}验收计划](../acceptance/{TOPIC}_验收计划.md) | [{TOPIC}测试计划](./{TOPIC}_测试计划.md) | [{TOPIC}测试结果](./{TOPIC}_测试结果.md) |
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 实施记录 | 测试计划 | 测试结果 |
+|---|---|---|---|---|---|---|
+| 1 | {TOPIC} | 无 | [{TOPIC}验收计划](../acceptance/{TOPIC}_验收计划.md) | [{TOPIC}实施记录](../impl/{TOPIC}_实施记录.md) | [{TOPIC}测试计划](./{TOPIC}_测试计划.md) | `./{TOPIC}_测试结果.md`（待生成） |
 """,
         encoding="utf-8",
     )
@@ -97,6 +114,33 @@ def _state(tmp_path):
     return state
 
 
+def test_qa_template_uses_the_same_seven_column_contract_as_execution():
+    """模板副本必须同步，并使用执行器实际读取的七列索引格式。"""
+    repository_root = Path(__file__).parents[1]
+    packaged_path = (
+        repository_root
+        / "src"
+        / "workflow_loop"
+        / "data"
+        / "Template_Repository"
+        / "qa"
+        / "test_plan.md"
+    )
+    active_path = repository_root / ".workflow_loop" / "Template_Repository" / "qa" / "test_plan.md"
+    packaged = packaged_path.read_text(encoding="utf-8")
+
+    assert active_path.read_text(encoding="utf-8") == packaged
+    assert (
+        "| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 实施记录 | 测试计划 | 测试结果 |"
+        in packaged
+    )
+    assert "../impl/<主题 A 文件标识>_实施记录.md" in packaged
+    assert "`./<主题文件标识>_测试结果.md`（待生成）" in packaged
+    assert "`./<主题 A 文件标识>_测试结果.md`（待生成）" in packaged
+    assert "`qa/<主题文件标识>_测试结果.md`（待生成）" not in packaged
+    assert "`qa/<主题 A 文件标识>_测试结果.md`（待生成）" not in packaged
+
+
 def test_prepare_registers_real_argv_and_plan_dependencies(tmp_path):
     """Workflow-Test
     主题：项目修改可恢复且正式测试结果来自真实执行
@@ -112,9 +156,21 @@ def test_prepare_registers_real_argv_and_plan_dependencies(tmp_path):
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
 
-    task = prepare_task(str(tmp_path), state, TOPIC, "TC-01", command, timeout_seconds=12)
+    task = prepare_task(
+        str(tmp_path),
+        state,
+        TOPIC,
+        "TC-01",
+        command,
+        timeout_seconds=12,
+        report_adapter="pytest-junitxml",
+    )
 
-    assert task.command == command
+    assert task.command[: len(command)] == command
+    assert task.command[-3:-1] == ["-p", "workflow_loop.test_report"]
+    assert task.command[-1].startswith("--junitxml=")
+    assert task.report_adapter == "pytest-junitxml"
+    assert task.report_path == f".workflow_loop/test_reports/{WORKFLOW_ID}/{TOPIC}/TC-01.xml"
     assert task.test_entries == ["tests/test_upload.py::test_upload"]
     assert task.dependencies == []
     assert task.timeout_seconds == 12
@@ -135,7 +191,10 @@ def test_run_success_writes_current_record_but_not_formal_result(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
-    prepare_task(str(tmp_path), state, TOPIC, "TC-01", command)
+    prepare_task(
+        str(tmp_path), state, TOPIC, "TC-01", command,
+        report_adapter="pytest-junitxml",
+    )
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=1)
     loaded = load_state(str(tmp_path))
@@ -145,7 +204,7 @@ def test_run_success_writes_current_record_but_not_formal_result(tmp_path):
     assert task.status == "passed"
     assert task.current_record is not None
     assert task.current_record.exit_code == 0
-    assert task.current_record.command == command
+    assert task.current_record.command[: len(command)] == command
     assert not (tmp_path / "qa" / f"{TOPIC}_测试结果.md").exists()
 
 
@@ -163,7 +222,10 @@ def test_rerun_keeps_current_success_without_executing_it_twice(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
-    prepare_task(str(tmp_path), state, TOPIC, "TC-01", command)
+    prepare_task(
+        str(tmp_path), state, TOPIC, "TC-01", command,
+        report_adapter="pytest-junitxml",
+    )
     assert len(run_prepared_tasks(str(tmp_path), state, parallelism=1)) == 1
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=1)
@@ -185,17 +247,34 @@ def test_failed_rerun_clears_previous_current_success_and_result(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     success_command = _pytest_command("tests/test_upload.py::test_upload")
-    prepare_task(str(tmp_path), state, TOPIC, "TC-01", success_command)
+    prepare_task(
+        str(tmp_path), state, TOPIC, "TC-01", success_command,
+        report_adapter="pytest-junitxml",
+    )
     assert run_prepared_tasks(str(tmp_path), state, parallelism=1)[0].status == "passed"
     (tmp_path / "qa" / f"{TOPIC}_测试结果.md").write_text("旧的通过结果", encoding="utf-8")
+    index_path = tmp_path / "qa" / "索引.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8").replace(
+            f"`./{TOPIC}_测试结果.md`（待生成）",
+            f"[{TOPIC}测试结果](./{TOPIC}_测试结果.md)",
+        ),
+        encoding="utf-8",
+    )
 
     test_path = tmp_path / "tests" / "test_upload.py"
     test_path.write_text(
-        test_path.read_text(encoding="utf-8").replace("assert True", "assert False"),
+        test_path.read_text(encoding="utf-8").replace(
+            'assert target.read_text(encoding="utf-8") == "saved"',
+            'assert target.read_text(encoding="utf-8") == "definitely-wrong"',
+        ),
         encoding="utf-8",
     )
     failure_command = _pytest_command("tests/test_upload.py::test_upload")
-    prepare_task(str(tmp_path), state, TOPIC, "TC-01", failure_command)
+    prepare_task(
+        str(tmp_path), state, TOPIC, "TC-01", failure_command,
+        report_adapter="pytest-junitxml",
+    )
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=1)
     loaded = load_state(str(tmp_path))
     task = loaded.stages["test_execution"].test_tasks[TOPIC]["TC-01"]
@@ -249,7 +328,104 @@ def test_test_command_must_select_the_registered_test_entry():
     assert ok is False
     assert entry in detail
 
+    ok, detail = validate_command_entries(_pytest_command("tests"), [entry])
+    assert ok is False
+    assert entry in detail
+
+    assert validate_command_entries(
+        _pytest_command("tests/test_upload.py"),
+        [entry],
+    ) == (True, "")
     assert validate_command_entries(_pytest_command(entry), [entry]) == (True, "")
+
+
+def test_prepared_task_validation_reports_all_independent_task_errors(tmp_path):
+    """Workflow-Test
+    主题：门禁失败一次展示完整可处理原因且快照范围准确
+    测试项：TC-03 执行前登记一次展示全部独立错误
+    验收条件：AC-03 登记问题一次完整展示
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：同一任务的命令、超时、目录、依赖和入口错误在一次校验中全部定位
+    测试入口：tests/test_test_execution.py::test_prepared_task_validation_reports_all_independent_task_errors
+    代码入口：workflow_loop.test_execution.validate_prepared_tasks
+    """
+    _write_test_documents(tmp_path)
+    state = _state(tmp_path)
+    task = prepare_task(
+        str(tmp_path),
+        state,
+        TOPIC,
+        "TC-01",
+        _pytest_command("tests/test_upload.py::test_upload"),
+        report_adapter="pytest-junitxml",
+    )
+    task.command = ["pytest", "tests/test_other.py", "&&", "echo", "bad"]
+    task.timeout_seconds = 0
+    task.cwd = "not-a-directory"
+    task.dependencies = ["TC-99"]
+    task.test_entries = ["tests/test_other.py::test_other"]
+
+    ok, detail = validate_prepared_tasks(str(tmp_path), state)
+
+    assert ok is False
+    assert "测试任务登记校验失败（共 " in detail
+    assert "主题：上传文件；测试项：TC-01；字段：执行命令" in detail
+    assert "主题：上传文件；测试项：TC-01；字段：超时时间" in detail
+    assert "主题：上传文件；测试项：TC-01；字段：工作目录" in detail
+    assert "主题：上传文件；测试项：TC-01；字段：前置测试项" in detail
+    assert "主题：上传文件；测试项：TC-01；字段：测试入口" in detail
+
+
+def test_prepared_task_validation_marks_tasks_unchecked_when_plan_cannot_parse(tmp_path):
+    """Workflow-Test
+    主题：门禁失败一次展示完整可处理原因且快照范围准确
+    测试项：TC-03 执行前登记一次展示全部独立错误
+    验收条件：AC-03 登记问题一次完整展示
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：测试计划无法解析时明确说明登记任务未检查的原因
+    测试入口：tests/test_test_execution.py::test_prepared_task_validation_marks_tasks_unchecked_when_plan_cannot_parse
+    代码入口：workflow_loop.test_execution.validate_prepared_tasks
+    """
+    _write_test_documents(tmp_path)
+    state = _state(tmp_path)
+    prepare_task(
+        str(tmp_path),
+        state,
+        TOPIC,
+        "TC-01",
+        _pytest_command("tests/test_upload.py::test_upload"),
+        report_adapter="pytest-junitxml",
+    )
+    plan_path = tmp_path / "qa" / f"{TOPIC}_测试计划.md"
+    plan_path.write_text("# 损坏的测试计划\n", encoding="utf-8")
+
+    ok, detail = validate_prepared_tasks(str(tmp_path), state)
+
+    assert ok is False
+    assert "主题：上传文件；测试项：未检查；字段：测试计划；问题：无法解析" in detail
+    assert "主题：上传文件；测试项：TC-01；字段：登记任务；问题：未检查" in detail
+
+
+def test_prepared_task_validation_reports_missing_registration_without_crashing(tmp_path):
+    """Workflow-Test
+    主题：门禁失败一次展示完整可处理原因且快照范围准确
+    测试项：TC-03 执行前登记一次展示全部独立错误
+    验收条件：AC-03 登记问题一次完整展示
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：漏登记任务只报告缺失，不读取不存在任务的字段
+    测试入口：tests/test_test_execution.py::test_prepared_task_validation_reports_missing_registration_without_crashing
+    代码入口：workflow_loop.test_execution.validate_prepared_tasks
+    """
+    _write_test_documents(tmp_path)
+    state = _state(tmp_path)
+
+    ok, detail = validate_prepared_tasks(str(tmp_path), state)
+
+    assert ok is False
+    assert "主题：上传文件；测试项：TC-01；字段：登记任务；问题：尚未登记测试命令" in detail
 
 
 def test_result_gate_matches_current_execution_record_and_command(tmp_path):
@@ -266,7 +442,10 @@ def test_result_gate_matches_current_execution_record_and_command(tmp_path):
     _write_test_documents(tmp_path)
     state = _state(tmp_path)
     command = _pytest_command("tests/test_upload.py::test_upload")
-    prepare_task(str(tmp_path), state, TOPIC, "TC-01", command)
+    prepare_task(
+        str(tmp_path), state, TOPIC, "TC-01", command,
+        report_adapter="pytest-junitxml",
+    )
     assert run_prepared_tasks(str(tmp_path), state, parallelism=1)[0].status == "passed"
     loaded = load_state(str(tmp_path))
     record = loaded.stages["test_execution"].test_tasks[TOPIC]["TC-01"].current_record
@@ -301,6 +480,14 @@ def test_result_gate_matches_current_execution_record_and_command(tmp_path):
 - 输出摘要：{output_tail}
 - 输出哈希：{record.output_sha256}
 - 输出字节数：{record.output_bytes}
+- 报告适配器：{record.report_adapter}
+- 报告哈希：{record.report_hash}
+- 报告字节数：{record.report_size}
+- 精确匹配测试入口：{json.dumps(record.matched_test_entries, ensure_ascii=False, separators=(",", ":"))}
+- 实际执行数：{record.executed_count}
+- 跳过数：{record.skipped_count}
+- 失败数：{record.failed_count}
+- 错误数：{record.error_count}
 - 产品代码哈希：{record.code_snapshot_hash}
 - 测试代码哈希：{record.test_code_hash}
 - 实际结果：命令退出码为 0，测试入口完成执行
@@ -315,10 +502,19 @@ def test_result_gate_matches_current_execution_record_and_command(tmp_path):
     assert ok is True, detail
 
     result_path = tmp_path / "qa" / f"{TOPIC}_测试结果.md"
-    result_path.write_text(result_path.read_text(encoding="utf-8").replace("退出码：0", "退出码：1"), encoding="utf-8")
+    result_path.write_text(
+        result_path.read_text(encoding="utf-8")
+        .replace("退出码：0", "退出码：1")
+        .replace(f"报告哈希：{record.report_hash}", "报告哈希：错误哈希")
+        .replace("- 实际结果：命令退出码为 0，测试入口完成执行\n", ""),
+        encoding="utf-8",
+    )
     ok, detail = validate_test_execution_results(str(tmp_path), WORKFLOW_ID, [TOPIC])
     assert ok is False
     assert "退出码" in detail
+    assert "报告哈希" in detail
+    assert "缺少实际结果" in detail
+    assert detail.startswith("1. ")
 
 
 def _write_dependency_topic(
@@ -326,18 +522,28 @@ def _write_dependency_topic(
     topic: str,
     entry_name: str,
     *,
-    body: str = "    assert True",
+    body: str | None = None,
 ) -> None:
     (tmp_path / "qa").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / f"{entry_name}.py").write_text(
+        "def run():\n    return True\n",
+        encoding="utf-8",
+    )
+    if body is None:
+        body = (
+            f"    from src.{entry_name} import run\n"
+            "    assert run() is True"
+        )
     (tmp_path / "qa" / f"{topic}_测试计划.md").write_text(
         f"""# {topic}测试计划
 
 ## 1. 验收条件覆盖
 
-| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
-|---|---|---|---|---|---|---|
-| [AC-01：{topic}完成](../acceptance/{topic}_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证{topic}完成](#tc-01) | 无 | 自动化测试 | 检查{topic} | {topic}完成 | 保留执行证据 |
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：{topic}完成](../acceptance/{topic}_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证{topic}完成](#tc-01) | 无 | 自动化测试 | {topic}命令 | `src/{entry_name}.py::run` | `tests/test_{entry_name}.py::test_{entry_name}` | 创建隔离测试数据 | 调用{topic}真实入口 | 命令退出状态和业务结果 | {topic}完成 | 命令失败或业务结果不正确 | 结构化报告和业务结果 |
 """,
         encoding="utf-8",
     )
@@ -349,9 +555,13 @@ def _write_dependency_topic(
     验收条件：AC-01 {topic}完成
     测试方式：自动化测试
     测试层级：命令测试
-    测试目标：检查{topic}对应的真实命令完成
-    测试入口：tests/test_{entry_name}.py::test_{entry_name}
-    代码入口：src/{entry_name}.py 的 run()
+    产品入口：{topic}命令
+    测试入口：`tests/test_{entry_name}.py::test_{entry_name}`
+    代码入口：`src/{entry_name}.py::run`
+    准备数据：创建隔离测试数据
+    执行动作：调用{topic}真实入口
+    关键断言：{topic}完成
+    预期证据：结构化报告和业务结果
     """
 {body}
 ''',
@@ -411,10 +621,10 @@ def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
 
 ### 主题关系
 
-| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
-|---|---|---|---|---|---|
-| 1 | {first} | 无 | [验收计划](../acceptance/{first}_验收计划.md) | [测试计划](./{first}_测试计划.md) | [测试结果](./{first}_测试结果.md) |
-| 2 | {second} | {first} | [验收计划](../acceptance/{second}_验收计划.md) | [测试计划](./{second}_测试计划.md) | [测试结果](./{second}_测试结果.md) |
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 实施记录 | 测试计划 | 测试结果 |
+|---|---|---|---|---|---|---|
+| 1 | {first} | 无 | [验收计划](../acceptance/{first}_验收计划.md) | [实施记录](../impl/{first}_实施记录.md) | [测试计划](./{first}_测试计划.md) | `./{first}_测试结果.md`（待生成） |
+| 2 | {second} | {first} | [验收计划](../acceptance/{second}_验收计划.md) | [实施记录](../impl/{second}_实施记录.md) | [测试计划](./{second}_测试计划.md) | `./{second}_测试结果.md`（待生成） |
 """,
         encoding="utf-8",
     )
@@ -426,6 +636,7 @@ def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
         first,
         "TC-01",
         _pytest_command("tests/test_prepare_upload.py::test_prepare_upload"),
+        report_adapter="pytest-junitxml",
     )
     prepare_task(
         str(tmp_path),
@@ -433,6 +644,7 @@ def test_topic_dependencies_run_predecessor_before_dependent_topic(tmp_path):
         second,
         "TC-01",
         _pytest_command("tests/test_upload_file.py::test_upload_file"),
+        report_adapter="pytest-junitxml",
     )
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=2)
@@ -467,12 +679,12 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
 
 ### 主题关系
 
-| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 测试计划 | 测试结果 |
-|---|---|---|---|---|---|
-| 1 | {first} | 无 | [验收计划](../acceptance/{first}_验收计划.md) | [测试计划](./{first}_测试计划.md) | [测试结果](./{first}_测试结果.md) |
-| 2 | {second} | {first} | [验收计划](../acceptance/{second}_验收计划.md) | [测试计划](./{second}_测试计划.md) | [测试结果](./{second}_测试结果.md) |
-| 3 | {third} | {second} | [验收计划](../acceptance/{third}_验收计划.md) | [测试计划](./{third}_测试计划.md) | [测试结果](./{third}_测试结果.md) |
-| 4 | {independent} | 无 | [验收计划](../acceptance/{independent}_验收计划.md) | [测试计划](./{independent}_测试计划.md) | [测试结果](./{independent}_测试结果.md) |
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 实施记录 | 测试计划 | 测试结果 |
+|---|---|---|---|---|---|---|
+| 1 | {first} | 无 | [验收计划](../acceptance/{first}_验收计划.md) | [实施记录](../impl/{first}_实施记录.md) | [测试计划](./{first}_测试计划.md) | `./{first}_测试结果.md`（待生成） |
+| 2 | {second} | {first} | [验收计划](../acceptance/{second}_验收计划.md) | [实施记录](../impl/{second}_实施记录.md) | [测试计划](./{second}_测试计划.md) | `./{second}_测试结果.md`（待生成） |
+| 3 | {third} | {second} | [验收计划](../acceptance/{third}_验收计划.md) | [实施记录](../impl/{third}_实施记录.md) | [测试计划](./{third}_测试计划.md) | `./{third}_测试结果.md`（待生成） |
+| 4 | {independent} | 无 | [验收计划](../acceptance/{independent}_验收计划.md) | [实施记录](../impl/{independent}_实施记录.md) | [测试计划](./{independent}_测试计划.md) | `./{independent}_测试结果.md`（待生成） |
 """,
         encoding="utf-8",
     )
@@ -483,6 +695,7 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
         first,
         "TC-01",
         _pytest_command("tests/test_prepare_upload.py::test_prepare_upload"),
+        report_adapter="pytest-junitxml",
     )
     prepare_task(
         str(tmp_path),
@@ -490,6 +703,7 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
         second,
         "TC-01",
         _pytest_command("tests/test_upload_file.py::test_upload_file"),
+        report_adapter="pytest-junitxml",
     )
     prepare_task(
         str(tmp_path),
@@ -497,6 +711,7 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
         third,
         "TC-01",
         _pytest_command("tests/test_confirm_upload.py::test_confirm_upload"),
+        report_adapter="pytest-junitxml",
     )
     prepare_task(
         str(tmp_path),
@@ -504,6 +719,7 @@ def test_failed_predecessor_topic_blocks_dependent_topic(tmp_path):
         independent,
         "TC-01",
         _pytest_command("tests/test_record_audit.py::test_record_audit"),
+        report_adapter="pytest-junitxml",
     )
 
     attempts = run_prepared_tasks(str(tmp_path), state, parallelism=2)

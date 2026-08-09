@@ -22,6 +22,10 @@ def _write(path: Path, content: str) -> None:
 def _setup(tmp_path: Path, method: str = "自动化测试") -> WorkflowState:
     topic = "上传文件"
     _write(
+        tmp_path / "src" / "upload.py",
+        "def upload_file():\n    return 'saved'\n",
+    )
+    _write(
         tmp_path / "acceptance" / "索引.md",
         """# 验收主题索引
 
@@ -29,7 +33,7 @@ def _setup(tmp_path: Path, method: str = "自动化测试") -> WorkflowState:
 
 | 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
 |---|---|---|---|---|
-| 1 | 上传文件 | 无 | [验收计划](./上传文件_验收计划.md) | [验收结果](./上传文件_验收结果.md) |
+| 1 | 上传文件 | 无 | [验收计划](./上传文件_验收计划.md) | `./上传文件_验收结果.md`（待生成） |
 """,
     )
     _write(
@@ -38,9 +42,9 @@ def _setup(tmp_path: Path, method: str = "自动化测试") -> WorkflowState:
 
 ## 1. 验收条件覆盖
 
-| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
-|---|---|---|---|---|---|---|
-| [AC-01：上传完成](../acceptance/上传文件_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证上传完成](#tc-01) | 无 | {method} | 检查上传 | 观察到上传完成 | 记录结果 |
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：上传完成](../acceptance/上传文件_验收计划.md#ac-01) | <a id=\"tc-01\"></a>[TC-01 验证上传完成](#tc-01) | 无 | {method} | 上传命令 | `src/upload.py::upload_file` | `tests/test_upload.py::test_upload` | 创建隔离临时目录 | 调用上传入口写入文件 | 临时目录中的目标文件 | 目标文件存在且内容正确 | 文件缺失或内容错误 | 结构化报告和目标文件内容 |
 """,
     )
     state = WorkflowState(
@@ -53,11 +57,27 @@ def _setup(tmp_path: Path, method: str = "自动化测试") -> WorkflowState:
                 test_tasks={
                     topic: {
                         "TC-01": ExecutionTask(
+                            test_entries=["tests/test_upload.py::test_upload"],
+                            command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
+                            report_adapter="pytest-junitxml",
+                            report_path=".workflow_loop/test_reports/upload.xml",
                             status="passed",
                             current_record=ExecutionRecord(
+                                test_entries=["tests/test_upload.py::test_upload"],
+                                command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
                                 status="passed",
                                 exit_code=0,
                                 record_id="RUN-1",
+                                code_snapshot_hash="code",
+                                test_code_hash="tests",
+                                report_adapter="pytest-junitxml",
+                                report_hash="a" * 64,
+                                report_size=1024,
+                                executed_count=1,
+                                skipped_count=0,
+                                failed_count=0,
+                                error_count=0,
+                                matched_test_entries=["tests/test_upload.py::test_upload"],
                             ),
                         )
                     }
@@ -94,6 +114,32 @@ def test_automated_acceptance_record_is_created_from_current_test(tmp_path):
     assert records_mod.record_is_current(record, state)
     assert record.user_answer is None
     assert record.test_record_ids == ["RUN-1"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("report_hash", None),
+        ("executed_count", 0),
+        ("skipped_count", 1),
+        ("matched_test_entries", ["tests/test_upload.py::other_test"]),
+        ("code_snapshot_hash", None),
+    ],
+)
+def test_automated_acceptance_rejects_incomplete_or_invalid_machine_facts(
+    tmp_path,
+    field,
+    value,
+):
+    state = _setup(tmp_path)
+    task = state.stages["test_execution"].test_tasks["上传文件"]["TC-01"]
+    assert task.current_record is not None
+    setattr(task.current_record, field, value)
+
+    created = records_mod.ensure_automated_records(str(tmp_path), state)
+
+    assert created == []
+    assert state.stages["topic_acceptance"].acceptance_records.get("上传文件", {}) == {}
 
 
 def test_manual_acceptance_record_requires_user_observation_and_answer(tmp_path):
@@ -160,6 +206,14 @@ def test_failed_acceptance_clears_current_topic_record_and_result_file(tmp_path)
     )
     result_file = tmp_path / "acceptance" / "上传文件_验收结果.md"
     _write(result_file, "旧结果")
+    index_file = tmp_path / "acceptance" / "索引.md"
+    index_file.write_text(
+        index_file.read_text(encoding="utf-8").replace(
+            "`./上传文件_验收结果.md`（待生成）",
+            "[验收结果](./上传文件_验收结果.md)",
+        ),
+        encoding="utf-8",
+    )
 
     records_mod.record_user_result(
         str(tmp_path),

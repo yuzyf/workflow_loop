@@ -55,6 +55,7 @@ PowerShell 7 作业输出确认：`workflow-spike-probe` 从 `1.0.0` 更新到 `
 
 Windows PowerShell 5.1 作业输出确认：父进程等待成立，等待 743 毫秒后开始调用 uv；但把 uv 的正常标准错误进度文字通过 `2>&1` 合并到当前 PowerShell 错误流，在 `ErrorActionPreference=Stop` 下提前进入异常处理，未完成后续版本和卸载断言。该失败暴露的是输出流处理方式，不是否定辅助进程交接。
 
+<a id="7-结论"></a>
 ## 7. 结论
 
 - 结果状态：限制已确认

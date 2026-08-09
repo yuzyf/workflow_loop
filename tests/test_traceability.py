@@ -3,6 +3,7 @@ from pathlib import Path
 from workflow_loop.traceability import (
     reset_after_upstream_invalidation,
     reset_topic_test_results,
+    reset_topics_for_return,
     update_for_stage,
     validate_structure,
 )
@@ -54,15 +55,18 @@ def _write_acceptance_plans(tmp_path: Path) -> None:
 
 def _write_test_plans(tmp_path: Path) -> None:
     for topic in TOPICS:
+        code_path = f"src/{topic}.py"
+        test_path = f"tests/test_{topic}.py"
+        _write(tmp_path / code_path, "def run():\n    return True\n")
         _write(
             tmp_path / "qa" / f"{topic}_测试计划.md",
             f"""# {topic}测试计划
 
 ## 1. 验收条件覆盖
 
-| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
-|---|---|---|---|---|---|---|
-| [AC-01：完成条件](../acceptance/{topic}_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 验证{topic}完成](#tc-01) | 无 | 自动化测试 | 检查{topic} | 观察到{topic}完成 | 保留执行证据 |
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：完成条件](../acceptance/{topic}_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 验证{topic}完成](#tc-01) | 无 | 自动化测试 | {topic}入口 | `{code_path}::run` | `{test_path}::test_run` | 创建隔离数据 | 调用{topic}入口 | 返回结果 | 观察到{topic}完成 | 没有得到完成结果 | 保留执行证据 |
 
 ## 2. 针对性回归范围
 
@@ -115,6 +119,76 @@ def test_traceability_updates_only_current_workflow_and_is_idempotent(tmp_path):
     assert "| 旧来源 | [旧主题]" in second
 
 
+def test_traceability_update_preserves_adjacent_workflow_boundaries(tmp_path):
+    """带显式定位编号或普通标题的相邻工作流都不能被当前更新粘连。"""
+    for case_name, next_heading in [
+        (
+            "anchored",
+            '<a id="2026-07-25-history"></a>\n## 2026-07-25-history',
+        ),
+        ("plain", "## 2026-07-25-history"),
+    ]:
+        case_root = tmp_path / case_name
+        rows = [
+            f"| [产品设计](./spec/产品总说明.md) | [{topic}](./acceptance/{topic}_验收计划.md) | AC-01：{topic}完成 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |"
+            for topic in TOPICS
+        ]
+        history = (
+            f"{next_heading}\n\n"
+            "### 交付链路\n\n"
+            "| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "| 历史来源 | 历史主题 | AC-01 | 历史测试 | 历史计划 | 历史实施 | 历史结果 | 历史验收 | 历史设计 |\n"
+        )
+        _write(
+            case_root / "需求交付追踪表.md",
+            (
+                "# 需求交付追踪表\n\n"
+                f"## {WORKFLOW_ID}\n\n"
+                "### 交付链路\n\n"
+                "| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |\n"
+                "|---|---|---|---|---|---|---|---|---|\n"
+                + "\n".join(rows)
+                + "\n\n"
+                + history
+            ),
+        )
+        _write_acceptance_plans(case_root)
+        for topic in TOPICS:
+            _write(case_root / "impl" / f"{topic}_实施记录.md", "# 实施记录\n")
+
+        before_history = history
+        update_for_stage(str(case_root), WORKFLOW_ID, TOPICS, "impl")
+
+        content = (case_root / "需求交付追踪表.md").read_text(encoding="utf-8")
+        assert before_history in content
+        assert "</a>##" not in content
+        assert "|##" not in content
+        ok, detail = validate_structure(str(case_root), WORKFLOW_ID, TOPICS)
+        assert ok is True, detail
+        assert detail.endswith("包含 2 条九列交付记录")
+
+
+def test_traceability_validation_reports_all_topic_structure_errors(tmp_path):
+    _write(
+        tmp_path / "需求交付追踪表.md",
+        f"""# 需求交付追踪表
+
+## {WORKFLOW_ID}
+
+| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
+|---|---|---|---|---|---|---|---|---|
+| [产品设计](./spec/产品总说明.md) | [上传文件](./acceptance/上传文件_验收计划.md) | AC-01 |  | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |
+""",
+    )
+
+    ok, detail = validate_structure(str(tmp_path), WORKFLOW_ID, TOPICS)
+
+    assert ok is False
+    assert "主题“上传文件”存在空单元格" in detail
+    assert "缺少主题“查看状态”的交付记录" in detail
+
+
 def test_traceability_updates_each_downstream_column(tmp_path):
     """Workflow-Test
     主题：验收测试和实施计划按同一主题完整追踪
@@ -138,7 +212,7 @@ def test_traceability_updates_each_downstream_column(tmp_path):
     _write(tmp_path / "acceptance" / "查看状态_验收结果.md", "# 验收结果\n")
     _write(tmp_path / "spec" / "代码架构设计.md", "# 架构\n")
 
-    for stage in ["test_plan", "impl", "test_execution", "topic_acceptance", "regression_test", "overall_acceptance", "update_code_design"]:
+    for stage in ["impl", "test_plan", "test_execution", "topic_acceptance", "regression_test", "overall_acceptance", "update_code_design"]:
         update_for_stage(str(tmp_path), WORKFLOW_ID, TOPICS, stage)
 
     content = (tmp_path / "需求交付追踪表.md").read_text(encoding="utf-8")
@@ -177,16 +251,17 @@ def test_traceability_writes_only_each_acceptance_criterion_test_items(tmp_path)
 | [产品设计](./spec/产品总说明.md) | [{topic}](./acceptance/{topic}_验收计划.md) | AC-02：上传失败有提示 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |
 """,
     )
+    _write(tmp_path / "src" / "upload.py", "def run():\n    return True\n")
     _write(
         tmp_path / "qa" / f"{topic}_测试计划.md",
         f"""# {topic}测试计划
 
 ## 1. 验收条件覆盖
 
-| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
-|---|---|---|---|---|---|---|
-| [AC-01：上传成功](../acceptance/{topic}_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 验证上传成功](#tc-01) | 无 | 自动化测试 | 检查成功结果 | 文件已保存 | 保留结果 |
-| [AC-02：上传失败有提示](../acceptance/{topic}_验收计划.md#ac-02) | <a id="tc-02"></a>[TC-02 验证失败提示](#tc-02) | TC-01 | 自动化测试 | 检查失败结果 | 显示原因 | 保留结果 |
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：上传成功](../acceptance/{topic}_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 验证上传成功](#tc-01) | 无 | 自动化测试 | 上传入口 | `src/upload.py::run` | `tests/test_upload.py::test_success` | 创建有效文件 | 调用上传入口 | 保存结果 | 文件已保存 | 文件没有保存 | 保留结果 |
+| [AC-02：上传失败有提示](../acceptance/{topic}_验收计划.md#ac-02) | <a id="tc-02"></a>[TC-02 验证失败提示](#tc-02) | TC-01 | 自动化测试 | 上传入口 | `src/upload.py::run` | `tests/test_upload.py::test_failure` | 创建无效文件 | 调用上传入口 | 错误结果 | 显示原因 | 没有显示原因 | 保留结果 |
 """,
     )
 
@@ -229,16 +304,17 @@ def test_traceability_marks_manual_acceptance_per_criterion_in_mixed_topic(tmp_p
 | [产品设计](./spec/产品总说明.md) | [{topic}](./acceptance/{topic}_验收计划.md) | AC-02：界面文字易懂 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |
 """,
     )
+    _write(tmp_path / "src" / "upload.py", "def run():\n    return True\n")
     _write(
         tmp_path / "qa" / f"{topic}_测试计划.md",
         f"""# {topic}测试计划
 
 ## 1. 验收条件覆盖
 
-| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 验证方向 | 预期观察结果 | 证据要求 |
-|---|---|---|---|---|---|---|
-| [AC-01：上传成功](../acceptance/{topic}_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 验证上传成功](#tc-01) | 无 | 自动化测试 | 检查成功结果 | 文件已保存 | 保留结果 |
-| [AC-02：界面文字易懂](../acceptance/{topic}_验收计划.md#ac-02) | <a id="tc-02"></a>[TC-02 用户判断界面文字](#tc-02) | TC-01 | 人工验收 | 用户阅读文字 | 用户可以理解 | 保留确认 |
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：上传成功](../acceptance/{topic}_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 验证上传成功](#tc-01) | 无 | 自动化测试 | 上传入口 | `src/upload.py::run` | `tests/test_upload.py::test_success` | 创建有效文件 | 调用上传入口 | 保存结果 | 文件已保存 | 文件没有保存 | 保留结果 |
+| [AC-02：界面文字易懂](../acceptance/{topic}_验收计划.md#ac-02) | <a id="tc-02"></a>[TC-02 用户判断界面文字](#tc-02) | TC-01 | 人工验收 | 上传页面 | `src/upload.py::run` | `tests/test_upload.py::manual_text` | 打开上传页面 | 阅读界面文字 | 页面文字 | 用户可以理解 | 用户无法理解 | 保留确认 |
 """,
     )
 
@@ -341,3 +417,52 @@ def test_reset_after_upstream_invalidation_clears_only_current_workflow_downstre
     content = (tmp_path / "需求交付追踪表.md").read_text(encoding="utf-8")
     assert "| 旧来源 | [旧主题]" in content
     assert "[测试计划](./qa/上传文件_测试计划.md)" not in content
+
+
+def test_return_to_test_plan_preserves_impl_columns_in_new_stage_order(tmp_path):
+    """Workflow-Test
+    主题：验收测试和实施计划按同一主题完整追踪
+    测试项：TC-03 只使直接受影响主题结果失效
+    验收条件：AC-03 只清除真实受影响的结果
+    测试方式：自动化测试
+    测试层级：集成测试
+    测试目标：新顺序中测试计划失效时保留受影响主题的实施计划和实施记录，并完整保留独立主题
+    测试入口：tests/test_traceability.py::test_return_to_test_plan_preserves_impl_columns_in_new_stage_order
+    代码入口：workflow_loop.traceability.reset_topics_for_return
+    """
+    _write_traceability(tmp_path)
+    _write_acceptance_plans(tmp_path)
+    _write_test_plans(tmp_path)
+    for topic in TOPICS:
+        _write(tmp_path / "impl" / f"{topic}_实施记录.md", "# 实施记录\n")
+
+    update_for_stage(str(tmp_path), WORKFLOW_ID, TOPICS, "impl")
+    update_for_stage(str(tmp_path), WORKFLOW_ID, TOPICS, "test_plan")
+    update_for_stage(str(tmp_path), WORKFLOW_ID, TOPICS, "test_execution")
+    before = (tmp_path / "需求交付追踪表.md").read_text(encoding="utf-8")
+    kept_before = next(
+        line for line in before.splitlines()
+        if "acceptance/查看状态_验收计划.md" in line
+    )
+
+    reset_topics_for_return(
+        str(tmp_path),
+        WORKFLOW_ID,
+        ["上传文件"],
+        "test_plan",
+    )
+
+    content = (tmp_path / "需求交付追踪表.md").read_text(encoding="utf-8")
+    changed_row = next(
+        line for line in content.splitlines()
+        if "acceptance/上传文件_验收计划.md" in line
+    )
+    kept_row = next(
+        line for line in content.splitlines()
+        if "acceptance/查看状态_验收计划.md" in line
+    )
+    assert "[实施前计划](./impl/上传文件_实施记录.md#2-实施前计划)" in changed_row
+    assert "[实施后记录](./impl/上传文件_实施记录.md#3-实施后记录)" in changed_row
+    assert "| 待制定 | [实施前计划]" in changed_row
+    assert "| 待执行 | 待执行 | 待更新 |" in changed_row
+    assert kept_row == kept_before

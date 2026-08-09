@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "yuzyf" }]
-dependencies = ["packaging>=24.0"]
+dependencies = ["markdown-it-py>=4.0", "packaging>=24.0"]
 
 [project.scripts]
 workflow = "workflow_loop.cli:main"
