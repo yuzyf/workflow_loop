@@ -156,33 +156,38 @@ def test_update_preflight_cancel_and_exact_root_are_read_only(
 
 def test_update_version_resolution_accepts_only_matching_stable_releases(monkeypatch):
     """Workflow-Test
-    主题：已安装项目一条命令更新到目标正式版本
-    测试项：TC-02 正式版本和发布来源判断
-    验收条件：AC-02 目标正式版本选择正确
+    主题：发布版本变化后维护版本判断测试仍按当前版本通过
+    测试项：TC-01 当前版本样本和版本拒绝分支完整
+    验收条件：AC-01 版本判断测试随当前包版本变化且保护规则不退化
     测试方式：自动化测试
     测试层级：模块测试
-    测试目标：默认、指定和相等正式版本可用，降级、预发布、缺失或两个发布来源不一致时拒绝
-    测试入口：tests/test_maintenance.py::test_update_version_resolution_accepts_only_matching_stable_releases
-    代码入口：workflow_loop.cli._resolve_update_version
+    产品入口：已安装项目更新入口：项目维护者执行 `workflow update` 或指定目标版本的更新命令
+    测试入口：`tests/test_maintenance.py::test_update_version_resolution_accepts_only_matching_stable_releases`
+    代码入口：`src/workflow_loop/cli.py::_resolve_update_version`（版本解析函数）
+    准备数据：从 `workflow_loop.__version__` 读取当前包版本；在测试内存中准备 PyPI 信息和发布列表、对应 GitHub Release 标签、两个低版本、一个当前版本预发布版本、一个缺失版本和一个不一致标签；不访问网络、不写项目文件。
+    执行动作：运行测试入口；测试通过受控的发布元数据替代读取当前版本和指定版本的外部来源，依次调用默认选择、显式当前版本、低版本、预发布、缺失版本和来源不一致分支。
+    关键断言：默认选择和显式选择均返回当前包版本；低版本抛出“不允许降级”对应错误，预发布抛出“不是正式版本”，缺失版本抛出“没有可用”，来源不一致抛出“两个来源不一致”；测试退出码为 0。
+    预期证据：保存 pytest 结构化报告；报告目标只有该测试入口，执行数大于 0，跳过数、失败数和错误数均为 0，进程退出码为 0；保留当前包版本和各分支断言的可复核机器记录。
     """
+    current_version = __version__
     pypi = {
-        "info": {"version": "0.2.0"},
+        "info": {"version": current_version},
         "releases": {
             "0.0.9": [{"yanked": False}],
             "0.1.0": [{"yanked": False}],
-            "0.2.0": [{"yanked": False}],
-            "0.3.0rc1": [{"yanked": False}],
+            current_version: [{"yanked": False}],
+            f"{current_version}rc1": [{"yanked": False}],
         },
     }
-    github = {"tag_name": "v0.2.0", "draft": False, "prerelease": False}
+    github = {"tag_name": f"v{current_version}", "draft": False, "prerelease": False}
     monkeypatch.setattr(
         cli,
         "_fetch_json",
         lambda url: pypi if "pypi" in url else github,
     )
 
-    assert cli._resolve_update_version(None) == "0.2.0"
-    assert cli._resolve_update_version("0.2.0") == "0.2.0"
+    assert cli._resolve_update_version(None) == current_version
+    assert cli._resolve_update_version(current_version) == current_version
     github["tag_name"] = "v0.1.0"
     with pytest.raises(ValueError, match="不允许降级"):
         cli._resolve_update_version("0.1.0")
@@ -191,12 +196,12 @@ def test_update_version_resolution_accepts_only_matching_stable_releases(monkeyp
     with pytest.raises(ValueError, match="不允许降级"):
         cli._resolve_update_version("0.0.9")
     with pytest.raises(ValueError, match="不是正式版本"):
-        cli._resolve_update_version("0.3.0rc1")
+        cli._resolve_update_version(f"{current_version}rc1")
     with pytest.raises(ValueError, match="没有可用"):
         cli._resolve_update_version("9.9.9")
     github["tag_name"] = "v9.9.9"
     with pytest.raises(ValueError, match="两个来源不一致"):
-        cli._resolve_update_version("0.2.0")
+        cli._resolve_update_version(current_version)
 
 
 def test_update_overwrites_static_management_and_preserves_runtime_data(tmp_path):
