@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ─── 固定版本与固定资产（不可变发布，不使用 latest） ───
 PRODUCT_NAME="workflow-loop"
-PRODUCT_VERSION="0.3.0"
+PRODUCT_VERSION="0.3.1"
 PRODUCT_IDENTITY="${PRODUCT_NAME} ${PRODUCT_VERSION}"
 # 经过发布测试的安装工具版本；脚本内置各平台官方资产的 SHA-256 预期摘要
 UV_VERSION="0.11.33"
