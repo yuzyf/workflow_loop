@@ -26,6 +26,27 @@ class GateState:
 
 
 @dataclass
+class ValidationCredential:
+    """第二道门校验凭据。
+
+    凭据只保存校验实际负责的输入摘要，不复制正式文档正文。第三道门用同一
+    组输入重新计算摘要；任何绑定变化、规则版本变化或凭据缺失都必须回到
+    第二道门重新完整校验。
+    """
+
+    workflow_id: str = ""
+    stage: str = ""
+    rules_version: str = "1"
+    material_hash: str | None = None
+    bound_files: dict[str, dict[str, str | bool | None]] = field(default_factory=dict)
+    bound_state: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    result: bool = False
+    report_hash: str | None = None
+    result_hash: str | None = None
+    created_at: str | None = None
+
+
+@dataclass
 class TestExecutionRecord:
     """一个测试项本次成功执行后的机器记录。
 
@@ -135,6 +156,19 @@ class StageState:
     discussion_material_hash: str | None = None
     # impl 阶段用户最后确认的实施计划哈希；计划调整重新确认后更新
     plan_confirmed_hash: str | None = None
+    # 用户可见阶段内部的当前步骤。新流程中 impl 使用 code_plan / code_implementation /
+    # code_result，qa 使用 scope / plan / test_code / tasks / execution / result。
+    internal_step: str = ""
+    # 内部步骤绑定的输入摘要；范围或计划变化时用于回到首个真实失效步骤。
+    internal_step_hash: str | None = None
+    # qa 开始时用户确认的测试范围和通过标准摘要。
+    scope_confirmed_hash: str | None = None
+    # 当前阶段最终结果摘要。impl 绑定代码结果，qa 绑定测试结果。
+    result_hash: str | None = None
+    # 明确复用既有产品代码或测试代码时保存的决定摘要。
+    reuse_decision_hash: str | None = None
+    # 第二道门完整校验成功后保存；第三道门只比较本凭据绑定输入。
+    validation_credential: ValidationCredential | None = None
     # test_execution 阶段的任务登记：第一层 key 是主题，第二层 key 是 TC 编号。
     test_tasks: dict[str, dict[str, TestTaskState]] = field(default_factory=dict)
     # topic_acceptance 阶段的当前有效验收记录：第一层 key 是主题，第二层 key 是 AC 编号。
@@ -143,11 +177,11 @@ class StageState:
     gate: GateState = field(default_factory=GateState)
 
 
-# 架构文档双阶段完成度标记（CONTEXT.md "Architecture Gate Marks"）
+# 架构文档建立和最终同步的状态标记
 # 同一份 spec/代码架构设计.md 的两种完成度，不是两个无关文件
 @dataclass
 class ArchitectureState:
-    # 初步架构完成：前段架构 stage（code_design/revise_code_design/project_design_init）--confirmed 后置 true
+    # 现状架构已建立：project_design_init 确认后置 true；旧轮次读取时保留原字段值
     preliminary_done: bool = False
     # 最终设计同步完成：末段 update_code_design --confirmed 后置 true
     # 文件存在只是必要条件，不得因已存在而自动跳过最终设计同步
@@ -172,7 +206,7 @@ class RecoveryContext:
     created_at: str | None = None
 
 
-# Verification Invalidation 的哈希绑定（CONTEXT.md "Verification Invalidation"）
+# 验证结果失效所需的上游内容哈希绑定
 # 通过状态只对绑定的上游内容有效；上游变化时下游门禁清零
 @dataclass
 class VerificationState:
@@ -197,6 +231,55 @@ class VerificationState:
     # 最终回归执行状态的 SHA256 哈希
     # 在 gate regression_test --confirmed 时记录；代码或状态变化时清零后续验收
     regression_test_result_hash: str | None = None
+
+
+@dataclass
+class SpikeRerunRecord:
+    """历史穿刺资产最近一次重跑的结构化机器事实。"""
+
+    record_id: str = ""
+    source_workflow_id: str = ""
+    current_workflow_id: str = ""
+    asset_path: str = ""
+    asset_hash_before: str = ""
+    asset_hash_after: str = ""
+    run_method: str = ""
+    command: list[str] = field(default_factory=list)
+    cwd: str = ""
+    timeout_seconds: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_seconds: float | None = None
+    status: str = "not_run"
+    exit_code: int | None = None
+    output_sha256: str | None = None
+    output_bytes: int | None = None
+    platform: str = ""
+    executable: str = ""
+    conclusion: str = ""
+
+
+@dataclass
+class SpikeAssetRegistration:
+    """一项已经形成结论、允许后续重新运行的穿刺资产登记。"""
+
+    workflow_id: str = ""
+    spike_id: str = ""
+    relative_path: str = ""
+    conclusion_document: str = ""
+    acceptance_conditions: list[str] = field(default_factory=list)
+    purpose: str = ""
+    run_method: str = ""
+    status: str = "registered"
+    registered_at: str | None = None
+    # 历史资产最近一次在哪个工作流中重新运行；只有等于当前工作流时，
+    # 本次结果才能作为当前验收条件的依据。
+    last_rerun_workflow_id: str | None = None
+    last_rerun_at: str | None = None
+    last_rerun_status: str | None = None
+    # 当前重跑得到的明确结论；失败时固定记录为不可沿用历史结论。
+    last_rerun_conclusion: str | None = None
+    last_rerun_record: SpikeRerunRecord | None = None
 
 
 # 最终全量回归状态；由 regression_test 阶段自动执行项目统一测试入口写入。
@@ -314,6 +397,11 @@ class WorkflowState:
     # PathComposer 在 start 时解析出的完整 stage 名顺序，固定不再变
     # 后续命令（discuss/gate）读这个列表找当前 stage 对应的策略类
     stage_path: list[str] = field(default_factory=list)
+    # 阶段路径模型版本。0 表示旧状态没有显式版本；2 表示使用 impl/qa 精简主干。
+    # 版本只用于一次性迁移判断，不能拿它替代对旧事实的逐项核对。
+    stage_path_version: int = 2
+    # 迁移时保留的旧阶段事实摘要。只保存原状态字段，不把旧阶段重新暴露为用户环节。
+    legacy_stage_facts: dict[str, dict] = field(default_factory=dict)
     # 每个 stage 的细粒度状态，key 是 stage 名
     stages: dict[str, StageState] = field(default_factory=dict)
     # 架构门禁标记（初步/详细），见 ArchitectureState
@@ -324,6 +412,9 @@ class WorkflowState:
     regression_test: RegressionTestState = field(default_factory=RegressionTestState)
     # 穿刺进入时的产品设计和代码设计基线
     spike_baseline: SpikeBaselineState = field(default_factory=SpikeBaselineState)
+    # 能重新运行并产生已确认结论的穿刺资产。代码和样本仍保存在 spike_tmp，
+    # 状态只保存路径、用途、运行方法和 AC 关联。
+    spike_assets: list[SpikeAssetRegistration] = field(default_factory=list)
     # 实施前保存的真实文件内容；只用于整个 Run 中止时恢复代码
     rollback: RollbackState = field(default_factory=RollbackState)
     # 上游失效或用户主动退回后的恢复说明；用于 status 和“下一步”解释当前阶段
@@ -483,6 +574,36 @@ def _acceptance_record_from_dict(data: dict) -> AcceptanceCriterionRecord:
     )
 
 
+def _spike_rerun_record_from_dict(data: dict | None) -> SpikeRerunRecord | None:
+    if not isinstance(data, dict):
+        return None
+    command = data.get("command", [])
+    if isinstance(command, str):
+        command = [command] if command else []
+    return SpikeRerunRecord(
+        record_id=data.get("record_id", ""),
+        source_workflow_id=data.get("source_workflow_id", ""),
+        current_workflow_id=data.get("current_workflow_id", ""),
+        asset_path=data.get("asset_path", ""),
+        asset_hash_before=data.get("asset_hash_before", ""),
+        asset_hash_after=data.get("asset_hash_after", ""),
+        run_method=data.get("run_method", ""),
+        command=command or [],
+        cwd=data.get("cwd", ""),
+        timeout_seconds=data.get("timeout_seconds"),
+        started_at=data.get("started_at"),
+        finished_at=data.get("finished_at"),
+        duration_seconds=data.get("duration_seconds"),
+        status=data.get("status", "not_run"),
+        exit_code=data.get("exit_code"),
+        output_sha256=data.get("output_sha256"),
+        output_bytes=data.get("output_bytes"),
+        platform=data.get("platform", ""),
+        executable=data.get("executable", ""),
+        conclusion=data.get("conclusion", ""),
+    )
+
+
 def _regression_state_from_dict(data: dict) -> RegressionTestState:
     """兼容旧状态：entry/command 由字符串转为参数数组，新机器字段缺省。"""
     entry = data.get("entry")
@@ -525,6 +646,21 @@ def state_from_dict(data: dict) -> WorkflowState:
             code_validated=gate_data.get("code_validated", False),
             user_confirmed=gate_data.get("user_confirmed", False),
         )
+        credential_data = stage_data.get("validation_credential")
+        credential = None
+        if isinstance(credential_data, dict):
+            credential = ValidationCredential(
+                workflow_id=credential_data.get("workflow_id", ""),
+                stage=credential_data.get("stage", stage_name),
+                rules_version=credential_data.get("rules_version", "1"),
+                material_hash=credential_data.get("material_hash"),
+                bound_files=credential_data.get("bound_files", {}),
+                bound_state=credential_data.get("bound_state", {}),
+                result=credential_data.get("result", False),
+                report_hash=credential_data.get("report_hash"),
+                result_hash=credential_data.get("result_hash"),
+                created_at=credential_data.get("created_at"),
+            )
         # 从 stage_data 重建 StageState
         stages[stage_name] = StageState(
             status=stage_data.get("status", "pending"),
@@ -539,6 +675,12 @@ def state_from_dict(data: dict) -> WorkflowState:
             existing_test_code_accepted_hash=stage_data.get("existing_test_code_accepted_hash"),
             discussion_material_hash=stage_data.get("discussion_material_hash"),
             plan_confirmed_hash=stage_data.get("plan_confirmed_hash"),
+            internal_step=stage_data.get("internal_step", ""),
+            internal_step_hash=stage_data.get("internal_step_hash"),
+            scope_confirmed_hash=stage_data.get("scope_confirmed_hash"),
+            result_hash=stage_data.get("result_hash"),
+            reuse_decision_hash=stage_data.get("reuse_decision_hash"),
+            validation_credential=credential,
             test_tasks={
                 topic: {
                     test_id: _test_task_from_dict(task_data)
@@ -591,6 +733,8 @@ def state_from_dict(data: dict) -> WorkflowState:
         clean_confirmed=data.get("clean_confirmed", False),
         spike_skipped=data.get("spike_skipped", False),
         stage_path=data.get("stage_path", []),
+        stage_path_version=data.get("stage_path_version", 0),
+        legacy_stage_facts=data.get("legacy_stage_facts", {}),
         stages=stages,
         architecture=ArchitectureState(
             preliminary_done=arch_data.get("preliminary_done", False),
@@ -613,6 +757,28 @@ def state_from_dict(data: dict) -> WorkflowState:
             code_design_hash=spike_baseline_data.get("code_design_hash"),
             legacy_unavailable=spike_baseline_data.get("legacy_unavailable", False),
         ),
+        spike_assets=[
+            SpikeAssetRegistration(
+                workflow_id=item.get("workflow_id", data.get("workflow_id", "")),
+                spike_id=item.get("spike_id", ""),
+                relative_path=item.get("relative_path", ""),
+                conclusion_document=item.get("conclusion_document", ""),
+                acceptance_conditions=item.get("acceptance_conditions", []),
+                purpose=item.get("purpose", ""),
+                run_method=item.get("run_method", ""),
+                status=item.get("status", "registered"),
+                registered_at=item.get("registered_at"),
+                last_rerun_workflow_id=item.get("last_rerun_workflow_id"),
+                last_rerun_at=item.get("last_rerun_at"),
+                last_rerun_status=item.get("last_rerun_status"),
+                last_rerun_conclusion=item.get("last_rerun_conclusion"),
+                last_rerun_record=_spike_rerun_record_from_dict(
+                    item.get("last_rerun_record")
+                ),
+            )
+            for item in data.get("spike_assets", [])
+            if isinstance(item, dict)
+        ],
         rollback=RollbackState(
             manifest_path=rollback_data.get("manifest_path"),
             manifest_hash=rollback_data.get("manifest_hash"),

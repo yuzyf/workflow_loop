@@ -1,34 +1,34 @@
 from .project import is_project_design_initialized
 from .stages import (
     SpecStage,
-    CodeDesignStage,
     SpikeStage,
     ImplStage,
     AcceptancePlanStage,
-    TestPlanStage,
-    TestCodeStage,
-    TestExecutionStage,
     TopicAcceptanceStage,
     RegressionTestStage,
     OverallAcceptanceStage,
     UpdateCodeDesignStage,
     ProjectDesignInitStage,
-    ReviseCodeDesignStage,
     ReproduceStage,
 )
+from .stages.stages import QaStage
 from .stages.base import StageStrategy
 
-# from_scratch（从零做）的完整 stage 路径
-# 顺序固定：先产品设计与功能拆分、后初步架构（先定做什么，再定怎么搭）
-# 然后验证技术不确定性 → 验收计划 → 实施/记录 → 测试计划 → 写测试代码 → 执行测试 → 主题验收
-# → 最终全量回归 → 整体验收 → 最终设计同步
-# 共享后半截：acceptance_plan → impl → test_plan → test_code → test_execution
-# → topic_acceptance → regression_test → overall_acceptance → update_code_design
+# 旧阶段只用于识别和迁移已经开始的轮次；新路径不得再次生成这些用户环节。
+LEGACY_STAGE_NAMES = {
+    "code_design",
+    "revise_code_design",
+    "test_plan",
+    "test_code",
+    "test_execution",
+}
+
+
+# from_scratch（从零做）的完整 stage 路径。最低限度实现设计属于 impl 的代码计划，
+# 测试计划、测试代码和正式执行属于同一个 qa 用户环节。
 FROM_SCRATCH_PATH = [
     # 产品设计阶段：产出 spec/product.md + spec/feature_*.md
     SpecStage,
-    # 初步架构阶段：产出 spec/architecture_code_design.md（从零做的初步架构）
-    CodeDesignStage,
     # 穿刺阶段：验证真实场景中的技术不确定性，写清单和每项结论；临时代码按需进入 spike_tmp/
     # 可选 stage，可通过 gate spike --skip 跳过
     SpikeStage,
@@ -36,12 +36,8 @@ FROM_SCRATCH_PATH = [
     AcceptancePlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
-    # 测试计划阶段：依据验收条件、真实代码和实施记录制定可执行测试范围
-    TestPlanStage,
-    # 按验收计划编写测试代码；本阶段不执行测试、不产出测试结果
-    TestCodeStage,
-    # 执行测试代码并记录主题测试结果
-    TestExecutionStage,
+    # 单一测试验证阶段：范围确认后连续完成计划、测试代码、登记、执行和结果
+    QaStage,
     # 测试通过后，按主题验收计划核对用户结果
     TopicAcceptanceStage,
     # 全部主题完成后，对合并代码执行最终全量回归
@@ -53,26 +49,19 @@ FROM_SCRATCH_PATH = [
     UpdateCodeDesignStage,
 ]
 
-# product_change（改产品）的基础 stage 路径（不含 project_design_init 前置）
-# 和 from_scratch 的差异：用 ReviseCodeDesignStage 替代 CodeDesignStage
-# spec 之后必须经过 revise_code_design（设计期改架构），不能只改产品不改架构
+# product_change（改产品）的基础 stage 路径（不含 project_design_init 前置）。
+# 修改产品不再建立独立的设计期代码修订阶段，最终真实架构仍在末段同步。
 PRODUCT_CHANGE_BASE = [
     # 产品设计阶段：基于现状重新设计，可新增/修改/删除功能文档
     SpecStage,
-    # 设计期架构修订：按变更后的产品设计改架构图
-    # 与末段 update_code_design（详细落地）名称分离，避免同一 Run 内 stage 名冲突
-    ReviseCodeDesignStage,
     # 穿刺阶段（可选）
     SpikeStage,
     # 验收计划阶段
     AcceptancePlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
-    # 实施确认后，根据真实代码和实施记录制定测试计划
-    TestPlanStage,
-    # 先编写测试代码，再执行测试，再按主题验收
-    TestCodeStage,
-    TestExecutionStage,
+    # 单一测试验证阶段
+    QaStage,
     TopicAcceptanceStage,
     # 最终全量回归
     RegressionTestStage,
@@ -95,11 +84,8 @@ BUGFIX_BASE = [
     AcceptancePlanStage,
     # 实施阶段：先确认全部主题计划，再修改真实代码并记录实施结果
     ImplStage,
-    # 修复实施确认后，根据真实代码和实施记录制定测试计划
-    TestPlanStage,
-    # 先编写测试代码，再执行测试，再按主题验收
-    TestCodeStage,
-    TestExecutionStage,
+    # 单一测试验证阶段
+    QaStage,
     TopicAcceptanceStage,
     # 最终全量回归
     RegressionTestStage,
@@ -113,7 +99,7 @@ BUGFIX_BASE = [
 INTENT_CHOICES = ["from_scratch", "product_change", "bugfix", "light_task"]
 
 
-# 根据 intent 和项目事实返回 stage 列表（CONTEXT.md "Path Composer"）
+# 根据工作意图和项目设计初始化事实返回本轮阶段列表
 # 取代旧的四个 Scenario 类并行流水线与 SCENARIO_REGISTRY
 # 在 start --intent 时调一次，结果存入 state.stage_path，后续命令读 state.stage_path
 # 不在每次命令调用时重新跑 PathComposer（条件在 start 时就固定）
@@ -123,7 +109,7 @@ def build_stage_path(intent: str, project_root: str) -> list[StageStrategy]:
         raise ValueError("light_task（无需开发任务）不使用研发 stage 路径")
     # 从零做：直接返回 FROM_SCRATCH_PATH 的实例列表
     # from_scratch 不走 project_design_init（那只有 product_change/bugfix 走）
-    # from_scratch 在 spec + code_design 都 --confirmed 后写 project_design_initialized=true
+    # from_scratch 只在最终 update_code_design 确认后写 project_design_initialized=true
     if intent == "from_scratch":
         # 实例化每个 stage 类
         return [cls() for cls in FROM_SCRATCH_PATH]

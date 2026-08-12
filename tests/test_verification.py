@@ -22,7 +22,9 @@ from workflow_loop.verification import (
     clear_completed_material_recovery, recovery_stage_action,
     compute_registered_file_snapshot, compute_document_snapshot,
     compute_test_plan_document_snapshot, compute_acceptance_plan_document_snapshot,
+    test_tasks_payload as _test_tasks_payload,
     inspect_invalidation, apply_invalidation,
+    create_validation_credential, compare_validation_credential,
 )
 
 
@@ -61,6 +63,85 @@ def _make_state(project_root, impl_hash=None, test_plan_hash=None, acceptance_pl
     return state
 
 
+def _make_qa_state(topics=None):
+    topic_list = topics or ["test_topic"]
+    stage_path = [
+        "acceptance_plan",
+        "impl",
+        "qa",
+        "topic_acceptance",
+        "regression_test",
+        "overall_acceptance",
+        "update_code_design",
+    ]
+    state = WorkflowState(
+        workflow_id="test",
+        intent="product_change",
+        current_stage="topic_acceptance",
+        started_at="2026-08-11T00:00:00+00:00",
+        stage_path=stage_path,
+        topics=list(topic_list),
+    )
+    state.stages = {
+        stage_name: StageState(status="done", gate=GateState(True, True, True))
+        for stage_name in stage_path
+    }
+    state.stages["topic_acceptance"].status = "in_progress"
+    qa_state = state.stages["qa"]
+    qa_state.internal_step = "result"
+    qa_state.scope_confirmed_hash = "confirmed-scope"
+    qa_state.test_code_baseline_hash = "confirmed-test-code"
+    qa_state.non_test_code_baseline_hash = "confirmed-product-code"
+    qa_state.result_hash = "confirmed-result"
+    return state
+
+
+def _impl_plan_document(code_path: str, marker: str = "original") -> str:
+    return f"""# 实施记录
+
+### 2.2 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改的具体逻辑 | 数据、状态或输出变化 | 对应验收条件 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | {code_path} | run | {marker} | 更新实现 | 返回最新结果 | AC-01 | 无 |
+"""
+
+
+def _write_test_plan_with_source(tmp_path, topic: str, test_path: str) -> None:
+    qa_dir = tmp_path / "qa"
+    qa_dir.mkdir(exist_ok=True)
+    (qa_dir / f"{topic}_测试计划.md").write_text(
+        f"""## 1. 验收条件覆盖
+
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：结果可见](../acceptance/{topic}_验收计划.md#ac-01) | [TC-01 验证结果](#tc-01) | 无 | 自动化测试 | 项目命令 | `src/core.py::run` | `{test_path}::test_demo` | 构造隔离输入 | 调用真实入口 | 返回值 | 返回成功结果 | 返回失败结果 | 结构化报告 |
+""",
+        encoding="utf-8",
+    )
+
+
+def _prepare_qa_execution_fixture(tmp_path, topics=None):
+    topic_list = topics or ["test_topic"]
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), topic_list)
+    source_file = tmp_path / "src" / "core.py"
+    source_file.parent.mkdir()
+    source_file.write_text("def run():\n    return True\n", encoding="utf-8")
+    for index, topic in enumerate(topic_list, start=1):
+        test_path = f"tests/test_topic_{index}.py"
+        test_file = tmp_path / test_path
+        test_file.parent.mkdir(exist_ok=True)
+        test_file.write_text(
+            "def test_demo():\n    assert True\n",
+            encoding="utf-8",
+        )
+        _write_test_plan_with_source(tmp_path, topic, test_path)
+    state = _make_qa_state(topic_list)
+    save_state(str(tmp_path), state)
+    return state
+
+
 # 测试 compute_file_hash：对单个文件计算 SHA256，文件不存在时返回 None
 def test_compute_file_hash(tmp_path):
     # 拼出测试文件路径
@@ -76,6 +157,81 @@ def test_compute_file_hash(tmp_path):
     assert len(h) == 64
     # 验证文件不存在时返回 None（不抛异常）
     assert compute_file_hash(str(tmp_path), "nonexistent.txt") is None
+
+
+def _spike_credential_state(tmp_path):
+    state = WorkflowState(
+        workflow_id="2026-08-11-1200-product_change",
+        intent="product_change",
+        current_stage="spike",
+        started_at="2026-08-11T04:00:00+00:00",
+        stage_path=["spike"],
+    )
+    state.stages = {
+        "spike": StageState(
+            status="in_progress",
+            gate=GateState(discussion_complete=True),
+        )
+    }
+    relative_directory = (
+        ".workflow_loop/spike_tmp/"
+        "2026-08-11-1200-product_change/验证方案"
+    )
+    asset_directory = tmp_path / relative_directory
+    asset_directory.mkdir(parents=True)
+    script = asset_directory / "rerun.py"
+    script.write_text("print('confirmed')\n", encoding="utf-8")
+    state.meta["pending_spike_assets"] = {
+        "workflow_id": state.workflow_id,
+        "prepared_at": "2026-08-11T04:10:00+00:00",
+        "items": [
+            {
+                "workflow_id": state.workflow_id,
+                "spike_id": "SP-01",
+                "relative_path": relative_directory,
+                "conclusion_document": "spec/穿刺_验证方案.md",
+                "acceptance_conditions": [],
+                "purpose": "重新运行并取得穿刺结论",
+                "run_method": "python rerun.py",
+                "status": "registered",
+            }
+        ],
+    }
+    return state, script
+
+
+def test_spike_credential_detects_asset_file_change_after_gate_two(tmp_path):
+    state, script = _spike_credential_state(tmp_path)
+    credential = create_validation_credential(
+        str(tmp_path),
+        state,
+        "spike",
+        "穿刺结论和资产校验通过",
+    )
+    state.stages["spike"].validation_credential = credential
+
+    script.write_text("print('changed after gate two')\n", encoding="utf-8")
+
+    valid, detail = compare_validation_credential(str(tmp_path), state, "spike")
+    assert valid is False
+    assert "spike_asset_files_hash" in detail
+
+
+def test_spike_credential_detects_pending_registration_change_after_gate_two(tmp_path):
+    state, _script = _spike_credential_state(tmp_path)
+    credential = create_validation_credential(
+        str(tmp_path),
+        state,
+        "spike",
+        "穿刺结论和资产校验通过",
+    )
+    state.stages["spike"].validation_credential = credential
+
+    state.meta["pending_spike_assets"]["items"][0]["purpose"] = "替换后的用途"
+
+    valid, detail = compare_validation_credential(str(tmp_path), state, "spike")
+    assert valid is False
+    assert "pending_spike_assets_hash" in detail
 
 
 def test_product_design_hash_uses_only_linked_feature_documents(tmp_path):
@@ -331,17 +487,27 @@ def test_cpp_product_test_and_qmake_files_are_classified_separately(tmp_path):
 
 def test_confirmed_test_code_change_returns_to_test_code(tmp_path):
     create_project(str(tmp_path))
+    register_topics(str(tmp_path), ["test_topic"])
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     test_file = tests_dir / "test_demo.py"
     test_file.write_text("def test_demo():\n    assert True\n", encoding="utf-8")
+    source_file = tmp_path / "src" / "core.py"
+    source_file.parent.mkdir()
+    source_file.write_text("def run():\n    return True\n", encoding="utf-8")
+    _write_test_plan_with_source(tmp_path, "test_topic", "tests/test_demo.py")
     state = _make_state(str(tmp_path))
+    save_state(str(tmp_path), state)
     state.verification.test_code_hash = compute_test_code_snapshot_hash(str(tmp_path))
+    state.meta["registered_snapshots"] = {
+        "test_code": compute_registered_file_snapshot(str(tmp_path), scope="test"),
+        "test_entry_config": copy.deepcopy(load_project(str(tmp_path)).test_entry),
+    }
     test_file.write_text("def test_demo():\n    assert 1 == 1\n", encoding="utf-8")
 
     invalidations = check_invalidation(state, str(tmp_path))
 
-    assert invalidations == [("test_code", "test_code 及全部后续阶段")]
+    assert invalidations == [("test_code", "qa 测试代码及全部后续阶段")]
     assert state.current_stage == "test_code"
     assert state.verification.test_code_hash is None
 
@@ -447,7 +613,7 @@ def test_invalidation_inspection_lists_exact_changes_before_one_apply(tmp_path):
     impl_index.parent.mkdir()
     source.write_text("value = 1\n", encoding="utf-8")
     impl_index.write_text("index one\n", encoding="utf-8")
-    impl_record.write_text("record one\n", encoding="utf-8")
+    impl_record.write_text(_impl_plan_document("src/core.py"), encoding="utf-8")
 
     state = _make_state(str(tmp_path))
     state.rollback.planned_paths = ["src/core.py"]
@@ -463,7 +629,10 @@ def test_invalidation_inspection_lists_exact_changes_before_one_apply(tmp_path):
     }
     save_state(str(tmp_path), state)
     source.write_text("value = 2\n", encoding="utf-8")
-    impl_record.write_text("record two\n", encoding="utf-8")
+    impl_record.write_text(
+        _impl_plan_document("src/core.py", marker="record two"),
+        encoding="utf-8",
+    )
     before = copy.deepcopy(state)
 
     inspection = inspect_invalidation(state, str(tmp_path))
@@ -650,6 +819,223 @@ def test_shared_test_plan_index_change_affects_all_topics(tmp_path):
     )
 
 
+def test_qa_test_plan_change_returns_to_scope_and_preserves_impl(tmp_path):
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), ["test_topic"])
+    qa_dir = tmp_path / "qa"
+    qa_dir.mkdir()
+    plan = qa_dir / "test_topic_测试计划.md"
+    plan.write_text("plan one\n", encoding="utf-8")
+    state = _make_qa_state()
+    state.verification.test_plan_hash = compute_test_plan_hash(
+        str(tmp_path), state.topics
+    )
+    state.meta["registered_snapshots"] = {
+        "test_plan_documents": compute_test_plan_document_snapshot(
+            str(tmp_path), state.topics
+        )
+    }
+    impl_gate = copy.deepcopy(state.stages["impl"].gate)
+    plan.write_text("plan two\n", encoding="utf-8")
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+    invalidations = apply_invalidation(state, str(tmp_path), inspection)
+
+    assert invalidations == [
+        ("test_plan", "qa 测试范围及全部后续阶段（保留 impl）")
+    ]
+    assert state.current_stage == "qa"
+    assert state.stages["qa"].internal_step == "scope"
+    assert state.stages["qa"].gate.discussion_complete is False
+    assert state.stages["qa"].scope_confirmed_hash is None
+    assert state.stages["impl"].gate == impl_gate
+    assert state.stages["impl"].status == "done"
+
+
+def test_qa_test_code_change_returns_to_test_code_and_keeps_scope(tmp_path):
+    state = _prepare_qa_execution_fixture(tmp_path)
+    state.verification.test_code_hash = compute_test_code_snapshot_hash(str(tmp_path))
+    state.meta["registered_snapshots"] = {
+        "test_code": compute_registered_file_snapshot(str(tmp_path), scope="test"),
+        "test_entry_config": copy.deepcopy(load_project(str(tmp_path)).test_entry),
+    }
+    test_file = tmp_path / "tests" / "test_topic_1.py"
+    test_file.write_text("def test_demo():\n    assert 1 == 1\n", encoding="utf-8")
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+    apply_invalidation(state, str(tmp_path), inspection)
+
+    assert inspection.affected_topics == ("test_topic",)
+    assert state.current_stage == "qa"
+    assert state.stages["qa"].internal_step == "test_code"
+    assert state.stages["qa"].gate.discussion_complete is True
+    assert state.stages["qa"].scope_confirmed_hash == "confirmed-scope"
+    assert state.stages["qa"].test_code_baseline_hash is None
+
+
+def test_qa_machine_record_change_returns_to_execution(tmp_path):
+    state = _prepare_qa_execution_fixture(tmp_path)
+    qa_state = state.stages["qa"]
+    qa_state.test_tasks = {
+        "test_topic": {
+            "TC-01": ExecutionTask(
+                status="passed",
+                current_record=ExecutionRecord(status="passed", exit_code=0),
+            )
+        }
+    }
+    result_path = tmp_path / "qa" / "test_topic_测试结果.md"
+    result_path.write_text("current result\n", encoding="utf-8")
+    state.verification.test_result_hash = compute_test_result_hash(
+        str(tmp_path), state.topics, state=state
+    )
+    state.meta["registered_snapshots"] = {
+        "test_result_documents": compute_document_snapshot(
+            str(tmp_path), ["qa/test_topic_测试结果.md"]
+        ),
+        "test_task_records": _test_tasks_payload(state, state.topics),
+    }
+    qa_state.test_tasks["test_topic"]["TC-01"].current_record.exit_code = 1
+    qa_state.test_tasks["test_topic"]["TC-01"].status = "failed"
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+    apply_invalidation(state, str(tmp_path), inspection)
+
+    assert inspection.findings[0].machine_records_changed is True
+    assert state.stages["qa"].internal_step == "execution"
+    assert state.stages["qa"].scope_confirmed_hash == "confirmed-scope"
+    assert state.stages["qa"].test_code_baseline_hash == "confirmed-test-code"
+    assert "test_topic" not in state.stages["qa"].test_tasks
+
+
+def test_qa_result_document_change_returns_to_result_and_keeps_machine_record(tmp_path):
+    state = _prepare_qa_execution_fixture(tmp_path)
+    qa_state = state.stages["qa"]
+    qa_state.test_tasks = {
+        "test_topic": {
+            "TC-01": ExecutionTask(
+                status="passed",
+                current_record=ExecutionRecord(status="passed", exit_code=0),
+            )
+        }
+    }
+    result_path = tmp_path / "qa" / "test_topic_测试结果.md"
+    result_path.write_text("current result\n", encoding="utf-8")
+    state.verification.test_result_hash = compute_test_result_hash(
+        str(tmp_path), state.topics, state=state
+    )
+    state.meta["registered_snapshots"] = {
+        "test_result_documents": compute_document_snapshot(
+            str(tmp_path), ["qa/test_topic_测试结果.md"]
+        ),
+        "test_task_records": _test_tasks_payload(state, state.topics),
+    }
+    result_path.write_text("rewritten result\n", encoding="utf-8")
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+    apply_invalidation(state, str(tmp_path), inspection)
+
+    assert inspection.findings[0].result_documents_only is True
+    assert state.stages["qa"].internal_step == "result"
+    assert "test_topic" in state.stages["qa"].test_tasks
+    assert not result_path.exists()
+
+
+def test_public_test_entry_change_invalidates_all_topics(tmp_path):
+    topics = ["上传文件", "查看状态"]
+    state = _prepare_qa_execution_fixture(tmp_path, topics)
+    project = load_project(str(tmp_path))
+    project.test_entry = {"default": ["python", "tools/run_tests.py"]}
+    runner = tmp_path / "tools" / "run_tests.py"
+    runner.parent.mkdir()
+    runner.write_text("print('run')\n", encoding="utf-8")
+    save_project(str(tmp_path), project)
+    state.verification.test_code_hash = compute_test_code_snapshot_hash(str(tmp_path))
+    state.meta["registered_snapshots"] = {
+        "test_code": compute_registered_file_snapshot(str(tmp_path), scope="test"),
+        "test_entry_config": copy.deepcopy(project.test_entry),
+    }
+    project.test_entry = {"default": ["python", "tools/run_all.py"]}
+    (tmp_path / "tools" / "run_all.py").write_text("print('all')\n", encoding="utf-8")
+    save_project(str(tmp_path), project)
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+
+    assert inspection.source_stage == "test_code"
+    assert inspection.affected_topics == tuple(topics)
+    assert any(
+        diagnostic.check_id == "invalidation.test_code.test_entry"
+        for diagnostic in inspection.diagnostics
+    )
+
+
+def test_reliable_change_is_applied_when_another_change_lacks_topic_baseline(tmp_path):
+    state = _prepare_qa_execution_fixture(tmp_path)
+    plan = tmp_path / "qa" / "test_topic_测试计划.md"
+    state.verification.test_plan_hash = compute_test_plan_hash(
+        str(tmp_path), state.topics
+    )
+    state.meta["registered_snapshots"] = {
+        "test_plan_documents": compute_test_plan_document_snapshot(
+            str(tmp_path), state.topics
+        )
+    }
+    state.verification.test_code_hash = compute_test_code_snapshot_hash(str(tmp_path))
+    plan.write_text(plan.read_text(encoding="utf-8") + "\n范围变化\n", encoding="utf-8")
+    test_file = tmp_path / "tests" / "test_topic_1.py"
+    test_file.write_text("def test_demo():\n    assert 1 == 1\n", encoding="utf-8")
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+
+    assert inspection.changed is True
+    assert inspection.blocked is True
+    assert [finding.source_stage for finding in inspection.findings] == ["test_plan"]
+
+    invalidations = apply_invalidation(state, str(tmp_path), inspection)
+
+    assert invalidations == [
+        ("test_plan", "qa 测试范围及全部后续阶段（保留 impl）")
+    ]
+    assert state.current_stage == "qa"
+    assert state.stages["qa"].internal_step == "scope"
+
+
+def test_missing_topic_baseline_blocks_cleanup_without_deleting_results(tmp_path):
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), ["test_topic"])
+    source = tmp_path / "src" / "core.py"
+    source.parent.mkdir()
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+    impl_dir = tmp_path / "impl"
+    impl_dir.mkdir()
+    impl_record = impl_dir / "test_topic_实施记录.md"
+    impl_record.write_text(_impl_plan_document("src/core.py"), encoding="utf-8")
+    state = _make_qa_state()
+    state.rollback.planned_paths = ["src/core.py"]
+    state.stages["qa"].test_tasks = {
+        "test_topic": {"TC-01": ExecutionTask(status="passed")}
+    }
+    save_state(str(tmp_path), state)
+    state.verification.impl_hash = compute_impl_hash(str(tmp_path), state.topics)
+    result_path = tmp_path / "qa" / "test_topic_测试结果.md"
+    result_path.parent.mkdir(exist_ok=True)
+    result_path.write_text("old result\n", encoding="utf-8")
+    impl_record.write_text(
+        _impl_plan_document("src/core.py", marker="changed"),
+        encoding="utf-8",
+    )
+    before = copy.deepcopy(state)
+
+    inspection = inspect_invalidation(state, str(tmp_path))
+    invalidations = apply_invalidation(state, str(tmp_path), inspection)
+
+    assert inspection.blocked is True
+    assert inspection.findings == ()
+    assert invalidations == []
+    assert state == before
+    assert result_path.is_file()
+
+
 def test_test_result_link_transition_does_not_invalidate_test_plan(tmp_path):
     """测试执行写回结果链接属于下游状态，不应清空已确认测试计划。"""
     topic = "test_topic"
@@ -748,12 +1134,17 @@ def test_test_plan_change_preserves_confirmed_implementation(tmp_path):
     impl_hash = compute_impl_hash(str(tmp_path), ["test_topic"])
     plan_hash = compute_test_plan_hash(str(tmp_path), ["test_topic"])
     state = _make_state(str(tmp_path), impl_hash=impl_hash, test_plan_hash=plan_hash)
+    state.meta["registered_snapshots"] = {
+        "test_plan_documents": compute_test_plan_document_snapshot(
+            str(tmp_path), ["test_topic"]
+        )
+    }
     impl_gate = state.stages["impl"].gate
     plan.write_text("plan two", encoding="utf-8")
 
     invalidations = check_invalidation(state, str(tmp_path))
 
-    assert invalidations == [("test_plan", "test_plan 及全部后续阶段（保留 impl）")]
+    assert invalidations == [("test_plan", "qa 测试范围及全部后续阶段（保留 impl）")]
     assert state.current_stage == "test_plan"
     assert state.verification.impl_hash == impl_hash
     assert state.stages["impl"].gate == impl_gate
@@ -780,16 +1171,31 @@ def test_check_invalidation_no_change(tmp_path):
 
 # 测试实施内容变化时退回 impl（实施阶段）
 def test_check_invalidation_impl_changed(tmp_path):
+    create_project(str(tmp_path))
+    register_topics(str(tmp_path), ["test_topic"])
     # 创建 impl 目录
     impl_dir = os.path.join(str(tmp_path), "impl")
     os.makedirs(impl_dir)
+    source_path = tmp_path / "src" / "core.py"
+    source_path.parent.mkdir()
+    source_path.write_text("def run():\n    return 1\n", encoding="utf-8")
     # 写入原始实施记录
     with open(os.path.join(impl_dir, "test_topic_实施记录.md"), "w") as f:
-        f.write("original")
+        f.write(_impl_plan_document("src/core.py"))
+    state = _make_state(str(tmp_path))
+    state.rollback.planned_paths = ["src/core.py"]
+    save_state(str(tmp_path), state)
     # 计算 impl 哈希
     impl_hash = compute_impl_hash(str(tmp_path), "test_topic")
     # 构造 state，绑定 impl_hash
-    state = _make_state(str(tmp_path), impl_hash=impl_hash)
+    state.verification.impl_hash = impl_hash
+    state.meta["registered_snapshots"] = {
+        "impl": compute_registered_file_snapshot(str(tmp_path), scope="product"),
+        "impl_documents": compute_document_snapshot(
+            str(tmp_path),
+            ["impl/索引.md", "impl/test_topic_实施记录.md"],
+        ),
+    }
     state.stages["test_execution"].test_tasks = {
         "test_topic": {
             "TC-01": ExecutionTask(
@@ -812,7 +1218,7 @@ def test_check_invalidation_impl_changed(tmp_path):
     acceptance_result.write_text("old acceptance result", encoding="utf-8")
     # 修改 impl 记录内容（触发 invalidation）
     with open(os.path.join(impl_dir, "test_topic_实施记录.md"), "w") as f:
-        f.write("changed")
+        f.write(_impl_plan_document("src/core.py", marker="changed"))
     # 检查 invalidation
     invalidations = check_invalidation(state, str(tmp_path))
     # 验证有 1 条 invalidation
@@ -831,7 +1237,7 @@ def test_check_invalidation_impl_changed(tmp_path):
     assert not acceptance_result.exists()
     assert state.regression_test.status == "not_run"
     assert state.recovery.source_stage == "impl"
-    assert "原测试计划、测试和验收结果不能继续代表当前实现" in state.recovery.reason
+    assert "实施绑定内容变化" in state.recovery.reason
     assert recovery_stage_action(state, "test_code") is not None
 
 
@@ -845,7 +1251,14 @@ def test_acceptance_result_change_returns_to_regression_test(tmp_path):
     state.verification.acceptance_result_hash = compute_acceptance_result_hash(
         str(tmp_path),
         "test_topic",
+        state=state,
     )
+    state.meta["registered_snapshots"] = {
+        "acceptance_result_documents": compute_document_snapshot(
+            str(tmp_path), ["acceptance/test_topic_验收结果.md"]
+        ),
+        "acceptance_records": {},
+    }
     with open(result_path, "w") as stream:
         stream.write("changed")
 
@@ -901,6 +1314,11 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     ap_hash = compute_acceptance_plan_hash(str(tmp_path), "test_topic")
     # 构造 state，绑定 acceptance_plan_hash
     state = _make_state(str(tmp_path), acceptance_plan_hash=ap_hash)
+    state.meta["registered_snapshots"] = {
+        "acceptance_plan_documents": compute_acceptance_plan_document_snapshot(
+            str(tmp_path), ["test_topic"]
+        )
+    }
     state.stages["test_plan"].artifact_produced_at = "before"
     state.stages["test_plan"].artifact_baseline_captured_at = "before"
     state.stages["test_plan"].artifact_baseline_hashes = {"qa/索引.md": "old"}
@@ -988,6 +1406,17 @@ def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
     acc_dir = tmp_path / "acceptance"
     acc_dir.mkdir()
     (acc_dir / "test_topic_验收计划.md").write_text("original", encoding="utf-8")
+    (acc_dir / "索引.md").write_text(
+        """# 验收索引
+
+## test
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+| 1 | test_topic | 无 | [计划](./test_topic_验收计划.md) | 待生成 |
+""",
+        encoding="utf-8",
+    )
     register_topics(str(tmp_path), ["test_topic"])
 
     state = _make_state(str(tmp_path))
@@ -995,9 +1424,26 @@ def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
         str(tmp_path),
         ["test_topic"],
     )
+    state.meta["registered_snapshots"] = {
+        "acceptance_plan_documents": compute_acceptance_plan_document_snapshot(
+            str(tmp_path), ["test_topic"]
+        )
+    }
     save_state(str(tmp_path), state)
 
     (acc_dir / "new_topic_验收计划.md").write_text("new", encoding="utf-8")
+    (acc_dir / "索引.md").write_text(
+        """# 验收索引
+
+## test
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+| 1 | test_topic | 无 | [计划](./test_topic_验收计划.md) | 待生成 |
+| 2 | new_topic | 无 | [计划](./new_topic_验收计划.md) | 待生成 |
+""",
+        encoding="utf-8",
+    )
     invalidations = check_invalidation(state, str(tmp_path))
 
     assert invalidations == [("acceptance_plan", "acceptance_plan 及全部后续阶段")]

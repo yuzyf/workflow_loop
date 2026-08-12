@@ -12,10 +12,9 @@ def test_from_scratch_path(tmp_path):
     stages = build_stage_path("from_scratch", str(tmp_path))
     # 提取 stage 名字列表
     names = [s.name() for s in stages]
-    # 验证阶段顺序：先实施，再写测试代码、执行测试、主题验收，最后全量回归和整体验收
+    # 验证阶段顺序：验收计划后先实施，再在单一 qa 阶段完成测试验证。
     assert names == [
-        "spec", "code_design", "spike", "acceptance_plan",
-        "impl", "test_plan", "test_code", "test_execution", "topic_acceptance",
+        "spec", "spike", "acceptance_plan", "impl", "qa", "topic_acceptance",
         "regression_test", "overall_acceptance", "update_code_design",
     ]
 
@@ -32,14 +31,15 @@ def test_product_change_with_uninitialized(tmp_path):
     assert names[0] == "project_design_init"
     # 验证第 2 个 stage 是 spec
     assert names[1] == "spec"
-    # 验证第 3 个 stage 是 revise_code_design（不是 code_design）
-    assert names[2] == "revise_code_design"
+    # 修改产品不再设独立设计期代码修订，spec 后直接进入可选穿刺。
+    assert names[2] == "spike"
     # 验证末段 stage 是 update_code_design
     assert names[-1] == "update_code_design"
-    # 验证不包含 code_design（被 revise_code_design 替代）
+    # 验证不包含两个已取消的独立代码设计阶段。
     assert "code_design" not in names
-    # 验证总 stage 数为 13
-    assert len(names) == 13
+    assert "revise_code_design" not in names
+    # project_design_init + 9 个当前研发阶段。
+    assert len(names) == 10
 
 
 # 测试 product_change 意图在 project_design 已初始化时跳过 project_design_init
@@ -54,10 +54,10 @@ def test_product_change_with_initialized(tmp_path):
     names = [s.name() for s in stages]
     # 验证不再包含 project_design_init（已初始化过，跳过）
     assert "project_design_init" not in names
-    # 验证仍包含 revise_code_design
-    assert "revise_code_design" in names
-    # 验证总 stage 数为 12（比未初始化少 1 个）
-    assert len(names) == 12
+    # 设计期代码修订已从新路径删除。
+    assert "revise_code_design" not in names
+    # 验证总 stage 数为 9（比未初始化少 1 个）
+    assert len(names) == 9
 
 
 # 测试 bugfix 意图在 project_design 未初始化时的 stage 路径（含 project_design_init 前置）
@@ -72,13 +72,13 @@ def test_bugfix_with_uninitialized(tmp_path):
     assert names[0] == "project_design_init"
     # 验证第 2 个 stage 是 reproduce（bugfix 特有：先复现）
     assert names[1] == "reproduce"
-    # 验证 reproduce 后先进入可选 spike，再按验收计划、修复实施、测试计划推进
+    # 验证 reproduce 后先进入可选 spike，再按验收计划、修复实施、测试验证推进。
     assert names[2] == "spike"
-    assert names[3:6] == ["acceptance_plan", "impl", "test_plan"]
+    assert names[3:6] == ["acceptance_plan", "impl", "qa"]
     # 验证末段 stage 是 update_code_design
     assert names[-1] == "update_code_design"
-    # 验证总 stage 数为 12
-    assert len(names) == 12
+    # 验证总 stage 数为 10
+    assert len(names) == 10
 
 
 # 测试 bugfix 意图在 project_design 已初始化时跳过 project_design_init
@@ -95,11 +95,11 @@ def test_bugfix_with_initialized(tmp_path):
     assert "project_design_init" not in names
     # 验证第 1 个 stage 是 reproduce
     assert names[0] == "reproduce"
-    # 验证第 2 个 stage 是 spike，之后先验收计划、再修复实施、再测试计划
+    # 验证第 2 个 stage 是 spike，之后先验收计划、再修复实施、再测试验证。
     assert names[1] == "spike"
-    assert names[2:5] == ["acceptance_plan", "impl", "test_plan"]
-    # 验证总 stage 数为 11
-    assert len(names) == 11
+    assert names[2:5] == ["acceptance_plan", "impl", "qa"]
+    # 验证总 stage 数为 9
+    assert len(names) == 9
 
 
 # 测试传入未知 intent 时抛 ValueError（防止拼写错误静默通过）

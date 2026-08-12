@@ -1,11 +1,24 @@
 import os
+import re
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-# spike stage 的临时代码、样本和原始输出目录（相对项目根）
-# spike stage on_advance 时删除这个目录下的所有内容
+from .. import state as state_mod
+
+# spike stage 的代码、最小非敏感依赖和未登记临时内容目录（相对项目根）。
+# 已登记资产按工作流和穿刺项隔离，阶段推进时只删除当前工作流未登记内容。
 SPIKE_TMP_DIR = os.path.join(".workflow_loop", "spike_tmp")
+_WORKFLOW_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_SPIKE_ITEM_KEY_RE = re.compile(r"[A-Za-z0-9_\-一-鿿㐀-䶿]+")
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 # 阶段材料说明：relative_path 相对 .workflow_loop/；None 表示该阶段没有这类材料，
@@ -69,7 +82,7 @@ class StageStrategy(ABC):
         return (False, f"文件未产出: {missing}")
 
     # stage 推进时的钩子（gate --confirmed 通过后、推进到下一 stage 前调用）
-    # 默认 no-op；spike stage 重写：删除 .workflow_loop/spike_tmp/ 下所有临时内容
+    # 默认 no-op；spike stage 重写：只删除当前工作流未登记的穿刺临时内容。
     def on_advance(self, project_root: str) -> list[str]:
         return []
 
@@ -136,29 +149,174 @@ class StageStrategy(ABC):
     def instruction(self) -> str: ...
 
 
-# 清理 spike stage 的临时代码、样本和原始输出
-# 删除 .workflow_loop/spike_tmp/ 下的所有内容（保留目录本身）
-# 在 spike stage 的 on_advance 里调用（gate spike --confirmed 时）
-# 这样临时代码在推进到 acceptance_plan 前被自动清理，只保留穿刺清单和结论文档
-def clean_spike_tmp(project_root: str) -> list[str]:
-    # 拼出 spike_tmp 的完整路径
-    tmp_dir = os.path.join(project_root, SPIKE_TMP_DIR)
-    # 目录不存在 → 没啥可清理的
-    if not os.path.exists(tmp_dir):
-        return []
-    # 收集被清理的路径
-    cleaned = []
-    # 遍历 spike_tmp 下的所有条目
-    for entry in os.listdir(tmp_dir):
-        # 拼出条目路径
-        entry_path = os.path.join(tmp_dir, entry)
-        # 是目录 → 递归删
-        if os.path.isdir(entry_path):
-            shutil.rmtree(entry_path)
-        # 是文件 → 删单个文件
-        else:
-            os.remove(entry_path)
-        # 记录被清理的条目名
-        cleaned.append(entry)
-    # 返回被清理的路径列表（供 journal 记录）
+def _validated_workflow_id(workflow_id: str) -> str:
+    if (
+        not isinstance(workflow_id, str)
+        or workflow_id in {".", ".."}
+        or _WORKFLOW_ID_RE.fullmatch(workflow_id) is None
+    ):
+        raise ValueError(f"工作流编号不能用于穿刺目录：{workflow_id!r}")
+    return workflow_id
+
+
+def _validated_spike_item_key(item_key: str) -> str:
+    if (
+        not isinstance(item_key, str)
+        or item_key in {".", ".."}
+        or _SPIKE_ITEM_KEY_RE.fullmatch(item_key) is None
+        or item_key.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES
+        or item_key.endswith((" ", "."))
+    ):
+        raise ValueError(f"穿刺项文件标识不能用于资产目录：{item_key!r}")
+    return item_key
+
+
+def expected_spike_asset_path(workflow_id: str, item_key: str) -> str:
+    """返回一项穿刺资产唯一允许使用的项目内相对目录。"""
+
+    workflow_id = _validated_workflow_id(workflow_id)
+    item_key = _validated_spike_item_key(item_key)
+    return "/".join((".workflow_loop", "spike_tmp", workflow_id, item_key))
+
+
+def _registered_asset_paths(
+    workflow_state: state_mod.WorkflowState,
+) -> list[str]:
+    workflow_id = _validated_workflow_id(workflow_state.workflow_id)
+    registered: list[str] = []
+    for asset in workflow_state.spike_assets:
+        if asset.workflow_id != workflow_id:
+            continue
+        raw_path = asset.relative_path.strip().strip("`").replace("\\", "/")
+        parts = raw_path.split("/")
+        if len(parts) != 4:
+            raise ValueError(f"已登记穿刺资产路径层级无效：{asset.relative_path!r}")
+        expected = expected_spike_asset_path(workflow_id, parts[-1])
+        if raw_path != expected:
+            raise ValueError(
+                "已登记穿刺资产必须位于当前工作流和穿刺项隔离目录："
+                f"{asset.relative_path!r}"
+            )
+        if asset.status not in {"registered", "needs_revision"}:
+            raise ValueError(
+                f"已登记穿刺资产状态无效：{asset.relative_path}={asset.status!r}"
+            )
+        registered.append(expected)
+    if len(registered) != len(set(registered)):
+        raise ValueError("当前工作流重复登记了同一穿刺资产目录")
+    return sorted(registered)
+
+
+def _validate_directory_boundary(path: str, *, label: str) -> None:
+    if os.path.islink(path):
+        raise ValueError(f"{label}不能是符号链接：{path}")
+    if os.path.exists(path) and not os.path.isdir(path):
+        raise ValueError(f"{label}必须是普通目录：{path}")
+
+
+def plan_spike_tmp_cleanup(
+    project_root: str,
+    workflow_state: state_mod.WorkflowState | None = None,
+) -> dict[str, list[str]]:
+    """先完整核对边界，再给出当前工作流的保留和删除清单。"""
+
+    state = workflow_state or state_mod.load_state(project_root)
+    if state is None:
+        raise ValueError("找不到当前工作流状态，不能清理穿刺临时目录")
+    workflow_id = _validated_workflow_id(state.workflow_id)
+    registered = _registered_asset_paths(state)
+
+    tmp_root = os.path.join(project_root, SPIKE_TMP_DIR)
+    _validate_directory_boundary(tmp_root, label="穿刺临时目录")
+    current_root = os.path.join(tmp_root, workflow_id)
+    _validate_directory_boundary(current_root, label="当前工作流穿刺目录")
+
+    preserved: list[str] = []
+    for relative_path in registered:
+        full_path = os.path.join(project_root, *relative_path.split("/"))
+        if not os.path.isdir(full_path) or os.path.islink(full_path):
+            raise ValueError(f"已登记穿刺资产目录不存在或不安全：{relative_path}")
+        preserved.append(relative_path)
+
+    remove: list[str] = []
+    if os.path.isdir(current_root):
+        registered_set = set(registered)
+        for entry in sorted(os.listdir(current_root)):
+            relative_path = "/".join(
+                (".workflow_loop", "spike_tmp", workflow_id, entry)
+            )
+            entry_path = os.path.join(current_root, entry)
+            if relative_path in registered_set:
+                continue
+            # 未登记内容可以是文件、目录或符号链接；删除动作只命中当前工作流
+            # 的直接子项，不跟随符号链接，也不检查其它工作流目录。
+            if not os.path.lexists(entry_path):
+                continue
+            remove.append(relative_path)
+    return {"preserved": preserved, "remove": remove}
+
+
+def clean_spike_tmp(
+    project_root: str,
+    workflow_state: state_mod.WorkflowState | None = None,
+    *,
+    cleanup_plan: dict[str, list[str]] | None = None,
+) -> list[str]:
+    """删除当前工作流未登记半成品，保留已登记资产和其它工作流目录。"""
+
+    state = workflow_state or state_mod.load_state(project_root)
+    if state is None:
+        raise ValueError("找不到当前工作流状态，不能清理穿刺临时目录")
+    current_plan = plan_spike_tmp_cleanup(project_root, state)
+    plan = current_plan
+    if cleanup_plan is not None:
+        if not isinstance(cleanup_plan, dict):
+            raise ValueError("穿刺清理计划必须是对象")
+        preserved = cleanup_plan.get("preserved")
+        remove = cleanup_plan.get("remove")
+        if (
+            not isinstance(preserved, list)
+            or not isinstance(remove, list)
+            or not all(isinstance(path, str) for path in preserved + remove)
+        ):
+            raise ValueError("穿刺清理计划必须包含 preserved（保留）和 remove（删除）路径数组")
+        if preserved != sorted(set(preserved)) or remove != sorted(set(remove)):
+            raise ValueError("穿刺清理计划路径必须去重并按字典序保存")
+        if preserved != current_plan["preserved"]:
+            raise ValueError("穿刺清理计划中的已登记资产与当前状态不一致")
+
+        workflow_id = _validated_workflow_id(state.workflow_id)
+        expected_prefix = f".workflow_loop/spike_tmp/{workflow_id}/"
+        current_removable = set(current_plan["remove"])
+        unexpected = sorted(current_removable - set(remove))
+        if unexpected:
+            raise ValueError(
+                "穿刺清理计划冻结后出现新的未登记内容，不能把它遗漏在本次清理之外："
+                f"{unexpected}"
+            )
+        for relative_path in remove:
+            if not relative_path.startswith(expected_prefix):
+                raise ValueError(f"穿刺清理计划路径不属于当前工作流：{relative_path}")
+            entry = relative_path[len(expected_prefix) :]
+            if not entry or "/" in entry or entry in {".", ".."}:
+                raise ValueError(f"穿刺清理计划只能删除当前工作流的直接子项：{relative_path}")
+            full_path = os.path.join(project_root, *relative_path.split("/"))
+            if os.path.lexists(full_path) and relative_path not in current_removable:
+                raise ValueError(f"穿刺清理计划试图删除当前不可删除的路径：{relative_path}")
+        plan = {"preserved": preserved, "remove": remove}
+
+    cleaned: list[str] = []
+    for relative_path in plan["remove"]:
+        full_path = os.path.join(project_root, *relative_path.split("/"))
+        if os.path.islink(full_path) or os.path.isfile(full_path):
+            os.unlink(full_path)
+        elif os.path.isdir(full_path):
+            shutil.rmtree(full_path)
+        elif os.path.lexists(full_path):
+            raise ValueError(f"待清理穿刺路径类型不受支持：{relative_path}")
+        cleaned.append(relative_path)
+
+    current_root = os.path.join(project_root, SPIKE_TMP_DIR, state.workflow_id)
+    if os.path.isdir(current_root) and not os.listdir(current_root):
+        os.rmdir(current_root)
     return cleaned

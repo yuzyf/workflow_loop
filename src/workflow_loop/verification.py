@@ -5,7 +5,7 @@ import json
 import os
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from .project import load_project
 from . import artifact_paths as artifact_paths_mod
@@ -15,6 +15,7 @@ from .state import (
     WorkflowState,
     StageState,
     GateState,
+    ValidationCredential,
     load_state,
     now_iso,
 )
@@ -37,6 +38,336 @@ PRODUCT_FEATURE_LINK_RE = re.compile(
 def hash_text(content: str) -> str:
     """计算 UTF-8 文本的 SHA256，供阶段材料和状态内容绑定使用。"""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+VALIDATION_CREDENTIAL_RULES_VERSION = "3"
+PENDING_SPIKE_ASSETS_META_KEY = "pending_spike_assets"
+
+
+def _canonical_hash(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _existing_files_under(project_root: str, relative_directory: str) -> list[str]:
+    """展开当前阶段明确拥有的目录，不扫描其它工作流目录。"""
+    full_directory = os.path.join(project_root, relative_directory)
+    if not os.path.isdir(full_directory) or os.path.islink(full_directory):
+        return []
+    paths: list[str] = []
+    for root, directories, files in os.walk(full_directory):
+        directories[:] = sorted(
+            directory
+            for directory in directories
+            if not os.path.islink(os.path.join(root, directory))
+        )
+        for filename in sorted(files):
+            full_path = os.path.join(root, filename)
+            if os.path.islink(full_path) or not os.path.isfile(full_path):
+                continue
+            paths.append(os.path.relpath(full_path, project_root).replace(os.sep, "/"))
+    return paths
+
+
+def _spike_asset_files_hash(project_root: str, state: WorkflowState) -> str:
+    """绑定当前工作流穿刺目录的结构和普通文件内容，不跟随符号链接。"""
+
+    # 复用穿刺目录的编号校验，避免状态中的工作流编号变成任意路径。
+    from .stages.base import expected_spike_asset_path
+
+    sentinel = expected_spike_asset_path(state.workflow_id, "credential_snapshot")
+    relative_root = os.path.dirname(sentinel).replace(os.sep, "/")
+    full_root = os.path.join(project_root, *relative_root.split("/"))
+
+    current = project_root
+    for part in relative_root.split("/"):
+        current = os.path.join(current, part)
+        if os.path.lexists(current) and os.path.islink(current):
+            raise ValueError(f"穿刺资产快照路径不能经过符号链接：{relative_root}")
+
+    if not os.path.lexists(full_root):
+        return _canonical_hash([])
+    if not os.path.isdir(full_root):
+        raise ValueError(f"当前工作流穿刺资产根路径不是普通目录：{relative_root}")
+
+    facts: list[dict[str, str]] = []
+    for root, directories, files in os.walk(full_root, topdown=True, followlinks=False):
+        safe_directories: list[str] = []
+        for directory in sorted(directories):
+            full_path = os.path.join(root, directory)
+            relative_path = os.path.relpath(full_path, project_root).replace(os.sep, "/")
+            if os.path.islink(full_path):
+                raise ValueError(f"穿刺资产快照不接受符号链接目录：{relative_path}")
+            if not os.path.isdir(full_path):
+                raise ValueError(f"穿刺资产快照发现非普通目录：{relative_path}")
+            safe_directories.append(directory)
+            facts.append({"path": relative_path, "type": "directory"})
+        directories[:] = safe_directories
+
+        for filename in sorted(files):
+            full_path = os.path.join(root, filename)
+            relative_path = os.path.relpath(full_path, project_root).replace(os.sep, "/")
+            if os.path.islink(full_path) or not os.path.isfile(full_path):
+                raise ValueError(f"穿刺资产快照只接受普通文件：{relative_path}")
+            facts.append(
+                {
+                    "path": relative_path,
+                    "type": "file",
+                    "content_hash": _hash_file_path(full_path),
+                }
+            )
+    return _canonical_hash(sorted(facts, key=lambda item: item["path"]))
+
+
+def _pending_spike_assets_hash(state: WorkflowState) -> str:
+    """绑定门2生成的待确认登记，防止门2与门3之间被替换。"""
+
+    pending = state.meta.get(PENDING_SPIKE_ASSETS_META_KEY)
+    if not isinstance(pending, dict):
+        raise ValueError("缺少当前第二道门生成的待确认穿刺资产登记")
+    if pending.get("workflow_id") != state.workflow_id:
+        raise ValueError("待确认穿刺资产登记不属于当前工作流")
+    if not isinstance(pending.get("items"), list):
+        raise ValueError("待确认穿刺资产登记缺少 items（登记项目）数组")
+    return _canonical_hash(pending)
+
+
+def stage_responsibility_paths(
+    project_root: str,
+    state: WorkflowState,
+    stage_name: str,
+) -> list[str]:
+    """返回第二道门真正负责的文件，不把所有下游 Markdown 混进来。"""
+    topics = state.topics or ([state.topic] if state.topic else [])
+    paths: set[str] = set()
+
+    if stage_name == "spec":
+        _product_hash, product_paths = compute_product_design_hash(project_root)
+        paths.update(product_paths)
+    elif stage_name in {"code_design", "revise_code_design", "project_design_init"}:
+        paths.add(artifact_paths_mod.CODE_DESIGN_DOC)
+    elif stage_name == "spike":
+        paths.add(artifact_paths_mod.SPIKE_INDEX_DOC)
+        for relative in _existing_files_under(project_root, "spec"):
+            if os.path.basename(relative).startswith("穿刺_"):
+                paths.add(relative)
+    elif stage_name == "acceptance_plan":
+        paths.add(artifact_paths_mod.ACCEPTANCE_INDEX_DOC)
+        paths.add(artifact_paths_mod.TRACEABILITY_DOC)
+        paths.update(topic_paths(project_root, topic)["acceptance_plan"] for topic in topics)
+    elif stage_name == "impl":
+        paths.add(artifact_paths_mod.IMPL_INDEX_DOC)
+        paths.update(topic_paths(project_root, topic)["impl_doc"] for topic in topics)
+        from .rollback import planned_code_paths
+
+        try:
+            paths.update(planned_code_paths(project_root, topics))
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+    elif stage_name in {"qa", "test_plan", "test_code", "test_execution"}:
+        paths.add(artifact_paths_mod.QA_INDEX_DOC)
+        for topic in topics:
+            topic_files = topic_paths(project_root, topic)
+            paths.add(topic_files["test_plan"])
+            if topic in automated_topics(project_root, topics):
+                paths.add(topic_files["test_result"])
+        try:
+            paths.update(planned_test_source_paths(project_root, topics))
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+    elif stage_name == "topic_acceptance":
+        paths.add(artifact_paths_mod.ACCEPTANCE_INDEX_DOC)
+        paths.update(topic_paths(project_root, topic)["acceptance_result"] for topic in topics)
+    elif stage_name in {"regression_test", "overall_acceptance"}:
+        paths.update((_active_registered_paths(project_root) or []))
+        paths.update(topic_paths(project_root, topic)["acceptance_result"] for topic in topics)
+    elif stage_name == "update_code_design":
+        _product_hash, product_paths = compute_product_design_hash(project_root)
+        paths.update(product_paths)
+        paths.add(artifact_paths_mod.CODE_DESIGN_DOC)
+        paths.update((_active_registered_paths(project_root) or []))
+
+    stage_state = state.stages.get(stage_name)
+    if stage_state is not None and not paths:
+        for relative in stage_state.artifact_paths:
+            full = os.path.join(project_root, relative)
+            if os.path.isdir(full):
+                paths.update(_existing_files_under(project_root, relative))
+            else:
+                paths.add(relative)
+    return snapshots_mod.normalize_registered_paths(project_root, paths)
+
+
+def _credential_bound_state(
+    project_root: str,
+    state: WorkflowState,
+    stage_name: str,
+) -> dict[str, str | int | float | bool | None]:
+    stage_state = state.stages.get(stage_name)
+    bound: dict[str, str | int | float | bool | None] = {
+        "workflow_id": state.workflow_id,
+        "intent": state.intent,
+        "stage": stage_name,
+        "topics_hash": _canonical_hash(state.topics or ([state.topic] if state.topic else [])),
+        "discussion_material_hash": (
+            stage_state.discussion_material_hash if stage_state is not None else None
+        ),
+    }
+    if stage_state is None:
+        return bound
+    if stage_name == "spike":
+        bound.update(
+            {
+                "pending_spike_assets_hash": _pending_spike_assets_hash(state),
+                "spike_asset_files_hash": _spike_asset_files_hash(project_root, state),
+            }
+        )
+    elif stage_name == "impl":
+        bound.update(
+            {
+                "plan_confirmed_hash": stage_state.plan_confirmed_hash,
+                "rollback_manifest_hash": state.rollback.manifest_hash,
+                "rollback_plan_hash": state.rollback.plan_hash,
+                "reuse_decision_hash": stage_state.reuse_decision_hash,
+            }
+        )
+    elif stage_name in {"qa", "test_plan", "test_code", "test_execution"}:
+        project = load_project(project_root)
+        bound.update(
+            {
+                "scope_confirmed_hash": stage_state.scope_confirmed_hash,
+                "test_tasks_hash": _canonical_hash(
+                    {
+                        topic: {
+                            test_id: asdict(task)
+                            for test_id, task in sorted(tasks.items())
+                        }
+                        for topic, tasks in sorted(stage_state.test_tasks.items())
+                    }
+                ),
+                "test_entry_hash": _canonical_hash(
+                    project.test_entry if project is not None else {}
+                ),
+                "impl_hash": state.verification.impl_hash,
+            }
+        )
+    elif stage_name == "topic_acceptance":
+        bound["acceptance_records_hash"] = _canonical_hash(
+            {
+                topic: {
+                    criterion_id: asdict(record)
+                    for criterion_id, record in sorted(records.items())
+                }
+                for topic, records in sorted(stage_state.acceptance_records.items())
+            }
+        )
+        bound["test_result_hash"] = state.verification.test_result_hash
+    elif stage_name == "regression_test":
+        bound["regression_record_hash"] = _canonical_hash(asdict(state.regression_test))
+    elif stage_name == "overall_acceptance":
+        bound["acceptance_result_hash"] = state.verification.acceptance_result_hash
+        bound["regression_result_hash"] = state.verification.regression_test_result_hash
+    return bound
+
+
+def create_validation_credential(
+    project_root: str,
+    state: WorkflowState,
+    stage_name: str,
+    result_detail: str,
+) -> ValidationCredential:
+    """在第二道门完整校验成功后保存可供第三道门比较的责任输入。"""
+    paths = stage_responsibility_paths(project_root, state, stage_name)
+    snapshot = snapshots_mod.collect_snapshot(project_root, paths)
+    bound_files = {item.path: item.to_dict() for item in snapshot.files}
+    bound_state = _credential_bound_state(project_root, state, stage_name)
+    stage_state = state.stages.get(stage_name)
+    material_hash = stage_state.discussion_material_hash if stage_state else None
+    return ValidationCredential(
+        workflow_id=state.workflow_id,
+        stage=stage_name,
+        rules_version=VALIDATION_CREDENTIAL_RULES_VERSION,
+        material_hash=material_hash,
+        bound_files=bound_files,
+        bound_state=bound_state,
+        result=True,
+        report_hash=hash_text(result_detail),
+        result_hash=_canonical_hash(
+            {
+                "files": snapshot.to_dict(),
+                "state": bound_state,
+                "report_hash": hash_text(result_detail),
+            }
+        ),
+        created_at=now_iso(),
+    )
+
+
+def compare_validation_credential(
+    project_root: str,
+    state: WorkflowState,
+    stage_name: str,
+) -> tuple[bool, str]:
+    """第三道门只比较第二道门凭据，不再次调用完整校验器或测试进程。"""
+    stage_state = state.stages.get(stage_name)
+    credential = stage_state.validation_credential if stage_state is not None else None
+    if credential is None:
+        return False, "缺少第二道门校验凭据"
+    errors: list[str] = []
+    if credential.workflow_id != state.workflow_id:
+        errors.append("凭据工作流编号与当前工作流不一致")
+    if credential.stage != stage_name:
+        errors.append("凭据阶段与当前阶段不一致")
+    if credential.rules_version != VALIDATION_CREDENTIAL_RULES_VERSION:
+        errors.append(
+            f"校验规则版本已变化：凭据 {credential.rules_version}，当前 {VALIDATION_CREDENTIAL_RULES_VERSION}"
+        )
+    if not credential.result:
+        errors.append("凭据没有记录第二道门通过事实")
+
+    current_paths = stage_responsibility_paths(project_root, state, stage_name)
+    previous_paths = sorted(credential.bound_files)
+    if current_paths != previous_paths:
+        added = sorted(set(current_paths) - set(previous_paths))
+        removed = sorted(set(previous_paths) - set(current_paths))
+        if added:
+            errors.append(f"责任文件集合新增：{added}")
+        if removed:
+            errors.append(f"责任文件集合移除：{removed}")
+    current_snapshot = snapshots_mod.collect_snapshot(
+        project_root,
+        sorted(set(current_paths) | set(previous_paths)),
+    )
+    previous_snapshot = snapshots_mod.snapshot_from_dict(
+        {
+            "files": list(credential.bound_files.values()),
+        }
+    )
+    differences = snapshots_mod.compare_snapshots(previous_snapshot, current_snapshot)
+    for kind, label in (
+        ("added", "新增"),
+        ("modified", "修改"),
+        ("deleted", "删除"),
+        ("type_changed", "类型变化"),
+    ):
+        if differences[kind]:
+            errors.append(f"责任文件{label}：{differences[kind]}")
+
+    current_state = _credential_bound_state(project_root, state, stage_name)
+    for key in sorted(set(credential.bound_state) | set(current_state)):
+        if credential.bound_state.get(key) != current_state.get(key):
+            errors.append(
+                f"责任状态 {key} 已变化：凭据={credential.bound_state.get(key)!r}，"
+                f"当前={current_state.get(key)!r}"
+            )
+    if errors:
+        return False, "；".join(errors)
+    return True, f"第二道门凭据有效：{credential.result_hash}"
 
 
 def _hash_file_path(full_path: str) -> str:
@@ -1003,9 +1334,34 @@ def compute_acceptance_plan_hash(project_root: str, topics: str | list[str] | No
     return str(snapshot["aggregate_hash"])
 
 
-# 计算测试结果文件 qa/<主题文件标识>_测试结果.md 的 SHA256
-# 在 gate test_execution --confirmed 时记录；变化时使主题验收及后续阶段失效
-def compute_test_result_hash(project_root: str, topics: str | list[str] | None) -> str | None:
+# 计算测试结果文件和 QA 机器任务记录的绑定摘要。
+# 在 qa 确认时记录；结果文档或机器记录变化时可指向不同的恢复步骤。
+def test_tasks_payload(
+    state: WorkflowState | None,
+    topics: str | list[str] | None,
+) -> dict:
+    if state is None:
+        return {}
+    topic_list = normalize_topics(topics)
+    stage = state.stages.get("qa") or state.stages.get("test_execution")
+    if stage is None:
+        return {}
+    selected = topic_list or list(stage.test_tasks)
+    return {
+        topic: {
+            test_id: asdict(task)
+            for test_id, task in sorted(stage.test_tasks.get(topic, {}).items())
+        }
+        for topic in selected
+        if topic in stage.test_tasks
+    }
+
+
+def compute_test_result_hash(
+    project_root: str,
+    topics: str | list[str] | None,
+    state: WorkflowState | None = None,
+) -> str | None:
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
@@ -1013,23 +1369,34 @@ def compute_test_result_hash(project_root: str, topics: str | list[str] | None) 
         topic_paths(project_root, topic)["test_result"]
         for topic in automated_topics(project_root, topic_list)
     ]
-    if not paths:
-        return hashlib.sha256(b"<no-automated-test-results>").hexdigest()
-    return compute_document_set_hash(project_root, paths)
+    document_hash = (
+        hashlib.sha256(b"<no-automated-test-results>").hexdigest()
+        if not paths
+        else compute_document_set_hash(project_root, paths)
+    )
+    current_state = state if state is not None else load_state(project_root)
+    task_hash = _canonical_hash(test_tasks_payload(current_state, topic_list))
+    return hashlib.sha256(
+        f"documents:{document_hash}\ntasks:{task_hash}".encode("utf-8")
+    ).hexdigest()
 
 
 # 计算主题验收结果文件 acceptance/<主题文件标识>_验收结果.md 的 SHA256
 # 在 gate topic_acceptance --confirmed 时记录；变化时使最终回归及后续阶段失效
-def compute_acceptance_result_hash(project_root: str, topics: str | list[str] | None) -> str | None:
+def compute_acceptance_result_hash(
+    project_root: str,
+    topics: str | list[str] | None,
+    state: WorkflowState | None = None,
+) -> str | None:
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
     paths = [topic_paths(project_root, topic)["acceptance_result"] for topic in topic_list]
     document_hash = compute_document_set_hash(project_root, paths)
-    state = load_state(project_root)
+    current_state = state if state is not None else load_state(project_root)
     records = (
-        acceptance_records_mod.acceptance_records_payload(state, topic_list)
-        if state is not None
+        acceptance_records_mod.acceptance_records_payload(current_state, topic_list)
+        if current_state is not None
         else {}
     )
     payload = json.dumps(records, ensure_ascii=False, sort_keys=True)
@@ -1063,6 +1430,12 @@ def clear_stage_gates(stage: StageState) -> None:
     stage.existing_code_accepted_hash = None
     stage.existing_test_code_accepted_hash = None
     stage.plan_confirmed_hash = None
+    stage.internal_step = ""
+    stage.internal_step_hash = None
+    stage.scope_confirmed_hash = None
+    stage.result_hash = None
+    stage.reuse_decision_hash = None
+    stage.validation_credential = None
 
 
 def set_recovery_context(
@@ -1113,6 +1486,16 @@ def recovery_stage_action(state: WorkflowState, stage_name: str) -> str | None:
             "重新核对实施计划、实施记录和现有代码是否符合最新上游计划；"
             "一致时确认既有代码，不一致时才修改代码"
         )
+    if stage_name == "qa":
+        qa_state = state.stages.get("qa")
+        step = qa_state.internal_step if qa_state is not None else "scope"
+        if step == "scope":
+            return "重新确认受影响主题的测试范围和通过标准；保留无影响主题的结果"
+        if step == "test_code":
+            return "保留已确认测试范围，只重新核对受影响的测试代码和配置"
+        if step == "result":
+            return "保留当前机器执行记录，只重新生成受影响的测试结果"
+        return "保留测试范围和测试代码，只重新执行受影响的测试任务"
     if stage_name == "test_code":
         return (
             "重新核对测试计划与现有测试代码的对应关系；一致时确认既有测试代码，"
@@ -1162,7 +1545,7 @@ def _invalidate_test_execution_outputs(
     topics: list[str],
 ) -> None:
     """上游内容变化时，清掉不能继续使用的主题测试状态和结果文件。"""
-    stage_state = state.stages.get("test_execution")
+    stage_state = state.stages.get("qa") or state.stages.get("test_execution")
     if stage_state is not None:
         for topic in topics:
             stage_state.test_tasks.pop(topic, None)
@@ -1186,10 +1569,28 @@ class InvalidationInspection:
     affected_description: str = ""
     reason: str = ""
     diagnostics: tuple[diagnostics_mod.Diagnostic, ...] = ()
+    findings: tuple["InvalidationFinding", ...] = ()
+    blocked: bool = False
 
     @property
     def changed(self) -> bool:
-        return self.source_stage is not None
+        return bool(self.findings)
+
+
+@dataclass(frozen=True)
+class InvalidationFinding:
+    """一个可靠比较得到的独立变化事实。"""
+
+    source_stage: str
+    expected_hash: str
+    actual_hash: str | None
+    affected_topics: tuple[str, ...]
+    reason: str
+    diagnostics: tuple[diagnostics_mod.Diagnostic, ...]
+    details: tuple[tuple[str, dict[str, list[str]]], ...] = ()
+    recovery_step: str = ""
+    result_documents_only: bool = False
+    machine_records_changed: bool = False
 
 
 _INVALIDATION_ORDER = (
@@ -1202,7 +1603,7 @@ _INVALIDATION_ORDER = (
     ("regression_test", "regression_test_result_hash"),
 )
 
-_INVALIDATION_AFFECTED = {
+_LEGACY_INVALIDATION_AFFECTED = {
     "acceptance_plan": (
         "acceptance_plan", "impl", "test_plan", "test_code", "test_execution",
         "topic_acceptance", "regression_test", "overall_acceptance", "update_code_design",
@@ -1226,12 +1627,49 @@ _INVALIDATION_AFFECTED = {
     "regression_test": ("regression_test", "overall_acceptance", "update_code_design"),
 }
 
+_CURRENT_INVALIDATION_AFFECTED = {
+    "acceptance_plan": (
+        "acceptance_plan", "impl", "qa", "topic_acceptance", "regression_test",
+        "overall_acceptance", "update_code_design",
+    ),
+    "impl": (
+        "impl", "qa", "topic_acceptance", "regression_test", "overall_acceptance",
+        "update_code_design",
+    ),
+    "test_plan": (
+        "qa", "topic_acceptance", "regression_test", "overall_acceptance",
+        "update_code_design",
+    ),
+    "test_code": (
+        "qa", "topic_acceptance", "regression_test", "overall_acceptance",
+        "update_code_design",
+    ),
+    "test_execution": (
+        "qa", "topic_acceptance", "regression_test", "overall_acceptance",
+        "update_code_design",
+    ),
+    "topic_acceptance": ("regression_test", "overall_acceptance", "update_code_design"),
+    "regression_test": ("regression_test", "overall_acceptance", "update_code_design"),
+}
+
+
+def _invalidation_affected_stages(
+    state: WorkflowState,
+    source_stage: str,
+) -> tuple[str, ...]:
+    table = (
+        _CURRENT_INVALIDATION_AFFECTED
+        if "qa" in state.stage_path
+        else _LEGACY_INVALIDATION_AFFECTED
+    )
+    return tuple(stage for stage in table[source_stage] if stage in state.stages)
+
 _INVALIDATION_DESCRIPTIONS = {
     "acceptance_plan": "acceptance_plan 及全部后续阶段",
     "impl": "impl 及全部后续阶段",
-    "test_plan": "test_plan 及全部后续阶段（保留 impl）",
-    "test_code": "test_code 及全部后续阶段",
-    "test_execution": "topic_acceptance 及全部后续阶段",
+    "test_plan": "qa 测试范围及全部后续阶段（保留 impl）",
+    "test_code": "qa 测试代码及全部后续阶段",
+    "test_execution": "qa 测试执行或结果及全部后续阶段",
     "topic_acceptance": "regression_test、overall_acceptance 和 update_code_design",
     "regression_test": "regression_test、overall_acceptance 和 update_code_design",
 }
@@ -1337,20 +1775,23 @@ def _affected_topics_from_changes(
     topics: list[str],
     source_stage: str,
     *differences: dict[str, list[str]],
-) -> tuple[str, ...]:
-    """由逐文件变化反推直接受影响主题；证据不足时保守返回全部主题。"""
+) -> tuple[str, ...] | None:
+    """由逐文件变化反推直接受影响主题；证据不足时不猜测。"""
     ordered_topics = tuple(dict.fromkeys(topics))
     if not ordered_topics:
         return ()
     if source_stage == "regression_test":
         return ordered_topics
 
-    # 旧状态没有逐文件基线时，无法证明具体是哪个主题变化，不能猜测归属。
+    # 旧状态没有逐文件基线时，无法证明具体是哪个主题变化。
     if any(difference.get("not_checked") for difference in differences):
-        return ordered_topics
+        return None
     changed_paths = _changed_paths(*differences)
     if not changed_paths:
-        return ordered_topics
+        # 有完整逐文件基线且比较结果为空，表示该来源本身没有主题变化。
+        # 调用方还可能把机器记录等结构化变化并入同一失效事实，因此这里
+        # 必须返回空主题集合，而不能把“零差异”误判为“没有可定位基线”。
+        return ()
 
     global_paths = {
         "acceptance_plan": {artifact_paths_mod.ACCEPTANCE_INDEX_DOC},
@@ -1362,13 +1803,12 @@ def _affected_topics_from_changes(
 
     ownership = _topic_owned_paths(project_root, list(ordered_topics), source_stage)
     if ownership is None:
-        return ordered_topics
+        return None
     affected: set[str] = set()
     for path in changed_paths:
         owners = ownership.get(path.replace(os.sep, "/"))
         if not owners:
-            # 计划外核心代码、共享配置或无法识别的正式文档都可能影响整轮。
-            return ordered_topics
+            return None
         affected.update(owners)
     return tuple(topic for topic in ordered_topics if topic in affected)
 
@@ -1408,7 +1848,7 @@ def _make_invalidation_inspection(
     actual_hash: str | None,
     reason: str,
     exact_diagnostics: list[diagnostics_mod.Diagnostic],
-    affected_topics: tuple[str, ...],
+    affected_topics: tuple[str, ...] | None,
 ) -> InvalidationInspection:
     field_name = dict(_INVALIDATION_ORDER)[source_stage]
     parent_check_id = f"invalidation.{source_stage}.binding"
@@ -1426,62 +1866,185 @@ def _make_invalidation_inspection(
         *exact_diagnostics,
         *_dependent_not_checked(state, source_stage, parent_check_id),
     ]
+    if affected_topics is None:
+        diagnostics.append(
+            diagnostics_mod.Diagnostic(
+                kind="not_checked",
+                check_id=f"invalidation.{source_stage}.affected_topics.not_checked",
+                location=".workflow_loop/state.json#meta.registered_snapshots",
+                expected="存在足以定位直接受影响主题的逐文件基线和路径归属",
+                actual="未检查：当前事实只能证明绑定变化，不能可靠证明应删除哪些主题结果",
+                evidence="逐文件基线缺失、没有具体变化路径或路径无法归属到单一主题",
+                impact="为避免误删，程序不会自动应用本次失效清理",
+                next_action=f"先返回 {source_stage} 重建可定位基线，或由用户明确直接受影响主题",
+                depends_on=parent_check_id,
+            )
+        )
     return InvalidationInspection(
         source_stage=source_stage,
-        affected_stages=_INVALIDATION_AFFECTED[source_stage],
-        affected_topics=affected_topics,
+        affected_stages=_invalidation_affected_stages(state, source_stage),
+        affected_topics=affected_topics or (),
         affected_description=_INVALIDATION_DESCRIPTIONS[source_stage],
         reason=reason,
         diagnostics=tuple(diagnostics),
+        blocked=affected_topics is None,
     )
 
 
+
+
+def _current_test_entry_config(project_root: str) -> dict:
+    project = load_project(project_root)
+    raw = project.test_entry if project is not None else {}
+    if isinstance(raw, str):
+        return {"default": [raw]} if raw.strip() else {}
+    return copy.deepcopy(raw) if isinstance(raw, dict) else {}
+
+
+def _payload_changed_topics(
+    baseline: object,
+    current: dict,
+    topics: list[str],
+) -> tuple[str, ...] | None:
+    """比较按主题保存的状态事实；无基线时不猜测影响范围。"""
+    if not isinstance(baseline, dict):
+        return None
+    return tuple(
+        topic
+        for topic in topics
+        if baseline.get(topic, {}) != current.get(topic, {})
+    )
+
+
+def _state_change_diagnostics(
+    *,
+    source_stage: str,
+    scope_name: str,
+    location: str,
+    changed_topics: tuple[str, ...],
+    parent_check_id: str,
+) -> list[diagnostics_mod.Diagnostic]:
+    return [
+        diagnostics_mod.Diagnostic(
+            kind="error",
+            check_id=f"invalidation.{source_stage}.{scope_name}:{topic}",
+            location=f"{location}.{topic}",
+            expected=f"与 {source_stage} 确认时保存的{scope_name}一致",
+            actual=f"主题“{topic}”的{scope_name}已变化",
+            evidence=f"结构化状态逐主题比较：{topic}",
+            impact=f"主题“{topic}”的{_INVALIDATION_DESCRIPTIONS[source_stage]}不能继续沿用",
+            next_action=f"只重新处理主题“{topic}”中受影响的{scope_name}",
+            depends_on=parent_check_id,
+        )
+        for topic in changed_topics
+    ]
+
+
 def inspect_invalidation(state: WorkflowState, project_root: str) -> InvalidationInspection:
-    """只读检查最上游变化，并一次返回具体差异和所有下游未检查项。"""
-    topics = state.topics or ([state.topic] if state.topic else [])
+    """先完成全部可靠只读比较，再生成一份精确失效计划。"""
+    topics = list(dict.fromkeys(state.topics or ([state.topic] if state.topic else [])))
     stored = state.meta.get("registered_snapshots", {})
+    if not isinstance(stored, dict):
+        stored = {}
+    findings: list[InvalidationFinding] = []
+    blocked: list[tuple[str, str, tuple[diagnostics_mod.Diagnostic, ...]]] = []
+
+    def record_change(
+        *,
+        source_stage: str,
+        expected_hash: str,
+        actual_hash: str | None,
+        reason: str,
+        affected_topics: tuple[str, ...] | None,
+        detail_differences: list[tuple[str, dict[str, list[str]]]],
+        extra_diagnostics: list[diagnostics_mod.Diagnostic] | None = None,
+        recovery_step: str = "",
+        result_documents_only: bool = False,
+        machine_records_changed: bool = False,
+    ) -> None:
+        field_name = dict(_INVALIDATION_ORDER)[source_stage]
+        parent = f"invalidation.{source_stage}.binding"
+        diagnostics: list[diagnostics_mod.Diagnostic] = [
+            diagnostics_mod.Diagnostic(
+                kind="error",
+                check_id=parent,
+                location=f".workflow_loop/state.json#verification.{field_name}",
+                expected=f"当前 {source_stage} 绑定哈希等于确认值 {expected_hash}",
+                actual=f"当前绑定哈希为 {actual_hash}",
+                evidence=f"saved={expected_hash}; current={actual_hash}",
+                impact=f"{_INVALIDATION_DESCRIPTIONS[source_stage]}的旧确认不能继续使用",
+                next_action="先核对本次一次列出的全部变化，再一次应用失效计划",
+            )
+        ]
+        for scope_name, differences in detail_differences:
+            diagnostics.extend(
+                _change_diagnostics(
+                    source_stage=source_stage,
+                    scope_name=scope_name,
+                    differences=differences,
+                    parent_check_id=parent,
+                )
+            )
+        diagnostics.extend(extra_diagnostics or [])
+        if affected_topics is None:
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="not_checked",
+                    check_id=f"invalidation.{source_stage}.affected_topics.not_checked",
+                    location=".workflow_loop/state.json#meta.registered_snapshots",
+                    expected="存在能定位直接受影响主题的逐文件或结构化状态基线",
+                    actual="未检查：只能证明整体绑定变化，不能可靠证明删除哪些主题结果",
+                    evidence="基线缺失、没有具体变化路径，或路径无法归属到主题",
+                    impact="程序本次不执行删文件或清主题记录的破坏性操作",
+                    next_action=f"先在 {source_stage} 重建可定位基线，或让用户明确直接受影响主题",
+                    depends_on=parent,
+                )
+            )
+            blocked.append((source_stage, reason, tuple(diagnostics)))
+            return
+        findings.append(
+            InvalidationFinding(
+                source_stage=source_stage,
+                expected_hash=expected_hash,
+                actual_hash=actual_hash,
+                affected_topics=affected_topics,
+                reason=reason,
+                diagnostics=tuple(diagnostics),
+                details=tuple(detail_differences),
+                recovery_step=recovery_step,
+                result_documents_only=result_documents_only,
+                machine_records_changed=machine_records_changed,
+            )
+        )
 
     expected = state.verification.acceptance_plan_hash
     if expected is not None:
         current_topics = list_acceptance_index_topics(project_root, state.workflow_id)
         current = compute_acceptance_plan_hash(project_root, current_topics)
         if current != expected:
-            paths = [
-                artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
-                *[topic_paths(project_root, topic)["acceptance_plan"] for topic in current_topics],
-            ]
             differences = _compare_acceptance_plan_document_snapshot(
                 project_root,
                 stored.get("acceptance_plan_documents"),
                 current_topics,
             )
-            parent = "invalidation.acceptance_plan.binding"
-            return _make_invalidation_inspection(
-                state,
+            record_change(
                 source_stage="acceptance_plan",
                 expected_hash=expected,
                 actual_hash=current,
                 reason=(
                     "验收主题或验收条件已经改变："
-                    f"{format_registered_differences(differences)}。"
-                    "后续计划、代码和结果必须重新核对"
-                ),
-                exact_diagnostics=_change_diagnostics(
-                    source_stage="acceptance_plan",
-                    scope_name="验收计划文档",
-                    differences=differences,
-                    parent_check_id=parent,
+                    f"{format_registered_differences(differences)}"
                 ),
                 affected_topics=_affected_topics_from_changes(
                     project_root, topics, "acceptance_plan", differences
                 ),
+                detail_differences=[("验收计划文档", differences)],
             )
 
     expected = state.verification.impl_hash
     if expected is not None:
         current = compute_impl_hash(project_root, topics)
         if current != expected:
-            parent = "invalidation.impl.binding"
             try:
                 code_differences = compare_registered_file_snapshot(
                     project_root, stored.get("impl"), scope="product"
@@ -1498,36 +2061,23 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
             document_differences = _compare_recorded_snapshot(
                 project_root, stored.get("impl_documents"), document_paths
             )
-            details = (
-                f"核心代码：{format_registered_differences(code_differences)}；"
-                f"实施文档：{format_registered_differences(document_differences)}"
+            affected = _affected_topics_from_changes(
+                project_root, topics, "impl", code_differences, document_differences
             )
-            return _make_invalidation_inspection(
-                state,
+            record_change(
                 source_stage="impl",
                 expected_hash=expected,
                 actual_hash=current,
                 reason=(
-                    f"实施绑定内容变化。{details}。"
-                    "原测试计划、测试和验收结果不能继续代表当前实现"
+                    "实施绑定内容变化。核心代码："
+                    f"{format_registered_differences(code_differences)}；实施文档："
+                    f"{format_registered_differences(document_differences)}"
                 ),
-                exact_diagnostics=[
-                    *_change_diagnostics(
-                        source_stage="impl",
-                        scope_name="核心代码",
-                        differences=code_differences,
-                        parent_check_id=parent,
-                    ),
-                    *_change_diagnostics(
-                        source_stage="impl",
-                        scope_name="实施文档",
-                        differences=document_differences,
-                        parent_check_id=parent,
-                    ),
+                affected_topics=affected,
+                detail_differences=[
+                    ("核心代码", code_differences),
+                    ("实施文档", document_differences),
                 ],
-                affected_topics=_affected_topics_from_changes(
-                    project_root, topics, "impl", code_differences, document_differences
-                ),
             )
 
     expected = state.verification.test_plan_hash
@@ -1535,37 +2085,27 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
         current = compute_test_plan_hash(project_root, topics)
         if current != expected:
             differences = _compare_test_plan_document_snapshot(
-                project_root,
-                stored.get("test_plan_documents"),
-                topics,
+                project_root, stored.get("test_plan_documents"), topics
             )
-            parent = "invalidation.test_plan.binding"
-            return _make_invalidation_inspection(
-                state,
+            record_change(
                 source_stage="test_plan",
                 expected_hash=expected,
                 actual_hash=current,
                 reason=(
-                    "测试计划内容已经改变："
-                    f"{format_registered_differences(differences)}；"
-                    "已确认实施保持有效，测试代码、执行和验收必须重新核对"
-                ),
-                exact_diagnostics=_change_diagnostics(
-                    source_stage="test_plan",
-                    scope_name="测试计划文档",
-                    differences=differences,
-                    parent_check_id=parent,
+                    "测试范围或测试计划已经改变："
+                    f"{format_registered_differences(differences)}"
                 ),
                 affected_topics=_affected_topics_from_changes(
                     project_root, topics, "test_plan", differences
                 ),
+                detail_differences=[("测试计划文档", differences)],
+                recovery_step="scope",
             )
 
     expected = state.verification.test_code_hash
     if expected is not None:
         current = compute_test_code_snapshot_hash(project_root)
         if current != expected:
-            parent = "invalidation.test_code.binding"
             try:
                 differences = compare_registered_file_snapshot(
                     project_root, stored.get("test_code"), scope="test"
@@ -1575,96 +2115,186 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
                     "added": [], "modified": [], "deleted": [], "type_changed": [],
                     "not_checked": _active_registered_paths(project_root) or [],
                 }
-            return _make_invalidation_inspection(
-                state,
+            entry_known = "test_entry_config" in stored
+            current_entry = _current_test_entry_config(project_root)
+            entry_changed = entry_known and stored.get("test_entry_config") != current_entry
+            affected = (
+                tuple(topics)
+                if entry_changed
+                else _affected_topics_from_changes(
+                    project_root, topics, "test_code", differences
+                )
+            )
+            extra: list[diagnostics_mod.Diagnostic] = []
+            parent = "invalidation.test_code.binding"
+            if entry_changed:
+                extra.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="invalidation.test_code.test_entry",
+                        location=".workflow_loop/project.json#test_entry",
+                        expected="项目统一测试入口与 QA 确认时一致",
+                        actual="统一测试入口已变化",
+                        evidence=(
+                            f"saved={stored.get('test_entry_config')!r}; current={current_entry!r}"
+                        ),
+                        impact="所有主题的旧测试机器记录都不能代表当前入口",
+                        next_action="在 qa 的测试代码步骤重新核对全部主题",
+                        depends_on=parent,
+                    )
+                )
+            if not entry_known:
+                affected = None
+                extra.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="not_checked",
+                        check_id="invalidation.test_code.test_entry.not_checked",
+                        location=".workflow_loop/state.json#meta.registered_snapshots.test_entry_config",
+                        expected="存在 QA 确认时的统一测试入口基线",
+                        actual="未检查：旧状态没有该基线",
+                        evidence="test_code_hash 包含入口配置，但旧快照未单独保存",
+                        impact="不能排除公共入口同时变化",
+                        next_action="重建测试代码和统一入口基线",
+                        depends_on=parent,
+                    )
+                )
+            record_change(
                 source_stage="test_code",
                 expected_hash=expected,
                 actual_hash=current,
                 reason=(
-                    "登记的测试文件或统一测试入口已经改变："
-                    f"{format_registered_differences(differences)}。旧执行记录必须作废；"
-                    "未登记的构建、依赖和缓存文件不参与判断"
+                    "登记的测试文件、测试配置或统一测试入口已改变："
+                    f"{format_registered_differences(differences)}"
                 ),
-                exact_diagnostics=_change_diagnostics(
-                    source_stage="test_code",
-                    scope_name="测试代码",
-                    differences=differences,
-                    parent_check_id=parent,
-                ),
-                affected_topics=_affected_topics_from_changes(
-                    project_root, topics, "test_code", differences
-                ),
+                affected_topics=affected,
+                detail_differences=[("测试代码", differences)],
+                extra_diagnostics=extra,
+                recovery_step="test_code",
             )
 
     expected = state.verification.test_result_hash
     if expected is not None:
-        current = compute_test_result_hash(project_root, topics)
+        current = compute_test_result_hash(project_root, topics, state=state)
         if current != expected:
-            paths = [
+            result_paths = [
                 topic_paths(project_root, topic)["test_result"]
                 for topic in automated_topics(project_root, topics)
             ]
-            differences = _compare_recorded_snapshot(
-                project_root, stored.get("test_result_documents"), paths
+            document_differences = _compare_recorded_snapshot(
+                project_root, stored.get("test_result_documents"), result_paths
             )
+            document_topics = _affected_topics_from_changes(
+                project_root, topics, "test_execution", document_differences
+            )
+            current_tasks = test_tasks_payload(state, topics)
+            task_topics = _payload_changed_topics(
+                stored.get("test_task_records"), current_tasks, topics
+            )
+            if task_topics is None or document_topics is None:
+                affected = None
+            else:
+                changed = set(document_topics) | set(task_topics)
+                affected = tuple(topic for topic in topics if topic in changed)
+                if not affected:
+                    affected = None
             parent = "invalidation.test_execution.binding"
-            return _make_invalidation_inspection(
-                state,
+            extra = (
+                _state_change_diagnostics(
+                    source_stage="test_execution",
+                    scope_name="测试机器记录",
+                    location=".workflow_loop/state.json#stages.qa.test_tasks",
+                    changed_topics=task_topics,
+                    parent_check_id=parent,
+                )
+                if task_topics is not None
+                else [
+                    diagnostics_mod.Diagnostic(
+                        kind="not_checked",
+                        check_id="invalidation.test_execution.machine_records.not_checked",
+                        location=".workflow_loop/state.json#meta.registered_snapshots.test_task_records",
+                        expected="存在 QA 确认时的测试机器记录基线",
+                        actual="未检查：旧状态没有该基线",
+                        evidence="结果绑定包含机器记录，但旧快照未单独保存",
+                        impact="不能区分结果文档整理错误和机器记录失效",
+                        next_action="重建 QA 机器记录基线",
+                        depends_on=parent,
+                    )
+                ]
+            )
+            machine_changed = bool(task_topics)
+            documents_changed = bool(_changed_paths(document_differences))
+            record_change(
                 source_stage="test_execution",
                 expected_hash=expected,
                 actual_hash=current,
                 reason=(
-                    "主题测试结果已经改变："
-                    f"{format_registered_differences(differences)}。"
-                    "旧主题验收和后续结论必须重新确认"
+                    "主题测试结果或机器记录已改变："
+                    f"{format_registered_differences(document_differences)}"
                 ),
-                exact_diagnostics=_change_diagnostics(
-                    source_stage="test_execution",
-                    scope_name="测试结果文档",
-                    differences=differences,
-                    parent_check_id=parent,
-                ),
-                affected_topics=_affected_topics_from_changes(
-                    project_root, topics, "test_execution", differences
-                ),
+                affected_topics=affected,
+                detail_differences=[("测试结果文档", document_differences)],
+                extra_diagnostics=extra,
+                recovery_step="execution" if machine_changed else "result",
+                result_documents_only=documents_changed and not machine_changed,
+                machine_records_changed=machine_changed,
             )
 
     expected = state.verification.acceptance_result_hash
     if expected is not None:
-        current = compute_acceptance_result_hash(project_root, topics)
+        current = compute_acceptance_result_hash(project_root, topics, state=state)
         if current != expected:
-            paths = [topic_paths(project_root, topic)["acceptance_result"] for topic in topics]
-            differences = _compare_recorded_snapshot(
-                project_root, stored.get("acceptance_result_documents"), paths
+            result_paths = [
+                topic_paths(project_root, topic)["acceptance_result"] for topic in topics
+            ]
+            document_differences = _compare_recorded_snapshot(
+                project_root, stored.get("acceptance_result_documents"), result_paths
             )
+            document_topics = _affected_topics_from_changes(
+                project_root, topics, "topic_acceptance", document_differences
+            )
+            current_records = acceptance_records_mod.acceptance_records_payload(state, topics)
+            record_topics = _payload_changed_topics(
+                stored.get("acceptance_records"), current_records, topics
+            )
+            if record_topics is None or document_topics is None:
+                affected = None
+            else:
+                changed = set(document_topics) | set(record_topics)
+                affected = tuple(topic for topic in topics if topic in changed) or None
             parent = "invalidation.topic_acceptance.binding"
-            return _make_invalidation_inspection(
-                state,
+            extra = (
+                _state_change_diagnostics(
+                    source_stage="topic_acceptance",
+                    scope_name="验收机器记录",
+                    location=".workflow_loop/state.json#stages.topic_acceptance.acceptance_records",
+                    changed_topics=record_topics,
+                    parent_check_id=parent,
+                )
+                if record_topics is not None
+                else []
+            )
+            record_change(
                 source_stage="topic_acceptance",
                 expected_hash=expected,
                 actual_hash=current,
                 reason=(
-                    "主题验收结果或验收机器记录已经改变："
-                    f"{format_registered_differences(differences)}。"
-                    "旧全量回归和整体验收结论不能继续使用"
+                    "主题验收结果或验收机器记录已改变："
+                    f"{format_registered_differences(document_differences)}"
                 ),
-                exact_diagnostics=_change_diagnostics(
-                    source_stage="topic_acceptance",
-                    scope_name="验收结果文档",
-                    differences=differences,
-                    parent_check_id=parent,
-                ),
-                affected_topics=_affected_topics_from_changes(
-                    project_root, topics, "topic_acceptance", differences
-                ),
+                affected_topics=affected,
+                detail_differences=[("验收结果文档", document_differences)],
+                extra_diagnostics=extra,
             )
 
     expected = state.verification.regression_test_result_hash
     if expected is not None:
-        current = compute_regression_test_result_hash(project_root)
-        code_changed = state.regression_test.code_snapshot_hash != compute_code_snapshot_hash(project_root)
+        payload = json.dumps(state.regression_test.__dict__, ensure_ascii=False, sort_keys=True)
+        current = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        code_changed = (
+            state.regression_test.code_snapshot_hash
+            != compute_code_snapshot_hash(project_root)
+        )
         if current != expected or code_changed:
-            parent = "invalidation.regression_test.binding"
             if code_changed:
                 try:
                     differences = compare_registered_file_snapshot(
@@ -1675,35 +2305,156 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
                         "added": [], "modified": [], "deleted": [], "type_changed": [],
                         "not_checked": _active_registered_paths(project_root) or [],
                     }
-                exact = _change_diagnostics(
-                    source_stage="regression_test",
-                    scope_name="回归绑定代码",
-                    differences=differences,
-                    parent_check_id=parent,
+                affected = _affected_topics_from_changes(
+                    project_root, topics, "regression_test", differences
                 )
+                details = [("回归绑定代码", differences)]
                 reason = (
                     "全量回归后登记文件发生变化："
-                    f"{format_registered_differences(differences)}；必须重新执行全量回归"
+                    f"{format_registered_differences(differences)}"
                 )
             else:
-                exact = []
-                reason = "全量回归状态字段已经改变，后续整体验收不能继续使用旧结论"
-            return _make_invalidation_inspection(
-                state,
+                affected = tuple(topics)
+                details = []
+                reason = "全量回归机器状态已经改变"
+            record_change(
                 source_stage="regression_test",
                 expected_hash=expected,
                 actual_hash=current,
                 reason=reason,
-                exact_diagnostics=exact,
-                affected_topics=_affected_topics_from_changes(
-                    project_root,
-                    topics,
-                    "regression_test",
-                    differences if code_changed else {},
-                ),
+                affected_topics=affected,
+                detail_differences=details,
             )
 
-    return InvalidationInspection()
+    if not findings and not blocked:
+        return InvalidationInspection()
+
+    order = {name: index for index, (name, _field) in enumerate(_INVALIDATION_ORDER)}
+    source_candidates = (
+        [finding.source_stage for finding in findings]
+        if findings
+        else [source for source, _reason, _diagnostics in blocked]
+    )
+    source_stage = min(source_candidates, key=lambda name: order[name])
+    all_diagnostics = [
+        diagnostic
+        for finding in findings
+        for diagnostic in finding.diagnostics
+    ] + [
+        diagnostic
+        for _source, _reason, diagnostics in blocked
+        for diagnostic in diagnostics
+    ]
+    affected_stage_set = {
+        stage_name
+        for finding in findings
+        for stage_name in _invalidation_affected_stages(state, finding.source_stage)
+    }
+    affected_stages = tuple(
+        stage_name for stage_name in state.stage_path if stage_name in affected_stage_set
+    )
+    affected_topic_set = {
+        topic for finding in findings for topic in finding.affected_topics
+    }
+    affected_topics = tuple(topic for topic in topics if topic in affected_topic_set)
+    reasons = [finding.reason for finding in findings] + [
+        reason for _source, reason, _diagnostics in blocked
+    ]
+    descriptions = list(
+        dict.fromkeys(
+            _INVALIDATION_DESCRIPTIONS[finding.source_stage] for finding in findings
+        )
+    )
+    if blocked:
+        descriptions.append("存在无法定位主题的变化，本次不自动清理")
+    return InvalidationInspection(
+        source_stage=source_stage,
+        affected_stages=affected_stages,
+        affected_topics=affected_topics,
+        affected_description="；".join(descriptions),
+        reason="；".join(reasons),
+        diagnostics=tuple(all_diagnostics),
+        findings=tuple(findings),
+        blocked=bool(blocked),
+    )
+
+
+
+
+def _qa_recovery_step(findings: tuple[InvalidationFinding, ...]) -> str:
+    priorities = {"scope": 0, "test_code": 1, "execution": 2, "result": 3}
+    steps: list[str] = []
+    for finding in findings:
+        if finding.source_stage in {"acceptance_plan", "impl", "test_plan"}:
+            steps.append("scope")
+        elif finding.source_stage == "test_code":
+            steps.append("test_code")
+        elif finding.source_stage == "test_execution":
+            steps.append(finding.recovery_step or "execution")
+    return min(steps, key=lambda step: priorities[step]) if steps else "scope"
+
+
+def _reset_qa_stage_for_invalidation(stage: StageState, step: str) -> None:
+    """只清掉 QA 中真实失效的内部步骤，保留更上游的确认。"""
+    stage.status = "pending"
+    stage.gate.code_validated = False
+    stage.gate.user_confirmed = False
+    stage.validation_credential = None
+    stage.result_hash = None
+    stage.internal_step_hash = None
+    stage.internal_step = step
+    if step == "scope":
+        stage.gate.discussion_complete = False
+        stage.scope_confirmed_hash = None
+        stage.test_code_baseline_hash = None
+        stage.non_test_code_baseline_hash = None
+        stage.existing_test_code_accepted_hash = None
+        stage.reuse_decision_hash = None
+    else:
+        stage.gate.discussion_complete = bool(stage.scope_confirmed_hash)
+        if step == "test_code":
+            stage.test_code_baseline_hash = None
+            stage.non_test_code_baseline_hash = None
+            stage.existing_test_code_accepted_hash = None
+            stage.reuse_decision_hash = None
+
+
+_HASHES_CLEARED_BY_SOURCE = {
+    "acceptance_plan": (
+        "acceptance_plan_hash", "impl_hash", "test_plan_hash", "test_code_hash",
+        "test_result_hash", "acceptance_result_hash", "regression_test_result_hash",
+    ),
+    "impl": (
+        "impl_hash", "test_plan_hash", "test_code_hash", "test_result_hash",
+        "acceptance_result_hash", "regression_test_result_hash",
+    ),
+    "test_plan": (
+        "test_plan_hash", "test_code_hash", "test_result_hash",
+        "acceptance_result_hash", "regression_test_result_hash",
+    ),
+    "test_code": (
+        "test_code_hash", "test_result_hash", "acceptance_result_hash",
+        "regression_test_result_hash",
+    ),
+    "test_execution": (
+        "test_result_hash", "acceptance_result_hash", "regression_test_result_hash",
+    ),
+    "topic_acceptance": ("acceptance_result_hash", "regression_test_result_hash"),
+    "regression_test": ("regression_test_result_hash",),
+}
+
+
+def _remove_topic_result_files(
+    project_root: str,
+    topics: list[str],
+    *kinds: str,
+) -> None:
+    for topic in topics:
+        paths = topic_paths(project_root, topic)
+        for kind in kinds:
+            result_path = os.path.join(project_root, paths[kind])
+            if os.path.isfile(result_path):
+                os.remove(result_path)
 
 
 def apply_invalidation(
@@ -1711,82 +2462,104 @@ def apply_invalidation(
     project_root: str,
     inspection: InvalidationInspection,
 ) -> list[tuple[str, str]]:
-    """按只读检查选出的最上游来源，一次应用全部清零和结果作废。"""
-    if not inspection.changed or inspection.source_stage is None:
+    """完成所有只读比较后，按每个变化源的直接证据一次应用。"""
+    if not inspection.findings or inspection.source_stage is None:
         return []
-    source = inspection.source_stage
-    topics = list(inspection.affected_topics)
-    reset_stages_and_move_current(state, list(inspection.affected_stages))
-    set_recovery_context(state, source, list(inspection.affected_stages), inspection.reason)
-    state.recovery.affected_topics = list(topics)
 
-    if source == "acceptance_plan":
-        state.verification.acceptance_plan_hash = None
-        state.verification.impl_hash = None
-        state.verification.test_plan_hash = None
-        state.verification.test_code_hash = None
-        state.verification.test_result_hash = None
-        state.verification.acceptance_result_hash = None
-        state.verification.regression_test_result_hash = None
-        traceability_mod.reset_after_upstream_invalidation(
-            project_root, state.workflow_id, topics, "acceptance_plan"
-        )
-        _invalidate_test_execution_outputs(project_root, state, topics)
-    elif source == "impl":
-        state.verification.impl_hash = None
-        state.verification.test_plan_hash = None
-        state.verification.test_code_hash = None
-        state.verification.test_result_hash = None
-        state.verification.acceptance_result_hash = None
-        state.verification.regression_test_result_hash = None
-        traceability_mod.reset_after_upstream_invalidation(
-            project_root, state.workflow_id, topics, "impl"
-        )
-        _invalidate_test_execution_outputs(project_root, state, topics)
-    elif source == "test_plan":
-        state.verification.test_plan_hash = None
-        state.verification.test_code_hash = None
-        state.verification.test_result_hash = None
-        state.verification.acceptance_result_hash = None
-        state.verification.regression_test_result_hash = None
-        traceability_mod.reset_after_upstream_invalidation(
-            project_root, state.workflow_id, topics, "test_plan"
-        )
-        _invalidate_test_execution_outputs(project_root, state, topics)
-    elif source == "test_code":
-        state.verification.test_code_hash = None
-        state.verification.test_result_hash = None
-        state.verification.acceptance_result_hash = None
-        state.verification.regression_test_result_hash = None
-        if os.path.isfile(os.path.join(project_root, artifact_paths_mod.TRACEABILITY_DOC)):
+    source_order = {
+        source_stage: index
+        for index, (source_stage, _field_name) in enumerate(_INVALIDATION_ORDER)
+    }
+    applied_source = min(
+        (finding.source_stage for finding in inspection.findings),
+        key=lambda source_stage: source_order[source_stage],
+    )
+    applied_reason = "；".join(finding.reason for finding in inspection.findings)
+
+    affected_stage_set = set(inspection.affected_stages)
+    qa_step = _qa_recovery_step(inspection.findings)
+    for stage_name in inspection.affected_stages:
+        stage = state.stages.get(stage_name)
+        if stage is None:
+            continue
+        if stage_name == "qa":
+            _reset_qa_stage_for_invalidation(stage, qa_step)
+        else:
+            clear_stage_gates(stage)
+
+    ordered_affected_stages = [
+        stage_name
+        for stage_name in state.stage_path
+        if stage_name in affected_stage_set
+    ]
+    if ordered_affected_stages:
+        state.current_stage = ordered_affected_stages[0]
+        state.stages[state.current_stage].status = "in_progress"
+
+    for finding in inspection.findings:
+        for field_name in _HASHES_CLEARED_BY_SOURCE[finding.source_stage]:
+            setattr(state.verification, field_name, None)
+
+    traceability_exists = os.path.isfile(
+        os.path.join(project_root, artifact_paths_mod.TRACEABILITY_DOC)
+    )
+    regression_invalidated = False
+    for finding in inspection.findings:
+        source = finding.source_stage
+        topics = list(finding.affected_topics)
+        if traceability_exists:
             traceability_mod.reset_topics_for_return(
-                project_root, state.workflow_id, topics, "test_code"
-            )
-        _invalidate_test_execution_outputs(project_root, state, topics)
-    elif source == "test_execution":
-        state.verification.test_result_hash = None
-        state.verification.acceptance_result_hash = None
-        state.verification.regression_test_result_hash = None
-        if os.path.isfile(os.path.join(project_root, artifact_paths_mod.TRACEABILITY_DOC)):
-            traceability_mod.reset_topics_for_return(
-                project_root, state.workflow_id, topics, "test_execution"
-            )
-        acceptance_records_mod.clear_topic_records(project_root, state, topics)
-    elif source == "topic_acceptance":
-        state.verification.acceptance_result_hash = None
-        state.verification.regression_test_result_hash = None
-        if os.path.isfile(os.path.join(project_root, artifact_paths_mod.TRACEABILITY_DOC)):
-            traceability_mod.reset_topics_for_return(
-                project_root, state.workflow_id, topics, "topic_acceptance"
-            )
-    elif source == "regression_test":
-        state.verification.regression_test_result_hash = None
-        if os.path.isfile(os.path.join(project_root, artifact_paths_mod.TRACEABILITY_DOC)):
-            traceability_mod.reset_topics_for_return(
-                project_root, state.workflow_id, topics, "regression_test"
+                project_root,
+                state.workflow_id,
+                topics,
+                source,
             )
 
-    return [(source, inspection.affected_description)]
+        if source in {"acceptance_plan", "impl", "test_plan", "test_code"}:
+            _invalidate_test_execution_outputs(project_root, state, topics)
+            regression_invalidated = True
+        elif source == "test_execution":
+            qa_state = state.stages.get("qa") or state.stages.get("test_execution")
+            if finding.machine_records_changed and qa_state is not None:
+                for topic in topics:
+                    qa_state.test_tasks.pop(topic, None)
+            _remove_topic_result_files(
+                project_root,
+                topics,
+                "test_result",
+                "acceptance_result",
+            )
+            acceptance_records_mod.clear_topic_records(project_root, state, topics)
+            state.regression_test = RegressionTestState()
+            regression_invalidated = True
+        elif source == "topic_acceptance":
+            _remove_topic_result_files(project_root, topics, "acceptance_result")
+            acceptance_records_mod.clear_topic_records(project_root, state, topics)
+            state.regression_test = RegressionTestState()
+            regression_invalidated = True
+        elif source == "regression_test":
+            state.regression_test = RegressionTestState()
+            regression_invalidated = True
+
+    if regression_invalidated and traceability_exists:
+        traceability_mod.reset_topics_for_return(
+            project_root,
+            state.workflow_id,
+            list(state.topics or ([state.topic] if state.topic else [])),
+            "regression_test",
+        )
+
+    set_recovery_context(
+        state,
+        applied_source,
+        ordered_affected_stages,
+        applied_reason,
+    )
+    state.recovery.affected_topics = list(inspection.affected_topics)
+    return [
+        (finding.source_stage, _INVALIDATION_DESCRIPTIONS[finding.source_stage])
+        for finding in inspection.findings
+    ]
 
 
 # 兼容原调用：先只读检查，再一次应用。需要展示完整诊断的命令层应分别调用

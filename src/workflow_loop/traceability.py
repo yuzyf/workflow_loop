@@ -17,7 +17,7 @@ from .topic import topic_paths
 
 
 TRACEABILITY_PATH = artifact_paths_mod.TRACEABILITY_DOC
-TRACEABILITY_HEADERS = [
+LEGACY_TRACEABILITY_HEADERS = [
     "需求来源与设计依据",
     "验收主题",
     "验收条件",
@@ -28,10 +28,37 @@ TRACEABILITY_HEADERS = [
     "验收结果",
     "更新后的代码设计",
 ]
+TRACEABILITY_HEADERS = [
+    "需求来源与设计依据",
+    "验收主题",
+    "验收条件",
+    "穿刺结论与可复用内容",
+    "测试项",
+    "实施计划与任务",
+    "实施记录与代码",
+    "测试结果",
+    "验收结果",
+    "更新后的代码设计",
+]
+SPIKE_SKIPPED_TEXT = "本轮未执行穿刺，无可复用资产"
+SPIKE_RECHECK_TEXT = "待重新确认；已登记资产保留"
+SPIKE_NO_SUPPORT_TEXT = "本验收条件没有直接支撑的穿刺结论或可复用资产"
+SUPPORTED_HEADERS = (TRACEABILITY_HEADERS, LEGACY_TRACEABILITY_HEADERS)
 
 _INITIAL_VALUES = {"待制定", "待执行", "待更新"}
-_INITIAL_ROW_VALUES = ["待制定", "待制定", "待执行", "待执行", "待执行", "待更新"]
+_INITIAL_VALUES_BY_HEADER = {
+    "测试项": "待制定",
+    "实施计划与任务": "待制定",
+    "实施记录与代码": "待执行",
+    "测试结果": "待执行",
+    "验收结果": "待执行",
+    "更新后的代码设计": "待更新",
+}
 _CRITERION_ID_RE = re.compile(r"\b(AC-\d{2,})\b")
+_SPIKE_ASSET_PATH_RE = re.compile(
+    r"\.workflow_loop/spike_tmp/[A-Za-z0-9][A-Za-z0-9._-]*/"
+    r"[A-Za-z0-9_\-一-鿿㐀-䶿]+"
+)
 _REGRESSION_CONCLUSION_RE = re.compile(
     r"最终全量回归：通过(?:（机器记录 [^）]+）)?"
 )
@@ -68,6 +95,59 @@ def _format_table_line(cells: list[str]) -> str:
     return "| " + " | ".join(cells) + " |"
 
 
+def _column_count_label(count: int) -> str:
+    return {9: "九列", 10: "十列"}.get(count, f"{count} 列")
+
+
+def _headers_for_row(cells: list[str]) -> list[str]:
+    if len(cells) == len(TRACEABILITY_HEADERS):
+        return TRACEABILITY_HEADERS
+    if len(cells) == len(LEGACY_TRACEABILITY_HEADERS):
+        return LEGACY_TRACEABILITY_HEADERS
+    raise ValueError(f"追踪表行列数无效：{len(cells)}")
+
+
+def _column_index(cells: list[str], header: str) -> int:
+    headers = _headers_for_row(cells)
+    if header not in headers:
+        raise ValueError(f"当前追踪表格式缺少列：{header}")
+    return headers.index(header)
+
+
+def _initial_value_for_header(header: str) -> str:
+    return _INITIAL_VALUES_BY_HEADER[header]
+
+
+def _cell(cells: list[str], header: str) -> str:
+    return cells[_column_index(cells, header)]
+
+
+def _set_cell(cells: list[str], header: str, value: str) -> None:
+    cells[_column_index(cells, header)] = value
+
+
+def _reset_cells(cells: list[str], headers: set[str] | tuple[str, ...]) -> None:
+    row_headers = _headers_for_row(cells)
+    for header in headers:
+        if header in row_headers:
+            _set_cell(cells, header, _initial_value_for_header(header))
+
+
+def _required_headers_for_workflow(
+    project_root: str,
+    workflow_id: str,
+) -> list[str] | None:
+    """新路径的当前轮次必须使用十列；历史轮次继续接受九列。"""
+    state = load_state(project_root)
+    if (
+        state is not None
+        and state.workflow_id == workflow_id
+        and state.stage_path_version >= 2
+    ):
+        return TRACEABILITY_HEADERS
+    return None
+
+
 def _read_traceability(project_root: str) -> tuple[str, str]:
     relative_path = _trace_relative_path(project_root)
     path = Path(project_root) / relative_path
@@ -96,11 +176,21 @@ def _topic_rows(
 ) -> list[tuple[int, list[str]]]:
     markers = _topic_markers(project_root, topic)
     rows: list[tuple[int, list[str]]] = []
+    active_headers: list[str] | None = None
     for index, line in enumerate(section.splitlines()):
         cells = _split_table_line(line)
-        if cells is not None and len(cells) == 9 and any(
-            marker in cells[1] for marker in markers
-        ):
+        if cells is None:
+            continue
+        if cells in SUPPORTED_HEADERS:
+            active_headers = cells
+            continue
+        if active_headers is None or len(cells) != len(active_headers):
+            continue
+        try:
+            topic_cell = _cell(cells, "验收主题")
+        except ValueError:
+            continue
+        if any(marker in topic_cell for marker in markers):
             rows.append((index, cells))
     return rows
 
@@ -167,6 +257,205 @@ def _test_plan_links(project_root: str, topic: str, criterion_id: str) -> str:
     return "<br>".join(links)
 
 
+def _current_spike_conclusion_documents(
+    project_root: str,
+    workflow_id: str,
+) -> list[str]:
+    """读取当前穿刺清单中的结论文档路径，不从目录扫描猜测。"""
+
+    from .spike_validation import parse_spike_index
+
+    index_path = Path(project_root) / artifact_paths_mod.SPIKE_INDEX_DOC
+    if not index_path.is_file():
+        raise ValueError(f"{artifact_paths_mod.SPIKE_INDEX_DOC} 不存在")
+    parsed_workflow_id, items, errors = parse_spike_index(str(index_path))
+    if parsed_workflow_id != workflow_id:
+        errors.append(
+            f"{artifact_paths_mod.SPIKE_INDEX_DOC} 工作流编号与当前状态不一致"
+        )
+    documents: list[str] = []
+    for item in items:
+        link = item.fields.get("结论文档", "")
+        match = re.search(r"\[[^\]]+\]\(([^)#]+)", link)
+        if match is None:
+            errors.append(f"穿刺项 {item.item_id} 的结论文档链接无效")
+            continue
+        target = match.group(1).strip().replace("\\", "/")
+        if target.startswith("./"):
+            target = target[2:]
+        if not target.startswith("spec/"):
+            target = f"spec/{target}"
+        documents.append(target)
+    if errors:
+        raise ValueError("；".join(dict.fromkeys(errors)))
+    return list(dict.fromkeys(documents))
+
+
+def collect_spike_asset_acceptance_links(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> dict[str, list[str]]:
+    """校验十列表中的穿刺列，并返回资产路径到“主题/AC”的真实关联。"""
+
+    state = load_state(project_root)
+    if state is None or state.workflow_id != workflow_id:
+        raise ValueError("找不到当前工作流状态，不能核对穿刺资产与验收条件的关联")
+
+    content, _relative_path = _read_traceability(project_root)
+    match = _workflow_match(content, workflow_id)
+    section = match.group(1)
+    errors: list[str] = []
+    associations: dict[str, list[str]] = {}
+    assets_by_path = {
+        asset.relative_path.replace("\\", "/").rstrip("/"): asset
+        for asset in state.spike_assets
+    }
+    current_assets = {
+        path: asset
+        for path, asset in assets_by_path.items()
+        if asset.workflow_id == workflow_id
+    }
+
+    if state.spike_skipped:
+        conclusion_documents: list[str] = []
+    else:
+        conclusion_documents = _current_spike_conclusion_documents(
+            project_root,
+            workflow_id,
+        )
+    referenced_conclusions: set[str] = set()
+
+    # 延迟导入，避免 spike_reuse -> test_execution -> traceability 的模块循环。
+    from . import spike_reuse as spike_reuse_mod
+
+    for topic in topics:
+        rows = _topic_rows(project_root, section, topic)
+        if not rows:
+            errors.append(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的交付记录")
+            continue
+        for _line_index, cells in rows:
+            headers = _headers_for_row(cells)
+            if "穿刺结论与可复用内容" not in headers:
+                errors.append(f"{TRACEABILITY_PATH} 主题“{topic}”仍是九列表，无法登记穿刺关联")
+                continue
+            criterion_id = _criterion_id_from_cell(topic, _cell(cells, "验收条件"))
+            reference = f"{topic}/{criterion_id}"
+            spike_value = _cell(cells, "穿刺结论与可复用内容").strip()
+
+            mentioned_paths = set(_SPIKE_ASSET_PATH_RE.findall(spike_value))
+            if state.spike_skipped and not mentioned_paths:
+                if spike_value != SPIKE_SKIPPED_TEXT:
+                    errors.append(
+                        f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 穿刺列："
+                        f"本轮已跳过新穿刺且没有复用历史资产，必须精确写“{SPIKE_SKIPPED_TEXT}”"
+                    )
+                continue
+
+            unknown_paths = sorted(mentioned_paths - set(assets_by_path))
+            if unknown_paths:
+                errors.append(
+                    f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 引用了未登记穿刺资产："
+                    f"{unknown_paths}"
+                )
+            for relative_path in sorted(mentioned_paths & set(assets_by_path)):
+                asset = assets_by_path[relative_path]
+                if state.spike_skipped and asset.workflow_id == workflow_id:
+                    errors.append(
+                        f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id}："
+                        "本轮已跳过新穿刺，不能引用当前工作流新登记的穿刺资产"
+                    )
+                if asset.workflow_id != workflow_id:
+                    rerun_problems = spike_reuse_mod.historical_asset_success_problems(
+                        project_root,
+                        asset,
+                        workflow_id,
+                    )
+                    if rerun_problems:
+                        errors.append(
+                            f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 引用历史资产 "
+                            f"{relative_path} 前，必须在当前环境重新运行成功并保留完整机器证据："
+                            f"{rerun_problems}"
+                        )
+                missing_facts = []
+                if asset.conclusion_document not in spike_value:
+                    missing_facts.append(f"结论文档 {asset.conclusion_document}")
+                if f"用途：{asset.purpose}" not in spike_value:
+                    missing_facts.append(f"用途：{asset.purpose}")
+                if f"运行方法：{asset.run_method}" not in spike_value:
+                    missing_facts.append(f"运行方法：{asset.run_method}")
+                if missing_facts:
+                    errors.append(
+                        f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 的资产 {relative_path} "
+                        f"缺少登记事实：{missing_facts}"
+                    )
+                if asset.workflow_id != workflow_id:
+                    current_conclusion = asset.last_rerun_conclusion or ""
+                    if (
+                        not current_conclusion
+                        or f"当前重跑结论：{current_conclusion}" not in spike_value
+                    ):
+                        errors.append(
+                            f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 引用历史资产 "
+                            f"{relative_path} 时，必须记录本轮实际重跑结论"
+                        )
+                associations.setdefault(relative_path, []).append(reference)
+
+            row_conclusions = {
+                document for document in conclusion_documents if document in spike_value
+            }
+            referenced_conclusions.update(row_conclusions)
+            if not mentioned_paths and not row_conclusions and spike_value != SPIKE_NO_SUPPORT_TEXT:
+                errors.append(
+                    f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 穿刺列必须写实际结论或资产，"
+                    f"没有直接支撑时精确写“{SPIKE_NO_SUPPORT_TEXT}”"
+                )
+
+    unlinked_assets = sorted(set(current_assets) - set(associations))
+    if unlinked_assets:
+        errors.append(f"当前工作流已登记穿刺资产尚未关联任何实际验收条件：{unlinked_assets}")
+    unlinked_conclusions = sorted(set(conclusion_documents) - referenced_conclusions)
+    if unlinked_conclusions:
+        errors.append(f"当前工作流穿刺结论尚未关联任何实际验收条件：{unlinked_conclusions}")
+    if errors:
+        raise ValueError("\n".join(
+            f"{index}. {error}"
+            for index, error in enumerate(dict.fromkeys(errors), start=1)
+        ))
+    return {
+        path: sorted(set(references))
+        for path, references in sorted(associations.items())
+    }
+
+
+def bind_spike_assets_to_acceptance_conditions(
+    project_root: str,
+    state,
+    topics: list[str],
+) -> str:
+    """验收计划确认时，把追踪表中的真实逐 AC 关联回填到资产登记状态。"""
+
+    associations = collect_spike_asset_acceptance_links(
+        project_root,
+        state.workflow_id,
+        topics,
+    )
+    changed = 0
+    for asset in state.spike_assets:
+        relative_path = asset.relative_path.replace("\\", "/").rstrip("/")
+        linked = associations.get(relative_path)
+        if asset.workflow_id == state.workflow_id:
+            updated = linked or []
+        elif linked:
+            updated = sorted(set(asset.acceptance_conditions) | set(linked))
+        else:
+            continue
+        if asset.acceptance_conditions != updated:
+            asset.acceptance_conditions = updated
+            changed += 1
+    return f"已回填 {changed} 项穿刺资产的验收条件关联"
+
+
 def validate_structure(
     project_root: str,
     workflow_id: str,
@@ -175,7 +464,7 @@ def validate_structure(
     require_initial_statuses: bool = False,
     require_completed_updates: bool = False,
 ) -> tuple[bool, str]:
-    """校验当前工作流章节、九列表格和主题行。"""
+    """校验当前工作流章节、兼容表头和主题行。"""
     try:
         content, _relative_path = _read_traceability(project_root)
         match = _workflow_match(content, workflow_id)
@@ -183,56 +472,84 @@ def validate_structure(
         return False, str(exc)
 
     lines = match.group(1).splitlines()
-    header_found = False
+    found_headers: list[list[str]] = []
     rows: list[list[str]] = []
     for line in lines:
         cells = _split_table_line(line)
         if cells is None:
             continue
-        if cells == TRACEABILITY_HEADERS:
-            header_found = True
+        if cells in SUPPORTED_HEADERS:
+            found_headers.append(cells)
             continue
-        if len(cells) == 9 and cells[0] != "需求来源与设计依据":
+        if len(cells) in {len(TRACEABILITY_HEADERS), len(LEGACY_TRACEABILITY_HEADERS)}:
             rows.append(cells)
 
     errors: list[str] = []
-    if not header_found:
-        errors.append(f"{TRACEABILITY_PATH} 当前工作流章节缺少九列表头")
+    required_headers = _required_headers_for_workflow(project_root, workflow_id)
+    if not found_headers:
+        expected_columns = len(required_headers or TRACEABILITY_HEADERS)
+        errors.append(
+            f"{TRACEABILITY_PATH} 当前工作流章节缺少受支持的 {_column_count_label(expected_columns)}表头"
+        )
+        active_headers = required_headers or TRACEABILITY_HEADERS
+    else:
+        active_headers = found_headers[0]
+        if any(headers != active_headers for headers in found_headers[1:]):
+            errors.append(f"{TRACEABILITY_PATH} 当前工作流章节混用了九列和十列表头")
+        if required_headers is not None and active_headers != required_headers:
+            errors.append(
+                f"{TRACEABILITY_PATH} 当前新路径工作流必须使用十列表头，"
+                "并包含“穿刺结论与可复用内容”"
+            )
+
+    matching_shape_rows = [row for row in rows if len(row) == len(active_headers)]
+    wrong_shape_rows = [row for row in rows if len(row) != len(active_headers)]
+    if wrong_shape_rows:
+        errors.append(
+            f"{TRACEABILITY_PATH} 当前工作流章节有 {len(wrong_shape_rows)} 条记录与表头列数不一致"
+        )
+    rows = matching_shape_rows
     if not rows:
-        errors.append(f"{TRACEABILITY_PATH} 当前工作流章节没有九列交付记录")
+            errors.append(
+                f"{TRACEABILITY_PATH} 当前工作流章节没有 {_column_count_label(len(active_headers))}交付记录"
+            )
 
     expected_topics = topics or []
     for topic in expected_topics:
         if not rows:
             errors.append(
-                f"{TRACEABILITY_PATH} 主题“{topic}”未检查：当前工作流章节没有九列交付记录"
+                f"{TRACEABILITY_PATH} 主题“{topic}”未检查：当前工作流章节没有"
+                f"{_column_count_label(len(active_headers))}交付记录"
             )
             continue
         markers = _topic_markers(project_root, topic)
-        topic_rows = [
-            row for row in rows if any(marker in row[1] for marker in markers)
-        ]
+        topic_rows = [row for row in rows if any(marker in _cell(row, "验收主题") for marker in markers)]
         if not topic_rows:
             errors.append(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的交付记录")
             continue
         if any(not all(cell.strip() for cell in row) for row in topic_rows):
             errors.append(f"{TRACEABILITY_PATH} 主题“{topic}”存在空单元格")
         if require_initial_statuses:
-            expected = ["待制定", "待制定", "待执行", "待执行", "待执行", "待更新"]
             for row_index, row in enumerate(topic_rows, start=1):
-                if row[3:] != expected:
+                expected = {
+                    header: value
+                    for header, value in _INITIAL_VALUES_BY_HEADER.items()
+                    if header in _headers_for_row(row)
+                }
+                actual = {header: _cell(row, header) for header in expected}
+                if actual != expected:
                     errors.append(
                         f"{TRACEABILITY_PATH} 主题“{topic}”第 {row_index} 条记录尚未保持初始状态："
-                        f"预期 {expected}，实际 {row[3:]}"
+                        f"预期 {expected}，实际 {actual}"
                     )
         if require_completed_updates:
             for row_index, row in enumerate(topic_rows, start=1):
-                if any(value in _INITIAL_VALUES for value in row[3:]):
-                    pending = [
-                        TRACEABILITY_HEADERS[column_index]
-                        for column_index, value in enumerate(row)
-                        if column_index >= 3 and value in _INITIAL_VALUES
-                    ]
+                pending = [
+                    header
+                    for header in _INITIAL_VALUES_BY_HEADER
+                    if header in _headers_for_row(row) and _cell(row, header) in _INITIAL_VALUES
+                ]
+                if pending:
                     errors.append(
                         f"{TRACEABILITY_PATH} 主题“{topic}”第 {row_index} 条记录仍有未更新的阶段列：{pending}"
                     )
@@ -243,31 +560,45 @@ def validate_structure(
             f"{index}. {error}" for index, error in enumerate(unique, start=1)
         )
 
-    return True, f"{TRACEABILITY_PATH} 当前工作流包含 {len(rows)} 条九列交付记录"
+    return (
+        True,
+        f"{TRACEABILITY_PATH} 当前工作流包含 {len(rows)} 条"
+        f"{_column_count_label(len(active_headers))}交付记录",
+    )
 
 
 def _update_stage_rows(
     project_root: str,
     workflow_id: str,
     topics: list[str],
-    column_index: int,
-    value_factory,
+    updates: dict[str, object],
 ) -> str:
+    """先计算本阶段全部列，再一次写回，避免留下半张更新表。"""
     content, relative_path = _read_traceability(project_root)
     match = _workflow_match(content, workflow_id)
     section_lines = match.group(1).splitlines(keepends=True)
     changed = 0
+    replacements: dict[int, list[str]] = {}
 
     for topic in topics:
         rows = _topic_rows(project_root, "".join(section_lines), topic)
         if not rows:
-            raise ValueError(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的九列记录")
+            raise ValueError(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的交付记录")
         for line_index, cells in rows:
-            cells[column_index] = value_factory(topic, cells)
-            original_line = section_lines[line_index]
-            line_ending = original_line[len(original_line.rstrip("\r\n")) :]
-            section_lines[line_index] = _format_table_line(cells) + line_ending
-            changed += 1
+            updated_cells = list(cells)
+            for column_header, value_factory in updates.items():
+                _set_cell(
+                    updated_cells,
+                    column_header,
+                    value_factory(topic, updated_cells),
+                )
+            replacements[line_index] = updated_cells
+
+    for line_index, cells in sorted(replacements.items()):
+        original_line = section_lines[line_index]
+        line_ending = original_line[len(original_line.rstrip("\r\n")) :]
+        section_lines[line_index] = _format_table_line(cells) + line_ending
+        changed += 1
 
     updated_section = "".join(section_lines)
     updated = _replace_workflow_section(content, workflow_id, updated_section)
@@ -288,13 +619,16 @@ def reset_after_upstream_invalidation(
     这里只改当前工作流，不改旧工作流；后续阶段重新确认时会再写回自己的列。
     """
 
-    reset_columns = {
-        "acceptance_plan": {3, 4, 5, 6, 7, 8},
-        "impl": {3, 4, 5, 6, 7, 8},
-        # 测试计划后置：测试计划失效时，已经确认的实施计划和实施记录仍有效。
-        "test_plan": {3, 6, 7, 8},
+    reset_headers = {
+        "acceptance_plan": set(_INITIAL_VALUES_BY_HEADER),
+        "impl": set(_INITIAL_VALUES_BY_HEADER),
+        # 测试验证在实施之后；测试变化不应抹掉已经确认的实施计划和实施记录。
+        "qa": {"测试项", "测试结果", "验收结果", "更新后的代码设计"},
+        "test_plan": {"测试项", "测试结果", "验收结果", "更新后的代码设计"},
+        "test_code": {"测试结果", "验收结果", "更新后的代码设计"},
+        "test_execution": {"测试结果", "验收结果", "更新后的代码设计"},
     }.get(stage_name)
-    if reset_columns is None or not topics:
+    if reset_headers is None or not topics:
         return f"{TRACEABILITY_PATH} 无需重置阶段 {stage_name} 的下游列"
 
     if not (Path(project_root) / _trace_relative_path(project_root)).is_file():
@@ -302,53 +636,66 @@ def reset_after_upstream_invalidation(
 
     content, relative_path = _read_traceability(project_root)
     match = _workflow_match(content, workflow_id)
-    section_lines = match.group(1).splitlines()
+    section_lines = match.group(1).splitlines(keepends=True)
     changed = 0
 
     for topic in topics:
-        rows = _topic_rows(project_root, "\n".join(section_lines), topic)
+        rows = _topic_rows(project_root, "".join(section_lines), topic)
         for line_index, cells in rows:
-            for column_index in sorted(reset_columns):
-                cells[column_index] = _INITIAL_ROW_VALUES[column_index - 3]
-            section_lines[line_index] = _format_table_line(cells)
+            _reset_cells(cells, reset_headers)
+            original_line = section_lines[line_index]
+            line_ending = original_line[len(original_line.rstrip("\r\n")) :]
+            section_lines[line_index] = _format_table_line(cells) + line_ending
             changed += 1
 
     if changed == 0:
         return f"{TRACEABILITY_PATH} 当前工作流没有可重置的主题记录"
 
-    updated_section = "\n".join(section_lines)
+    updated_section = "".join(section_lines)
     updated = _replace_workflow_section(content, workflow_id, updated_section)
     if updated != content:
         _write_traceability(project_root, relative_path, updated)
     return f"已重置 {TRACEABILITY_PATH} 当前工作流 {changed} 条失效下游记录"
 
 
-# 各返回目标只重置确实失效的后续列。
-_RETURN_RESET_COLUMNS: dict[str, dict[int, str]] = {
-    "spec": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "code_design": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "revise_code_design": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "project_design_init": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "reproduce": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "spike": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "acceptance_plan": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "impl": {3: "待制定", 4: "待制定", 5: "待执行", 6: "待执行", 7: "待执行", 8: "待更新"},
-    # 测试计划位于实施之后，返回测试计划时保留实施计划和实施记录两列。
-    "test_plan": {3: "待制定", 6: "待执行", 7: "待执行", 8: "待更新"},
-    "test_code": {6: "待执行", 7: "待执行", 8: "待更新"},
-    "test_execution": {6: "待执行", 7: "待执行", 8: "待更新"},
-    "topic_acceptance": {7: "待执行", 8: "待更新"},
+# 各返回目标只重置确实失效的后续列。旧阶段名仅用于迁移中的活动轮次。
+_ALL_DOWNSTREAM_HEADERS = set(_INITIAL_VALUES_BY_HEADER)
+_RETURN_RESET_HEADERS: dict[str, set[str]] = {
+    "spec": _ALL_DOWNSTREAM_HEADERS,
+    "code_design": _ALL_DOWNSTREAM_HEADERS,
+    "revise_code_design": _ALL_DOWNSTREAM_HEADERS,
+    "project_design_init": _ALL_DOWNSTREAM_HEADERS,
+    "reproduce": _ALL_DOWNSTREAM_HEADERS,
+    "spike": _ALL_DOWNSTREAM_HEADERS,
+    "acceptance_plan": _ALL_DOWNSTREAM_HEADERS,
+    "impl": _ALL_DOWNSTREAM_HEADERS,
+    "qa": {"测试项", "测试结果", "验收结果", "更新后的代码设计"},
+    "test_plan": {"测试项", "测试结果", "验收结果", "更新后的代码设计"},
+    "test_code": {"测试结果", "验收结果", "更新后的代码设计"},
+    "test_execution": {"测试结果", "验收结果", "更新后的代码设计"},
+    "topic_acceptance": {"验收结果", "更新后的代码设计"},
     "regression_test": {},
     "overall_acceptance": {},
-    "update_code_design": {8: "待更新"},
+    "update_code_design": {"更新后的代码设计"},
 }
-_RETURN_REMOVE_CONCLUSIONS: dict[str, tuple[tuple[int, re.Pattern[str], str], ...]] = {
+_RETURN_RECHECKS_SPIKE = {
+    "spec",
+    "code_design",
+    "revise_code_design",
+    "project_design_init",
+    "reproduce",
+    "spike",
+}
+_RETURN_REMOVE_CONCLUSIONS: dict[
+    str,
+    tuple[tuple[str, re.Pattern[str], str], ...],
+] = {
     "regression_test": (
-        (6, _REGRESSION_CONCLUSION_RE, "待执行"),
-        (7, _OVERALL_ACCEPTANCE_CONCLUSION_RE, "待执行"),
+        ("测试结果", _REGRESSION_CONCLUSION_RE, "待执行"),
+        ("验收结果", _OVERALL_ACCEPTANCE_CONCLUSION_RE, "待执行"),
     ),
     "overall_acceptance": (
-        (7, _OVERALL_ACCEPTANCE_CONCLUSION_RE, "待执行"),
+        ("验收结果", _OVERALL_ACCEPTANCE_CONCLUSION_RE, "待执行"),
     ),
 }
 
@@ -363,26 +710,30 @@ def reset_topics_for_return(
 
     支持当前路径中的任意真实上游；独立主题的行保持不变。
     """
-    columns = _RETURN_RESET_COLUMNS.get(target_stage)
-    if columns is None:
+    headers = _RETURN_RESET_HEADERS.get(target_stage)
+    if headers is None:
         raise ValueError(f"不支持从追踪表退回阶段: {target_stage}")
     conclusion_rules = _RETURN_REMOVE_CONCLUSIONS.get(target_stage, ())
-    if not columns and not conclusion_rules:
+    recheck_spike = target_stage in _RETURN_RECHECKS_SPIKE
+    if not headers and not conclusion_rules and not recheck_spike:
         return f"{TRACEABILITY_PATH} 阶段 {target_stage} 没有需要重置的追踪列"
     content, relative_path = _read_traceability(project_root)
     match = _workflow_match(content, workflow_id)
-    section_lines = match.group(1).splitlines()
+    section_lines = match.group(1).splitlines(keepends=True)
     changed_lines: set[int] = set()
     for topic in topics:
-        rows = _topic_rows(project_root, "\n".join(section_lines), topic)
+        rows = _topic_rows(project_root, "".join(section_lines), topic)
         if not rows:
-            raise ValueError(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的九列记录")
+            raise ValueError(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的交付记录")
         for line_index, cells in rows:
             original_cells = list(cells)
-            for column_index, value in columns.items():
-                cells[column_index] = value
+            _reset_cells(cells, headers)
+            if recheck_spike and "穿刺结论与可复用内容" in _headers_for_row(cells):
+                _set_cell(cells, "穿刺结论与可复用内容", SPIKE_RECHECK_TEXT)
             if cells != original_cells:
-                section_lines[line_index] = _format_table_line(cells)
+                original_line = section_lines[line_index]
+                line_ending = original_line[len(original_line.rstrip("\r\n")) :]
+                section_lines[line_index] = _format_table_line(cells) + line_ending
                 changed_lines.add(line_index)
 
     # 最终回归和整体验收是整轮唯一的全局结论。状态失效时必须从当前工作流
@@ -390,19 +741,29 @@ def reset_topics_for_return(
     if conclusion_rules:
         for line_index, line in enumerate(section_lines):
             cells = _split_table_line(line)
-            if cells is None or len(cells) != 9 or cells == TRACEABILITY_HEADERS:
+            if cells is None or cells in SUPPORTED_HEADERS:
+                continue
+            try:
+                _headers_for_row(cells)
+            except ValueError:
                 continue
             original_cells = list(cells)
-            for column_index, pattern, fallback in conclusion_rules:
-                cells[column_index] = _remove_appended_text(
-                    cells[column_index],
+            for header, pattern, fallback in conclusion_rules:
+                _set_cell(
+                    cells,
+                    header,
+                    _remove_appended_text(
+                    _cell(cells, header),
                     pattern,
                     fallback,
+                    ),
                 )
             if cells != original_cells:
-                section_lines[line_index] = _format_table_line(cells)
+                original_line = section_lines[line_index]
+                line_ending = original_line[len(original_line.rstrip("\r\n")) :]
+                section_lines[line_index] = _format_table_line(cells) + line_ending
                 changed_lines.add(line_index)
-    updated = _replace_workflow_section(content, workflow_id, "\n".join(section_lines))
+    updated = _replace_workflow_section(content, workflow_id, "".join(section_lines))
     if updated != content:
         _write_traceability(project_root, relative_path, updated)
     return f"已重置 {TRACEABILITY_PATH} 中 {len(changed_lines)} 条失效记录"
@@ -420,18 +781,20 @@ def reset_topic_test_results(
 
     content, relative_path = _read_traceability(project_root)
     match = _workflow_match(content, workflow_id)
-    section_lines = match.group(1).splitlines()
+    section_lines = match.group(1).splitlines(keepends=True)
     changed = 0
     for topic in topics:
-        rows = _topic_rows(project_root, "\n".join(section_lines), topic)
+        rows = _topic_rows(project_root, "".join(section_lines), topic)
         if not rows:
-            raise ValueError(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的九列记录")
+            raise ValueError(f"{TRACEABILITY_PATH} 缺少主题“{topic}”的交付记录")
         for line_index, cells in rows:
-            cells[6] = "待执行"
-            section_lines[line_index] = _format_table_line(cells)
+            _set_cell(cells, "测试结果", "待执行")
+            original_line = section_lines[line_index]
+            line_ending = original_line[len(original_line.rstrip("\r\n")) :]
+            section_lines[line_index] = _format_table_line(cells) + line_ending
             changed += 1
 
-    updated = _replace_workflow_section(content, workflow_id, "\n".join(section_lines))
+    updated = _replace_workflow_section(content, workflow_id, "".join(section_lines))
     if updated != content:
         _write_traceability(project_root, relative_path, updated)
     return f"已重置 {TRACEABILITY_PATH} 中 {changed} 条主题测试结果"
@@ -447,66 +810,76 @@ def update_for_stage(
     if not topics:
         raise ValueError("当前工作流没有验收主题，不能更新需求交付追踪表")
 
+    test_item_update = {
+        "测试项": lambda topic, cells: _set_or_append_text(
+            _cell(cells, "测试项"),
+            _test_plan_links(
+                project_root,
+                topic,
+                _criterion_id_from_cell(topic, _cell(cells, "验收条件")),
+            ),
+        )
+    }
+    test_result_update = {
+        "测试结果": lambda topic, cells: (
+            _set_or_append_link(
+                _cell(cells, "测试结果"),
+                "测试结果",
+                f"./{topic_paths(project_root, topic)['test_result']}",
+            )
+            if criterion_requires_test_code(
+                project_root,
+                topic,
+                _criterion_id_from_cell(topic, _cell(cells, "验收条件")),
+            )
+            else _set_or_append_text(
+                _cell(cells, "测试结果"),
+                "无自动化测试项，转主题验收",
+            )
+        )
+    }
+
     if stage_name == "test_plan":
         return _update_stage_rows(
             project_root,
             workflow_id,
             topics,
-            3,
-            lambda topic, cells: _set_or_append_text(
-                cells[3],
-                _test_plan_links(
-                    project_root,
-                    topic,
-                    _criterion_id_from_cell(topic, cells[2]),
-                ),
-            ),
+            test_item_update,
         )
 
     if stage_name == "impl":
-        plan_update = _update_stage_rows(
+        return _update_stage_rows(
             project_root,
             workflow_id,
             topics,
-            4,
-            lambda topic, cells: _set_or_append_link(
-                cells[4],
-                "实施前计划",
-                f"./{topic_paths(project_root, topic)['impl_doc']}#2-实施前计划",
-            ),
+            {
+                "实施计划与任务": lambda topic, cells: _set_or_append_link(
+                    _cell(cells, "实施计划与任务"),
+                    "实施前计划",
+                    f"./{topic_paths(project_root, topic)['impl_doc']}#2-实施前计划",
+                ),
+                "实施记录与代码": lambda topic, cells: _set_or_append_link(
+                    _cell(cells, "实施记录与代码"),
+                    "实施后记录",
+                    f"./{topic_paths(project_root, topic)['impl_doc']}#3-实施后记录",
+                ),
+            },
         )
-        record_update = _update_stage_rows(
-            project_root,
-            workflow_id,
-            topics,
-            5,
-            lambda topic, cells: _set_or_append_link(
-                cells[5],
-                "实施后记录",
-                f"./{topic_paths(project_root, topic)['impl_doc']}#3-实施后记录",
-            ),
-        )
-        return plan_update + "；" + record_update
 
     if stage_name == "test_execution":
         return _update_stage_rows(
             project_root,
             workflow_id,
             topics,
-            6,
-            lambda topic, cells: (
-                _set_or_append_link(
-                    cells[6],
-                    "测试结果",
-                    f"./{topic_paths(project_root, topic)['test_result']}",
-                )
-                if criterion_requires_test_code(
-                    project_root,
-                    topic,
-                    _criterion_id_from_cell(topic, cells[2]),
-                )
-                else _set_or_append_text(cells[6], "无自动化测试项，转主题验收")
-            ),
+            test_result_update,
+        )
+
+    if stage_name == "qa":
+        return _update_stage_rows(
+            project_root,
+            workflow_id,
+            topics,
+            {**test_item_update, **test_result_update},
         )
 
     if stage_name == "topic_acceptance":
@@ -514,12 +887,13 @@ def update_for_stage(
             project_root,
             workflow_id,
             topics,
-            7,
-            lambda topic, cells: _set_or_append_link(
-                cells[7],
-                "主题验收结果",
-                f"./{topic_paths(project_root, topic)['acceptance_result']}",
-            ),
+            {
+                "验收结果": lambda topic, cells: _set_or_append_link(
+                    _cell(cells, "验收结果"),
+                    "主题验收结果",
+                    f"./{topic_paths(project_root, topic)['acceptance_result']}",
+                )
+            },
         )
 
     if stage_name == "regression_test":
@@ -533,8 +907,12 @@ def update_for_stage(
             project_root,
             workflow_id,
             topics,
-            6,
-            lambda _topic, cells: _set_or_append_text(cells[6], conclusion),
+            {
+                "测试结果": lambda _topic, cells: _set_or_append_text(
+                    _cell(cells, "测试结果"),
+                    conclusion,
+                )
+            },
         )
 
     if stage_name == "overall_acceptance":
@@ -542,11 +920,12 @@ def update_for_stage(
             project_root,
             workflow_id,
             topics,
-            7,
-            lambda _topic, cells: _set_or_append_text(
-                cells[7],
-                "整体验收：用户已确认",
-            ),
+            {
+                "验收结果": lambda _topic, cells: _set_or_append_text(
+                    _cell(cells, "验收结果"),
+                    "整体验收：用户已确认",
+                )
+            },
         )
 
     if stage_name == "update_code_design":
@@ -554,12 +933,13 @@ def update_for_stage(
             project_root,
             workflow_id,
             topics,
-            8,
-            lambda _topic, cells: _set_or_append_link(
-                cells[8],
-                "最终代码设计",
-                f"./{artifact_paths_mod.CODE_DESIGN_DOC}",
-            ),
+            {
+                "更新后的代码设计": lambda _topic, cells: _set_or_append_link(
+                    _cell(cells, "更新后的代码设计"),
+                    "最终代码设计",
+                    f"./{artifact_paths_mod.CODE_DESIGN_DOC}",
+                )
+            },
         )
 
     raise ValueError(f"阶段 {stage_name} 没有追踪表更新规则")

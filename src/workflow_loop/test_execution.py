@@ -32,6 +32,14 @@ SAFE_ENVIRONMENT_KEYS = {
 }
 
 
+def _execution_stage_state(workflow_state: WorkflowState) -> state_mod.StageState | None:
+    """返回测试任务和机器记录所在阶段；新流程优先使用 qa。"""
+
+    if "qa" in workflow_state.stages:
+        return workflow_state.stages.get("qa")
+    return workflow_state.stages.get("test_execution")
+
+
 @dataclass(frozen=True)
 class ExecutionAttempt:
     topic: str
@@ -259,9 +267,9 @@ def prepare_task(
     except test_report.TestReportError as exc:
         raise ValueError(str(exc)) from exc
 
-    stage_state = workflow_state.stages.get("test_execution")
+    stage_state = _execution_stage_state(workflow_state)
     if stage_state is None:
-        raise ValueError("当前工作流没有 test_execution 阶段")
+        raise ValueError("当前工作流没有 qa（测试验证）或旧 test_execution 阶段")
     stage_state.test_tasks.setdefault(topic, {})[test_id] = TestTaskState(
         test_entries=sorted(set(entries)),
         command=command_with_report,
@@ -285,7 +293,7 @@ def missing_prepared_tasks(
     """返回所有需要自动执行但尚未登记命令的主题/测试项。"""
     missing: list[str] = []
     for item in test_mapping.automated_test_items(project_root, workflow_state.topics):
-        task = workflow_state.stages.get("test_execution", state_mod.StageState()).test_tasks.get(
+        task = (_execution_stage_state(workflow_state) or state_mod.StageState()).test_tasks.get(
             item.topic,
             {},
         ).get(item.test_id)
@@ -299,9 +307,9 @@ def validate_prepared_tasks(
     workflow_state: WorkflowState,
 ) -> tuple[bool, str]:
     """核对登记任务与当前测试计划、依赖和 Workflow-Test 入口完全一致。"""
-    stage_state = workflow_state.stages.get("test_execution")
+    stage_state = _execution_stage_state(workflow_state)
     if stage_state is None:
-        return False, "当前工作流没有 test_execution 阶段"
+        return False, "当前工作流没有 qa（测试验证）或旧 test_execution 阶段"
     errors: list[tuple[str, str, str, str]] = []
     expected: dict[tuple[str, str], test_mapping.TestPlanItem] = {}
     invalid_plan_topics: set[str] = set()
@@ -633,9 +641,9 @@ def run_prepared_tasks(
     parallelism: int | None = None,
 ) -> list[ExecutionAttempt]:
     """按主题并行、主题内按 TC 依赖顺序执行已登记任务。"""
-    stage_state = workflow_state.stages.get("test_execution")
+    stage_state = _execution_stage_state(workflow_state)
     if stage_state is None:
-        raise ValueError("当前工作流没有 test_execution 阶段")
+        raise ValueError("当前工作流没有 qa（测试验证）或旧 test_execution 阶段")
     tasks_ok, tasks_detail = validate_prepared_tasks(project_root, workflow_state)
     if not tasks_ok:
         raise ValueError(tasks_detail)

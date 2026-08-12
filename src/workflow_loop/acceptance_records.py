@@ -62,6 +62,13 @@ def automated_test_ids(project_root: str, topic: str, criterion_id: str) -> list
     ]
 
 
+def _execution_stage(
+    wf_state: state_mod.WorkflowState,
+) -> state_mod.StageState | None:
+    """读取当前测试验证任务，并兼容尚未迁移的旧测试执行状态。"""
+    return wf_state.stages.get("qa") or wf_state.stages.get("test_execution")
+
+
 def record_is_current(
     record: state_mod.AcceptanceCriterionRecord,
     wf_state: state_mod.WorkflowState,
@@ -78,10 +85,8 @@ def record_is_current(
     if record.result != "passed" or record.record_id != compute_record_id(record):
         return False
     if record.method in ("自动化测试", "自动化测试 + 人工验收") and record.test_ids:
-        tasks = wf_state.stages.get(
-            "test_execution",
-            state_mod.StageState(),
-        ).test_tasks.get(record.topic, {})
+        execution_stage = _execution_stage(wf_state) or state_mod.StageState()
+        tasks = execution_stage.test_tasks.get(record.topic, {})
         current_ids: list[str] = []
         for test_id in record.test_ids:
             task = tasks.get(test_id)
@@ -106,9 +111,9 @@ def _automated_items_are_current(
     test_ids: list[str],
 ) -> tuple[bool, str, list[str]]:
     """核对每个测试项当前机器记录有效，并返回精确记录编号列表。"""
-    stage_state = wf_state.stages.get("test_execution")
+    stage_state = _execution_stage(wf_state)
     if stage_state is None:
-        return False, "缺少 test_execution（测试执行阶段）状态", []
+        return False, "缺少 qa（测试验证）或 test_execution（旧测试执行阶段）状态", []
     tasks = stage_state.test_tasks.get(topic, {})
     record_ids: list[str] = []
     for test_id in test_ids:

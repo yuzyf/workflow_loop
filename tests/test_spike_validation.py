@@ -75,6 +75,10 @@ def _detail_document(
 - 剩余风险：{remaining_risk}
 - 后续处理阶段：{follow_up}
 - 后续需要检查什么：{follow_up_check}
+
+## 9. 可复用资产
+
+暂无
 """
 
 
@@ -179,28 +183,28 @@ def test_validate_spike_stage_requires_design_hash_change(tmp_path):
     验收条件：AC-06 证据冲突时不能自行定论
     测试方式：自动化测试 + 人工验收
     测试层级：模块测试
-    测试目标：结论声称需要更新代码设计但文档哈希未变化时阻止推进
+    测试目标：结论声称需要更新产品设计但产品文档哈希未变化时阻止推进
     测试入口：tests/test_spike_validation.py::test_validate_spike_stage_requires_design_hash_change
     代码入口：workflow_loop.spike_validation.validate_spike_stage
     """
     _setup_valid_project(tmp_path)
     index_path = tmp_path / "spec" / "穿刺清单.md"
-    index_path.write_text(index_path.read_text().replace("代码设计影响：无需修改", "代码设计影响：需要修改"), encoding="utf-8")
+    index_path.write_text(index_path.read_text().replace("产品设计影响：无需修改", "产品设计影响：需要修改"), encoding="utf-8")
     _write(
         tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(
-            code_impact="需要修改",
-            code_location="spec/代码架构设计.md 第 6.2 节",
+            product_impact="需要修改",
+            product_location="spec/功能_示例.md 第 4 节",
         ),
     )
 
     ok, detail = validate_spike_stage(str(tmp_path))
 
     assert ok is False
-    assert "代码设计哈希没有变化" in detail
+    assert "产品设计哈希没有变化" in detail
 
 
-def test_validate_spike_stage_accepts_changed_code_design(tmp_path):
+def test_validate_spike_stage_allows_code_plan_impact_without_changing_architecture(tmp_path):
     _setup_valid_project(tmp_path)
     index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(index_path.read_text().replace("代码设计影响：无需修改", "代码设计影响：需要修改"), encoding="utf-8")
@@ -211,8 +215,6 @@ def test_validate_spike_stage_accepts_changed_code_design(tmp_path):
             code_location="spec/代码架构设计.md 第 6.2 节",
         ),
     )
-    _write(tmp_path / "spec" / "代码架构设计.md", "# Architecture changed\n")
-
     ok, detail = validate_spike_stage(str(tmp_path))
 
     assert ok is True, detail
@@ -282,17 +284,17 @@ def test_validate_spike_stage_rejects_design_change_when_legacy_baseline_is_miss
     save_state(str(tmp_path), state)
     index_path = tmp_path / "spec" / "穿刺清单.md"
     index_path.write_text(
-        index_path.read_text().replace("代码设计影响：无需修改", "代码设计影响：需要修改"),
+        index_path.read_text().replace("产品设计影响：无需修改", "产品设计影响：需要修改"),
         encoding="utf-8",
     )
     _write(
         tmp_path / "spec" / "穿刺_真实接口返回.md",
         _detail_document(
-            code_impact="需要修改",
-            code_location="spec/代码架构设计.md 第 6.2 节",
+            product_impact="需要修改",
+            product_location="spec/功能_示例.md 第 4 节",
         ),
     )
-    _write(tmp_path / "spec" / "代码架构设计.md", "# Architecture changed\n")
+    _write(tmp_path / "spec" / "功能_示例.md", "# 【功能】Example changed\n")
 
     ok, detail = validate_spike_stage(str(tmp_path))
 

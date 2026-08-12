@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -21,6 +22,9 @@ from .topic import topic_paths
 
 ROLLBACK_ROOT = ".workflow_loop/rollback"
 MANIFEST_VERSION = 1
+# 作废进度清单在版本 2 起冻结穿刺资产的保留/删除边界。开工和实施
+# 回退清单仍使用版本 1；分开版本号可避免把无关清单一并误判为不兼容。
+ABORT_MANIFEST_VERSION = 2
 PROCESS_ROOTS = {"spec", "acceptance", "qa", "impl", "bug", ".workflow_loop", ".git"}
 GLOB_CHARS = set("*?{}")
 WORKFLOW_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
@@ -256,13 +260,38 @@ def _normalized_relative_path(project_root: str, raw_path: str) -> str:
 
 def _section(content: str, heading: str) -> str:
     match = re.search(
-        rf"^###\s+{re.escape(heading)}\s*$\n(.*?)(?=^###\s+|^##\s+|\Z)",
+        rf"^(?P<marks>#{{2,6}})\s+{re.escape(heading)}\s*$\n",
         content,
-        re.MULTILINE | re.DOTALL,
+        re.MULTILINE,
     )
     if match is None:
         raise ValueError(f"实施文档缺少“{heading}”")
-    return match.group(1).strip()
+    level = len(match.group("marks"))
+    body_start = match.end()
+    boundary = re.search(
+        rf"^#{{2,{level}}}\s+",
+        content[body_start:],
+        re.MULTILINE,
+    )
+    body_end = body_start + boundary.start() if boundary else len(content)
+    return content[body_start:body_end].strip()
+
+
+def _first_section(content: str, *headings: str) -> str:
+    for heading in headings:
+        try:
+            return _section(content, heading)
+        except ValueError:
+            continue
+    raise ValueError(f"实施文档缺少“{headings[0]}”")
+
+
+def _code_plan_section(content: str) -> str:
+    return _first_section(content, "2.3 代码修改计划", "2.2 代码修改计划")
+
+
+def _code_result_section(content: str) -> str:
+    return _first_section(content, "3.4.1 实际代码修改", "3.1 实际代码修改")
 
 
 def _table_file_paths(section: str, *, context: str = "代码修改计划") -> list[str]:
@@ -418,7 +447,7 @@ def _recorded_code_changes(
         try:
             with open(full_path, "r", encoding="utf-8") as stream:
                 content = stream.read()
-            section = _section(content, "3.1 实际代码修改")
+            section = _code_result_section(content)
             section_offset = content.find(section)
             section_start_line = content[:section_offset].count("\n") + 1
             rows = _table_rows(
@@ -515,7 +544,7 @@ def planned_code_paths(project_root: str, topics: list[str]) -> list[str]:
             raise ValueError(f"缺少主题实施文档：{relative_path}")
         with open(full_path, "r", encoding="utf-8") as stream:
             content = stream.read()
-        for raw_path in _table_file_paths(_section(content, "2.2 代码修改计划")):
+        for raw_path in _table_file_paths(_code_plan_section(content)):
             paths.append(_normalized_relative_path(project_root, raw_path))
     return sorted(set(paths))
 
@@ -534,7 +563,12 @@ def compute_plan_hash(project_root: str, topics: list[str]) -> str:
         relative_path = topic_paths(project_root, topic)["impl_doc"]
         full_path = os.path.join(project_root, relative_path)
         with open(full_path, "r", encoding="utf-8") as stream:
-            section = _section(stream.read(), "2.2 代码修改计划")
+            content = stream.read()
+            section = _first_section(
+                content,
+                "2. 实施前计划（代码计划）",
+                "2. 实施前计划",
+            )
         payload.append(f"{topic}\n{section}")
     return hashlib.sha256("\n\n".join(payload).encode("utf-8")).hexdigest()
 
@@ -669,6 +703,112 @@ def _backup_entry(project_root: str, manifest_dir: str, relative_path: str) -> d
     }
 
 
+def _backup_entry_from_bytes(
+    manifest_dir: str,
+    relative_path: str,
+    content: bytes,
+    mode: int,
+) -> dict:
+    """把已经验证的原始字节写入副本，不再从可能变化的工作区重读。"""
+
+    backup_name = hashlib.sha256(relative_path.encode("utf-8")).hexdigest() + ".bin"
+    backup_rel_path = os.path.join("files", backup_name)
+    backup_full_path = os.path.join(manifest_dir, backup_rel_path)
+    _atomic_write_bytes(backup_full_path, content)
+    return {
+        "original_exists": True,
+        "backup_path": backup_rel_path.replace(os.sep, "/"),
+        "content_hash": _sha256_bytes(content),
+        "mode": mode,
+    }
+
+
+def _clean_git_head_baseline(
+    project_root: str,
+    relative_path: str,
+) -> tuple[bytes, int] | None:
+    """仅在路径受 HEAD 跟踪且索引、工作区和 HEAD 都一致时返回原始字节。"""
+
+    git_environment = dict(os.environ)
+    for variable in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ):
+        git_environment.pop(variable, None)
+    git_environment["GIT_OPTIONAL_LOCKS"] = "0"
+
+    def run_git(*arguments: str) -> subprocess.CompletedProcess[bytes] | None:
+        try:
+            return subprocess.run(
+                ["git", *arguments],
+                cwd=project_root,
+                env=git_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    prefix_result = run_git("rev-parse", "--show-prefix")
+    if prefix_result is None or prefix_result.returncode != 0:
+        return None
+    prefix = os.fsdecode(prefix_result.stdout).rstrip("\r\n")
+    tree_path = f"{prefix}{relative_path}"
+
+    head_result = run_git("rev-parse", "--verify", "HEAD^{commit}")
+    if head_result is None or head_result.returncode != 0:
+        return None
+    head_revision = os.fsdecode(head_result.stdout).strip()
+    if re.fullmatch(r"[0-9a-fA-F]{40,64}", head_revision) is None:
+        return None
+
+    # 分别检查索引和工作区，不能让“索引已改、工作区又改回 HEAD”掩盖未提交差异。
+    staged = run_git(
+        "diff",
+        "--cached",
+        "--quiet",
+        "--no-ext-diff",
+        head_revision,
+        "--",
+        relative_path,
+    )
+    unstaged = run_git(
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--",
+        relative_path,
+    )
+    if (
+        staged is None
+        or staged.returncode != 0
+        or unstaged is None
+        or unstaged.returncode != 0
+    ):
+        return None
+
+    blob = run_git("cat-file", "blob", f"{head_revision}:{tree_path}")
+    if blob is None or blob.returncode != 0:
+        return None
+    full_path = os.path.join(project_root, relative_path)
+    try:
+        with open(full_path, "rb") as stream:
+            current = stream.read()
+            mode = os.fstat(stream.fileno()).st_mode & 0o777
+    except OSError:
+        return None
+    if current != blob.stdout:
+        return None
+    return blob.stdout, mode
+
+
 def prepare_impl(
     project_root: str,
     wf_state: state_mod.WorkflowState,
@@ -696,6 +836,7 @@ def prepare_impl(
     os.makedirs(manifest_dir, exist_ok=True)
 
     manifest: dict
+    trusted_git_baselines: dict[str, tuple[bytes, int]] = {}
     if os.path.isfile(manifest_full_path):
         # 再次准备：允许已登记路径按计划变化；首次原内容始终保留，不被覆盖
         manifest, raw = _read_manifest(project_root, manifest_path)
@@ -704,6 +845,15 @@ def prepare_impl(
         _validate_backup_entries(project_root, manifest)
         initial_inventory = manifest.get("initial_inventory", {})
         entries = manifest.setdefault("entries", {})
+        raw_registered_paths = manifest.get("core_registered_paths")
+        if isinstance(raw_registered_paths, list) and all(
+            isinstance(path, str) for path in raw_registered_paths
+        ):
+            initially_sampled_paths = (
+                set(raw_registered_paths) | set(initial_inventory) | set(entries)
+            )
+        else:
+            initially_sampled_paths = set(initial_inventory) | set(entries)
         current_inventory = verification_mod.compute_project_file_hashes(
             project_root,
             registered_paths=paths,
@@ -711,12 +861,21 @@ def prepare_impl(
         for path in paths:
             if path in entries:
                 continue
-            # 新加入计划的路径：只有当前内容仍等于第一次准备时的内容才允许补副本，
-            # 否则没有可信的原内容
-            if current_inventory.get(path) != initial_inventory.get(path):
+            if path in initially_sampled_paths:
+                unchanged = current_inventory.get(path) == initial_inventory.get(path)
+            else:
+                # 首次清单没有看过该路径，不能凭当前工作区倒推原内容。只有 Git
+                # 能同时证明它受 HEAD 跟踪、没有未提交差异且当前字节等于 HEAD，
+                # 才能用 HEAD 字节补齐首次副本。
+                baseline = _clean_git_head_baseline(project_root, path)
+                unchanged = baseline is not None
+                if baseline is not None:
+                    trusted_git_baselines[path] = baseline
+            if not unchanged:
                 raise ValueError(
                     f"计划新增的路径已经被修改，没有可信的实施前原内容：{path}；"
-                    "先恢复该文件到实施前内容，或返回计划重新讨论"
+                    "只有受 Git HEAD 跟踪、没有未提交差异且当前字节与 HEAD 完全一致时"
+                    "才能补首次副本；否则先恢复可信原内容，或返回计划重新讨论"
                 )
     else:
         # 第一次准备：代码必须仍等于讨论确认时的基线，不能把修改后的内容当成原内容
@@ -742,7 +901,23 @@ def prepare_impl(
     entries = manifest.setdefault("entries", {})
     for path in paths:
         if path not in entries:
-            entries[path] = _backup_entry(project_root, manifest_dir, path)
+            trusted = trusted_git_baselines.get(path)
+            if trusted is None:
+                entries[path] = _backup_entry(project_root, manifest_dir, path)
+            else:
+                content, mode = trusted
+                entries[path] = _backup_entry_from_bytes(
+                    manifest_dir,
+                    path,
+                    content,
+                    mode,
+                )
+                manifest.setdefault("initial_inventory", {})[path] = _sha256_bytes(content)
+    raw_registered_paths = manifest.get("core_registered_paths")
+    if isinstance(raw_registered_paths, list) and all(
+        isinstance(path, str) for path in raw_registered_paths
+    ):
+        manifest["core_registered_paths"] = sorted(set(raw_registered_paths) | set(paths))
 
     prepare_record = {
         "prepared_at": state_mod.now_iso(),
@@ -1526,6 +1701,55 @@ def _read_abort_manifest(project_root: str, workflow_id: str) -> dict | None:
     return manifest
 
 
+def _abort_manifest_can_add_spike_cleanup_plan(manifest: dict) -> bool:
+    """旧清单还没有开始任何恢复动作时，才允许补记穿刺清理边界。"""
+
+    if manifest.get("restored_at") is not None:
+        return False
+    items = manifest.get("items")
+    if not isinstance(items, list) or not items:
+        return False
+    return all(
+        isinstance(item, dict)
+        and item.get("status", "pending") == "pending"
+        and int(item.get("attempts") or 0) == 0
+        and item.get("started_at") is None
+        and item.get("restored_at") is None
+        and item.get("observed_before_restore") is None
+        for item in items
+    )
+
+
+def _migrate_abort_manifest_spike_cleanup_plan(
+    project_root: str,
+    workflow_id: str,
+    manifest: dict,
+    spike_cleanup_plan: dict[str, list[str]],
+) -> dict:
+    """把尚未开始恢复的版本 1 作废清单升级为带冻结清理计划的版本 2。"""
+
+    version = manifest.get("version")
+    if version == ABORT_MANIFEST_VERSION:
+        return manifest
+    if version != MANIFEST_VERSION:
+        raise ValueError(f"作废进度清单版本不受支持：{version!r}")
+    if manifest.get("spike_cleanup_plan") is not None:
+        raise ValueError("旧作废进度清单版本与穿刺清理计划结构不一致")
+    if not _abort_manifest_can_add_spike_cleanup_plan(manifest):
+        raise ValueError(
+            "旧作废进度清单已经开始恢复，不能事后补造穿刺临时内容清理计划；"
+            "当前轮次保持 active（仍在进行）并保留全部回退与穿刺现场"
+        )
+    migrated = dict(manifest)
+    migrated["version"] = ABORT_MANIFEST_VERSION
+    migrated["spike_cleanup_plan"] = {
+        "preserved": list(spike_cleanup_plan["preserved"]),
+        "remove": list(spike_cleanup_plan["remove"]),
+    }
+    _write_abort_manifest(project_root, workflow_id, migrated)
+    return migrated
+
+
 def _snapshot_abort_item_state(project_root: str, item: dict) -> dict:
     """读取一个恢复项此刻的可比较状态，不保存文件正文。"""
     if item.get("kind") == "project_fields":
@@ -1629,7 +1853,7 @@ def _validate_abort_items(
     workflow_id: str,
     manifest: dict,
 ) -> list[dict]:
-    if manifest.get("version") != MANIFEST_VERSION:
+    if manifest.get("version") != ABORT_MANIFEST_VERSION:
         raise ValueError("作废进度清单版本不受支持")
     if manifest.get("workflow_id") != workflow_id:
         raise ValueError("作废进度清单不属于当前工作流")
@@ -1700,6 +1924,38 @@ def _validate_abort_items(
     return validated
 
 
+def _validated_abort_spike_cleanup_plan(
+    workflow_id: str,
+    manifest: dict,
+) -> dict[str, list[str]]:
+    """校验作废预检冻结的穿刺保留/删除边界。"""
+
+    raw = manifest.get("spike_cleanup_plan")
+    if not isinstance(raw, dict):
+        raise ValueError("作废进度清单缺少穿刺临时内容清理计划")
+    preserved = raw.get("preserved")
+    remove = raw.get("remove")
+    if (
+        not isinstance(preserved, list)
+        or not isinstance(remove, list)
+        or not all(isinstance(path, str) for path in preserved + remove)
+    ):
+        raise ValueError("作废穿刺清理计划必须包含 preserved（保留）和 remove（删除）路径数组")
+    if preserved != sorted(set(preserved)) or remove != sorted(set(remove)):
+        raise ValueError("作废穿刺清理计划路径必须去重并按字典序保存")
+    if set(preserved) & set(remove):
+        raise ValueError("作废穿刺清理计划不能同时保留和删除同一路径")
+
+    prefix = f".workflow_loop/spike_tmp/{_validated_workflow_id(workflow_id)}/"
+    for relative_path in preserved + remove:
+        if not relative_path.startswith(prefix):
+            raise ValueError(f"作废穿刺清理路径不属于当前工作流：{relative_path}")
+        entry = relative_path[len(prefix) :]
+        if not entry or "/" in entry or entry in {".", ".."}:
+            raise ValueError(f"作废穿刺清理路径必须是当前工作流的直接子项：{relative_path}")
+    return {"preserved": list(preserved), "remove": list(remove)}
+
+
 def _source_manifest_hashes(
     project_root: str,
     wf_state: state_mod.WorkflowState,
@@ -1758,6 +2014,7 @@ def _validate_abort_against_sources(
     sources: dict[str, tuple[dict, dict[str, dict], str]],
 ) -> None:
     """确认可变进度清单没有改写不可变的恢复事实或漏掉登记项。"""
+    _validated_abort_spike_cleanup_plan(workflow_id, abort_manifest)
     items = _validate_abort_items(project_root, workflow_id, abort_manifest)
     start_relative = _start_manifest_rel_path(workflow_id)
     impl_relative = _manifest_rel_path(workflow_id)
@@ -1823,20 +2080,31 @@ def preflight_abort(
     """
     problems: list[str] = []
     try:
+        from .stages.base import plan_spike_tmp_cleanup
+
         workflow_id = _validated_workflow_id(wf_state.workflow_id)
         if wf_state.run_status != "active":
             raise ValueError("只有仍在进行的工作流可以预检整轮作废")
+        spike_cleanup_plan = plan_spike_tmp_cleanup(project_root, wf_state)
         source_hashes, sources = _source_manifest_hashes(project_root, wf_state)
         existing = _read_abort_manifest(project_root, workflow_id)
         if existing is not None:
             if existing.get("source_hashes") != source_hashes:
                 raise ValueError("源回退清单在作废恢复开始后发生变化")
+            existing = _migrate_abort_manifest_spike_cleanup_plan(
+                project_root,
+                workflow_id,
+                existing,
+                spike_cleanup_plan,
+            )
             _validate_abort_against_sources(
                 project_root,
                 workflow_id,
                 existing,
                 sources,
             )
+            if _validated_abort_spike_cleanup_plan(workflow_id, existing) != spike_cleanup_plan:
+                raise ValueError("穿刺临时目录在作废预检后发生变化；未开始恢复前必须重新核对")
             return True, [], existing
 
         start_relative = _start_manifest_rel_path(workflow_id)
@@ -1904,11 +2172,12 @@ def preflight_abort(
             }
         )
         abort_manifest = {
-            "version": MANIFEST_VERSION,
+            "version": ABORT_MANIFEST_VERSION,
             "workflow_id": workflow_id,
             "created_at": state_mod.now_iso(),
             "source_hashes": source_hashes,
             "derived_managed_paths": sorted(derived_managed_paths),
+            "spike_cleanup_plan": spike_cleanup_plan,
             "items": items,
             "restored_at": None,
         }
@@ -1923,6 +2192,28 @@ def preflight_abort(
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         problems.append(str(exc))
         return False, problems, None
+
+
+def abort_spike_cleanup_plan(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> dict[str, list[str]]:
+    """读取并验证作废预检保存的穿刺清理计划，供恢复完成后执行。"""
+
+    workflow_id = _validated_workflow_id(wf_state.workflow_id)
+    manifest = _read_abort_manifest(project_root, workflow_id)
+    if manifest is None:
+        raise ValueError("缺少作废进度清单，不能清理穿刺临时内容")
+    source_hashes, sources = _source_manifest_hashes(project_root, wf_state)
+    if manifest.get("source_hashes") != source_hashes:
+        raise ValueError("源回退清单在作废恢复期间发生变化")
+    _validate_abort_against_sources(
+        project_root,
+        workflow_id,
+        manifest,
+        sources,
+    )
+    return _validated_abort_spike_cleanup_plan(workflow_id, manifest)
 
 
 def _abort_item_source_dir(
@@ -1951,6 +2242,15 @@ def restore_full_run(
     if manifest is None:
         return [], ["缺少作废进度清单；必须先完整预检，不能直接开始恢复"]
     try:
+        if manifest.get("version") == MANIFEST_VERSION:
+            from .stages.base import plan_spike_tmp_cleanup
+
+            manifest = _migrate_abort_manifest_spike_cleanup_plan(
+                project_root,
+                workflow_id,
+                manifest,
+                plan_spike_tmp_cleanup(project_root, wf_state),
+            )
         items = _validate_abort_items(project_root, workflow_id, manifest)
         current_hashes, sources = _source_manifest_hashes(project_root, wf_state)
         if manifest.get("source_hashes") != current_hashes:

@@ -8,6 +8,7 @@ import re
 
 from . import artifact_paths as artifact_paths_mod
 from .project import load_project
+from .state import load_state
 
 
 BASE_INDEX_HEADERS = ["展示顺序", "验收主题", "前置主题"]
@@ -87,10 +88,34 @@ def _expected_topic_path(relative_path: str, header: str, file_key: str) -> str 
     return value if value.startswith("../") else f"./{value}"
 
 
-def _prerequisites(cell: str) -> tuple[str, ...]:
+def _prerequisites(cell: str, known_topics: set[str] | None = None) -> tuple[str, ...]:
     value = cell.strip()
     if value == "无":
         return ()
+    # 主题名称可能自身含顿号（例如“代码实施按计划、实施、结果……”）。
+    # 已知当前主题时先按完整名称匹配，再把名称之间的顿号当分隔符，避免误拆。
+    if known_topics:
+        matches: list[tuple[int, str]] = []
+        for topic in sorted(known_topics, key=len, reverse=True):
+            for match in re.finditer(re.escape(topic), value):
+                if any(start <= match.start() < start + len(existing) for start, existing in matches):
+                    continue
+                matches.append((match.start(), topic))
+                break
+        if matches:
+            matches.sort()
+            cursor = 0
+            valid = True
+            for start, topic in matches:
+                separator = value[cursor:start].strip()
+                if separator and separator not in {"、", ",", "，", ";", "；"}:
+                    valid = False
+                    break
+                cursor = start + len(topic)
+            if value[cursor:].strip() not in {"", "、", ",", "，", ";", "；"}:
+                valid = False
+            if valid:
+                return tuple(topic for _, topic in matches)
     topics = tuple(part.strip() for part in re.split(r"[、,，]", value) if part.strip())
     if not topics:
         raise ValueError("前置主题不能为空；没有依赖时写“无”")
@@ -131,6 +156,8 @@ def read_topic_index(
     relations: list[TopicRelation] = []
     row_errors: list[str] = []
     project = load_project(project_root)
+    workflow_state = load_state(project_root)
+    known_topics = set(workflow_state.topics) if workflow_state is not None else set()
     for source_line, line in enumerate(
         lines[header_index + 1 :],
         start=header_index + 2,
@@ -157,7 +184,7 @@ def read_topic_index(
 
         prerequisites: tuple[str, ...] | None = None
         try:
-            prerequisites = _prerequisites(cells[2])
+            prerequisites = _prerequisites(cells[2], known_topics)
         except ValueError as exc:
             row_errors.append(f"{location}{exc}")
 

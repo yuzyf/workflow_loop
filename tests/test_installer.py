@@ -100,7 +100,7 @@ def test_installed_materials_use_confirmed_chinese_names(tmp_path):
     assert "`spec/产品总说明.md`" in (template_root / "spec" / "spec.md").read_text(
         encoding="utf-8"
     )
-    assert "# 测试计划文档模板" in (template_root / "qa" / "test_plan.md").read_text(
+    assert "# 测试验证计划文档模板" in (template_root / "qa" / "test_plan.md").read_text(
         encoding="utf-8"
     )
     assert (standard_root / "global" / "workflow_lifecycle.md").is_file()

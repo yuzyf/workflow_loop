@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,25 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _git(root: Path, *arguments: str) -> None:
+    completed = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def _commit_code_baseline(root: Path, *paths: str) -> None:
+    _git(root, "init")
+    _git(root, "config", "user.name", "Workflow Loop Test")
+    _git(root, "config", "user.email", "workflow-loop@example.invalid")
+    _git(root, "add", "--", *paths)
+    _git(root, "commit", "-m", "code baseline")
+
+
 def test_impl_backup_records_existing_and_originally_missing_files(tmp_path):
     """Workflow-Test
     主题：项目修改可恢复且正式测试结果来自真实执行
@@ -156,6 +176,65 @@ def test_adjusted_plan_rejects_path_without_an_original_snapshot(tmp_path):
     assert _sha256(first_backup) == first_hash
     assert set(second["entries"]) == {"src/app.py"}
     assert helper.read_text(encoding="utf-8") == "old helper\n"
+
+
+def test_adjusted_plan_accepts_unsampled_file_equal_to_clean_git_head(tmp_path):
+    """首次清单漏采样的既有文件只从完全一致的 Git HEAD 补可信副本。"""
+    app = tmp_path / "src" / "app.py"
+    helper = tmp_path / "src" / "helper.py"
+    _write(app, "old app\n")
+    _write(helper, "old helper\n")
+    _commit_code_baseline(tmp_path, "src/app.py", "src/helper.py")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+
+    app.write_text("implemented\n", encoding="utf-8")
+    _impl_document(tmp_path, ["src/app.py", "src/helper.py"])
+    detail, paths = rollback.prepare_impl(str(tmp_path), state)
+    manifest_path = tmp_path / state.rollback.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    helper_entry = manifest["entries"]["src/helper.py"]
+    helper_backup = manifest_path.parent / helper_entry["backup_path"]
+
+    assert "完整" in detail
+    assert paths == ["src/app.py", "src/helper.py"]
+    assert helper_backup.read_bytes() == b"old helper\n"
+    assert manifest["initial_inventory"]["src/helper.py"] == _sha256(helper)
+    assert "src/helper.py" in manifest["core_registered_paths"]
+
+
+def test_adjusted_plan_rejects_unsampled_untracked_file_even_inside_git_repo(tmp_path):
+    """Git 仓库中的未跟踪文件也不能被倒推成实施前原内容。"""
+    app = tmp_path / "src" / "app.py"
+    helper = tmp_path / "src" / "helper.py"
+    _write(app, "old app\n")
+    _commit_code_baseline(tmp_path, "src/app.py")
+    _write(helper, "untracked helper\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+
+    _impl_document(tmp_path, ["src/app.py", "src/helper.py"])
+    with pytest.raises(ValueError, match="没有可信的实施前原内容：src/helper.py"):
+        rollback.prepare_impl(str(tmp_path), state)
+
+
+def test_adjusted_plan_rejects_unsampled_file_with_staged_git_difference(tmp_path):
+    """即使工作区字节恢复为 HEAD，索引中的未提交差异也必须拒绝。"""
+    app = tmp_path / "src" / "app.py"
+    helper = tmp_path / "src" / "helper.py"
+    _write(app, "old app\n")
+    _write(helper, "old helper\n")
+    _commit_code_baseline(tmp_path, "src/app.py", "src/helper.py")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+
+    helper.write_text("staged helper\n", encoding="utf-8")
+    _git(tmp_path, "add", "--", "src/helper.py")
+    helper.write_text("old helper\n", encoding="utf-8")
+    _impl_document(tmp_path, ["src/app.py", "src/helper.py"])
+
+    with pytest.raises(ValueError, match="没有可信的实施前原内容：src/helper.py"):
+        rollback.prepare_impl(str(tmp_path), state)
 
 
 def test_confirmed_test_inventory_keeps_first_backup(tmp_path):

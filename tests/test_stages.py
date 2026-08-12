@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from workflow_loop.stages.stages import (
     SpecStage,
     TestCodeStage,
     TestExecutionStage,
+    QaStage,
 )
 from workflow_loop.verification import compute_non_test_code_snapshot_hash
 
@@ -54,7 +56,7 @@ def test_stage_prerequisite_failures_list_all_independent_and_unchecked_items(tm
             assert expected in detail
 
 
-def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) -> WorkflowState:
+def _acceptance_fixture(root: Path, *, missing_checkable_result: bool = False) -> WorkflowState:
     create_project(str(root))
     state = WorkflowState(
         workflow_id="wf",
@@ -62,6 +64,7 @@ def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) ->
         current_stage="acceptance_plan",
         topics=["上传文件"],
         stages={"acceptance_plan": StageState(status="in_progress")},
+        spike_skipped=True,
     )
     save_state(str(root), state)
     _write(
@@ -75,7 +78,9 @@ def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) ->
 | 1 | 上传文件 | 无 | [验收计划](./上传文件_验收计划.md) | `./上传文件_验收结果.md`（待生成） |
 """,
     )
-    expected_result = "" if missing_expected_result else "- 预期结果：文件被保存并返回明确结果。\n"
+    checkable_result = (
+        "" if missing_checkable_result else "- 可检查结果：目标文件被保存，界面显示成功结果。\n"
+    )
     _write(
         root / "acceptance" / "上传文件_验收计划.md",
         f"""# 【验收主题】上传文件
@@ -102,11 +107,9 @@ def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) ->
 
 - 开始前状态：用户已进入上传界面且目标文件存在。
 - 触发动作：用户选择有效文件并提交。
-- 可检查结果：目标文件被保存，界面显示成功结果。
-- 通过标准：保存后的文件可读取且内容与输入一致。
+{checkable_result}- 通过标准：保存后的文件可读取且内容与输入一致。
 - 不通过标准：文件缺失、内容不一致或界面没有成功结果。
-- 条件与触发：用户选择有效文件并提交。
-{expected_result}- 产品设计依据：[上传功能](../spec/功能_上传文件.md)，第 4 章 R1。
+- 产品设计依据：[上传功能](../spec/功能_上传文件.md)，第 4 章 R1。
 
 ## 5. 完成判定
 
@@ -124,9 +127,9 @@ def _acceptance_fixture(root: Path, *, missing_expected_result: bool = False) ->
 
 ## wf
 
-| 需求来源与设计依据 | 验收主题 | 验收条件 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| [产品设计](./spec/功能_上传文件.md) | [上传文件](./acceptance/上传文件_验收计划.md) | AC-01：上传完成 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |
+| 需求来源与设计依据 | 验收主题 | 验收条件 | 穿刺结论与可复用内容 | 测试项 | 实施计划与任务 | 实施记录与代码 | 测试结果 | 验收结果 | 更新后的代码设计 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| [产品设计](./spec/功能_上传文件.md) | [上传文件](./acceptance/上传文件_验收计划.md) | AC-01：上传完成 | 本轮未执行穿刺，无可复用资产 | 待制定 | 待制定 | 待执行 | 待执行 | 待执行 | 待更新 |
 """,
     )
     return state
@@ -164,13 +167,22 @@ def _impl_fixture(root: Path) -> WorkflowState:
 
 实现上传。
 
-### 2.2 代码修改计划
+### 2.2 最低实现设计
+
+| 设计项 | 已确认做法 | 选择理由 | 对应验收条件 |
+| --- | --- | --- | --- |
+| 模块与职责 | `src/upload.py` 负责接收并保存上传内容 | 当前主题只需要一个上传入口 | AC-01 |
+| 接口与调用顺序 | `upload` 接收输入后保存文件 | 调用方可直接取得保存结果 | AC-01 |
+| 数据、状态与副作用 | 写入目标文件 | 保存结果可以直接读取核对 | AC-01 |
+| 错误与边界 | 无效输入返回错误且不写文件 | 避免产生不完整结果 | AC-01 |
+
+### 2.3 代码修改计划
 
 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改的具体逻辑 |
 | --- | --- | --- | --- |
 | src/upload.py | upload | 暂无 | 新增上传 |
 
-### 2.3 开发检查计划
+#### 开发检查计划
 
 - 语法检查。
 
@@ -295,10 +307,10 @@ def test_acceptance_plan_requires_complete_judgable_fields(tmp_path):
     assert ok is True, detail
 
     broken = tmp_path / "broken"
-    _acceptance_fixture(broken, missing_expected_result=True)
+    _acceptance_fixture(broken, missing_checkable_result=True)
     ok, detail = AcceptancePlanStage().code_validate(str(broken))
     assert ok is False
-    assert "AC-01“预期结果”字段：缺少具体内容" in detail
+    assert "AC-01“可检查结果”字段：缺少具体内容" in detail
 
 
 @pytest.mark.parametrize(
@@ -365,6 +377,26 @@ def test_impl_discussion_requires_every_topic_plan_and_no_unresolved_question(tm
     ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
     assert ok is False
     assert "仍有未决问题" in detail
+
+
+def test_impl_discussion_accepts_legacy_plan_structure_for_legacy_path(tmp_path):
+    """旧路径版本继续读取旧实施计划标题，不把当前结构倒灌进历史轮次。"""
+    state = _impl_fixture(tmp_path)
+    state.stage_path_version = 1
+    impl_path = tmp_path / "impl" / "上传文件_实施记录.md"
+    content = impl_path.read_text(encoding="utf-8")
+    content = re.sub(
+        r"### 2\.2 最低实现设计\n.*?(?=### 2\.3 代码修改计划)",
+        "",
+        content,
+        flags=re.DOTALL,
+    ).replace("### 2.3 代码修改计划", "### 2.2 代码修改计划")
+    content = content.replace("#### 开发检查计划", "### 2.3 开发检查计划")
+    impl_path.write_text(content, encoding="utf-8")
+
+    ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
+
+    assert ok is True, detail
 
 
 def test_impl_gate_prefers_real_changes_over_existing_code_marker(tmp_path, monkeypatch):
@@ -510,3 +542,31 @@ def test_test_code_and_execution_use_separate_development_and_execution_rules():
         "Standardized_Repository/qa/test_code_implementation.md"
     ]
     assert TestExecutionStage().standard_doc_path() == "Standardized_Repository/qa/test.md"
+
+
+def test_qa_materials_include_plan_and_result_documents_without_duplicates():
+    """Workflow-Test
+    主题：测试验证一次确认后连续完成并保留真实测试证据
+    测试项：TC-07 QA 阶段材料同时覆盖计划、代码和结果
+    验收条件：AC-07 合并测试环节仍保留各类证据边界
+    测试方式：自动化测试
+    测试层级：单元测试
+    测试目标：qa（测试验证）一次加载测试计划模板、测试结果模板和全部对应规范，且每份材料只出现一次
+    测试入口：tests/test_stages.py::test_qa_materials_include_plan_and_result_documents_without_duplicates
+    代码入口：workflow_loop.stages.stages.QaStage
+    """
+    paths = [
+        spec.relative_path
+        for spec in QaStage().materials()
+        if spec.relative_path is not None
+    ]
+
+    assert paths == [
+        "Template_Repository/qa/test_plan.md",
+        "Standardized_Repository/qa/test_plan.md",
+        "Template_Repository/qa/test.md",
+        "Standardized_Repository/qa/test.md",
+        "Standardized_Repository/qa/test_code.md",
+        "Standardized_Repository/qa/test_code_implementation.md",
+    ]
+    assert len(paths) == len(set(paths))

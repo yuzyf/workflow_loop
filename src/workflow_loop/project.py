@@ -49,7 +49,7 @@ class ProjectState:
     installed_at: str = ""
     # 项目设计架构初始化标记
     # 安装时 false；project_design_init stage --confirmed 后置 true
-    # from_scratch 在 spec + code_design 都 --confirmed 后置 true
+    # from_scratch 在最终 update_code_design --confirmed 后置 true
     # PathComposer 用这个字段决定 product_change/bugfix 是否前置 project_design_init
     project_design_initialized: bool = False
     # 已经确认过的验收主题名称。修 bug 在 reproduce 确认，其他意图在 acceptance_plan 确认。
@@ -452,7 +452,7 @@ def inspect_skeleton_for_update(
 # 判断项目设计架构是否已初始化（PathComposer 用）
 # true → product_change/bugfix 跳过 project_design_init stage
 # false → 必须执行 project_design_init
-# 不用架构文档是否存在决定跳过（CONTEXT.md "Project Design Init Skip"）
+# 只按项目状态字段判断，不能用架构文档是否存在代替初始化完成事实
 def is_project_design_initialized(project_root: str) -> bool:
     # 读 project.json
     project = load_project(project_root)
@@ -462,7 +462,7 @@ def is_project_design_initialized(project_root: str) -> bool:
 
 # 设置项目设计架构初始化标记
 # 在 project_design_init stage --confirmed 后置 true
-# 在 from_scratch 的 spec + code_design 都 --confirmed 后置 true
+# 在 from_scratch 的最终 update_code_design --confirmed 后置 true
 # 在 from_scratch start 时重置为 false（清场后重新做）
 def set_project_design_initialized(project_root: str, value: bool) -> None:
     # 读当前 project 状态

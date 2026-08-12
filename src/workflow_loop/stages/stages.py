@@ -507,6 +507,14 @@ class ImplStage(StageStrategy):
                 errors.append(f"{topic_rel} 缺少“实施依据”")
             if "## 2. 实施前计划" not in topic_content:
                 errors.append(f"{topic_rel} 缺少“实施前计划”")
+            if workflow_state.stage_path_version >= 2:
+                current_structure = (
+                    "### 2.2 最低实现设计",
+                    "### 2.3 代码修改计划",
+                )
+                for heading in current_structure:
+                    if heading not in topic_content:
+                        errors.append(f"{topic_rel} 缺少“{heading.removeprefix('### ')}”")
             if "## 4. 计划与实际的差异" in topic_content:
                 errors.append(f"{topic_rel} 不得包含“计划与实际的差异”章节")
             if "## 4. 上下游文档" not in topic_content:
@@ -519,6 +527,18 @@ class ImplStage(StageStrategy):
             if require_execution_record:
                 if "## 3. 实施后记录" not in topic_content:
                     errors.append(f"{topic_rel} 缺少“实施后记录”")
+                if workflow_state.stage_path_version >= 2:
+                    current_result_structure = (
+                        "### 3.1 实施动作记录",
+                        "### 3.2 实施中问题与处理",
+                        "#### 3.4.1 实际代码修改",
+                        "#### 3.4.2 开发检查记录",
+                    )
+                    for heading in current_result_structure:
+                        if heading not in topic_content:
+                            errors.append(
+                                f"{topic_rel} 缺少“{heading.lstrip('#').strip()}”"
+                            )
                 if "### 3.3 未完成内容" not in topic_content and "## 3.3 未完成内容" not in topic_content:
                     errors.append(f"{topic_rel} 缺少“3.3 未完成内容”")
                 unfinished = self._subsection_text(topic_content, "3.3 未完成内容")
@@ -744,6 +764,7 @@ class TestCodeStage(StageStrategy):
         project_root: str,
         *,
         allow_unchanged: bool,
+        stage_name: str | None = None,
     ) -> tuple[bool, str]:
         state = load_state(project_root)
         if state is None:
@@ -756,13 +777,14 @@ class TestCodeStage(StageStrategy):
                 "测试代码已覆盖当前自动化测试项",
             )
         errors: list[str] = []
-        stage_state = state.stages.get(self.name())
+        state_name = stage_name or self.name()
+        stage_state = state.stages.get(state_name)
         if stage_state is None or stage_state.test_code_baseline_hash is None:
-            errors.append("缺少进入 test_code 时的测试代码基线")
+            errors.append(f"缺少进入 {state_name} 时的测试代码基线")
         if stage_state is None or stage_state.non_test_code_baseline_hash is None:
-            errors.append("缺少进入 test_code 时的产品代码基线，请重新完成 test_code 讨论门禁")
+            errors.append(f"缺少进入 {state_name} 时的产品代码基线，请重新完成讨论门禁")
         elif compute_non_test_code_snapshot_hash(project_root) != stage_state.non_test_code_baseline_hash:
-            errors.append("test_code 阶段不能修改产品代码；产品代码变化应返回 impl")
+            errors.append(f"{state_name} 的测试代码步骤不能修改产品代码；产品代码变化应返回 impl")
         topics = current_workflow_topics(project_root)
         if not topics:
             errors.append("当前工作流还没有确认验收主题")
@@ -895,6 +917,104 @@ class TestExecutionStage(StageStrategy):
             "测试执行阶段：先和用户逐项确认测试入口、前置测试项、真实命令、工作目录、运行环境和超时时间；"
             "确认后用 workflow test prepare 登记，再用 workflow test run 执行。"
             "执行失败不生成正式主题测试结果，先定位问题并按规则返回对应阶段。"
+        )
+
+
+# 单一测试验证 stage：把旧 test_plan、test_code、test_execution 的事实边界合并，
+# 但不把测试计划、测试代码、任务登记和机器结果压成一份不可追溯的文档。
+class QaStage(StageStrategy):
+    """qa（测试验证）阶段策略。
+
+    对用户只暴露一个阶段；内部仍按范围、计划、测试代码、任务、执行和结果顺序推进。
+    旧三个阶段类保留给历史状态迁移和兼容读取。
+    """
+
+    def name(self) -> str:
+        return "qa"
+
+    def artifact_paths(self) -> list[str]:
+        return [artifact_paths_mod.QA_INDEX_DOC, "qa/"]
+
+    def role_doc_path(self) -> str | None:
+        return None
+
+    def prompt_doc_path(self) -> str | None:
+        return "Template_Repository/qa/test_plan.md"
+
+    def standard_doc_path(self) -> str | None:
+        return "Standardized_Repository/qa/test_plan.md"
+
+    def additional_doc_paths(self) -> list[tuple[str, str]]:
+        return [
+            (
+                "Template_Repository/qa/test.md",
+                "Standardized_Repository/qa/test.md",
+            )
+        ]
+
+    def additional_standard_doc_paths(self) -> list[str]:
+        return [
+            "Standardized_Repository/qa/test_code.md",
+            "Standardized_Repository/qa/test_code_implementation.md",
+        ]
+
+    def change_tracked_paths(self, project_root: str) -> list[str]:
+        return _test_code_paths(project_root)
+
+    def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
+        # 开始确认只检查测试范围、计划结构、实施结果和真实入口，不执行测试。
+        return TestPlanStage().code_validate(project_root)
+
+    def _validate_test_code(self, project_root: str) -> tuple[bool, str]:
+        # QA 正常路径允许复用符合当前计划的既有测试代码；复用不等于跳过正式执行。
+        return TestCodeStage()._validate_current_test_code(
+            project_root,
+            allow_unchanged=True,
+            stage_name="qa",
+        )
+
+    def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state = load_state(project_root)
+        if state is None:
+            return _validation_result(
+                [
+                    "工作流状态：找不到当前工作流状态",
+                    "测试计划、测试代码、任务登记和机器结果：未检查：无法确定当前工作流",
+                ],
+                "qa（测试验证）内部计划、代码、任务和结果完整",
+            )
+        errors: list[str] = []
+        plan_ok, plan_detail = TestPlanStage().code_validate(project_root)
+        if not plan_ok:
+            errors.append(f"测试计划和范围：{plan_detail}")
+        code_ok, code_detail = self._validate_test_code(project_root)
+        if not code_ok:
+            errors.append(f"测试代码：{code_detail}")
+        tasks_ok, tasks_detail = test_execution_mod.validate_prepared_tasks(
+            project_root,
+            state,
+        )
+        if not tasks_ok:
+            errors.append(f"任务登记：{tasks_detail}")
+        topics = current_workflow_topics(project_root)
+        if topics:
+            _validator_error(
+                "主题测试执行结果",
+                validate_test_execution_results(project_root, state.workflow_id, topics),
+                errors,
+            )
+        else:
+            errors.append("测试主题：未检查：没有验收主题")
+        return _validation_result(
+            errors,
+            "qa（测试验证）内部计划、测试代码、任务登记和结果完整",
+        )
+
+    def instruction(self) -> str:
+        return (
+            "测试验证阶段：开始时一次确认全部主题的测试范围和通过标准；"
+            "随后连续完成测试计划检查、测试代码复用或修改、文件冻结、任务登记、正式执行和结果整理；"
+            "结束时只复核已有机器记录和人工待验收内容，不重新执行测试。"
         )
 
 
@@ -1327,7 +1447,8 @@ class ReviseCodeDesignStage(StageStrategy):
         return "Template_Repository/code_design/code_design.md"
 
     def standard_doc_path(self) -> str | None:
-        return "Standardized_Repository/code_design/revise_code_design.md"
+        # 旧状态迁移只保留阶段识别；架构文档规则统一使用当前规范。
+        return "Standardized_Repository/code_design/code_design.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC

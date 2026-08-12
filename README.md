@@ -239,8 +239,7 @@ workflow_loop/
 ├── update.ps1             Windows 旧版本更新脚本
 ├── uninstall.sh           macOS 和 Linux 旧版本卸载脚本
 ├── uninstall.ps1          Windows 旧版本卸载脚本
-├── CONTEXT.md             产品术语、规则和限制
-└── DESIGN.md              实现设计文档
+└── docs/adr/              已经发生的架构决策及其取代关系
 ```
 
 ## 详细文档
@@ -252,8 +251,8 @@ workflow_loop/
 - [发布正式版本](spec/功能_发布正式版本.md)：人工发布命令、版本更新范围、执行顺序和失败边界。
 - [处理无需开发任务](spec/功能_处理无需开发任务.md)：简单流程适用边界、逐项确认、完成和异常处理规则。
 - [代码架构设计](spec/代码架构设计.md)：功能到代码模块、状态和外部依赖的对应关系。
-- [实现设计文档](DESIGN.md)：命令、数据模型、工作意图、阶段路径和门禁的实现形态。
-- [产品事实与约束](CONTEXT.md)：当前有效的术语、约束和设计决策。
+- [原生 Windows PowerShell 决策](docs/adr/0001-support-native-windows-powershell.md)：为什么正式支持原生 Windows PowerShell。
+- [首版版本策略决策](docs/adr/0002-fix-product-version-at-0-1-0.md)：首版版本号决定及其被后续功能取代的状态。
 - [需求交付追踪表](需求交付追踪表.md)：每轮需求从设计到验收的完整追踪入口。
 
 ## 许可证

@@ -27,7 +27,7 @@ from .project import (
 
 # AGENTS.md 的固定内容（最小契约 + 核心表达要求）
 # 唯一契约文件名，告诉 AI "调 workflow start，跟着 stdout 走"，并约束聊天表达
-# 安装时直接整份覆盖，不询问、不合并、不备份（CONTEXT.md "Agent Contract File"）
+# 用户确认安装范围后直接整份覆盖，不合并旧契约；失败恢复由安装事务负责
 AGENTS_MD_CONTENT = """# Agent 契约
 
 本项目由 workflow_loop 管理。

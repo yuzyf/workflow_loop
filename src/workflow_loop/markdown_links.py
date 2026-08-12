@@ -119,11 +119,22 @@ def _canonical_hash(payload: object) -> str:
     return _sha256_bytes(raw)
 
 
-def _managed_existing_markdown(project_root: str) -> list[str]:
+def _managed_existing_markdown(
+    project_root: str,
+    source_paths: Iterable[str] | None = None,
+) -> list[str]:
     project = load_project(project_root)
     state = load_state(project_root)
     result: list[str] = []
-    for relative in managed_artifact_paths(project, state, project_root):
+    managed = managed_artifact_paths(project, state, project_root)
+    if source_paths is not None:
+        requested = {
+            PurePosixPath(str(path).replace("\\", "/")).as_posix()
+            for path in source_paths
+            if isinstance(path, str) and path.strip()
+        }
+        managed = [relative for relative in managed if relative in requested]
+    for relative in managed:
         if not relative.lower().endswith(".md"):
             continue
         full = os.path.join(project_root, relative)
@@ -233,12 +244,13 @@ def scan_managed_markdown_links(
     project_root: str,
     *,
     content_overrides: dict[str, str] | None = None,
+    source_paths: Iterable[str] | None = None,
 ) -> LinkScanResult:
     """扫描现有受管文档，并一次返回全部本地链接问题。"""
 
     links: list[MarkdownLink] = []
     issues: list[LinkIssue] = []
-    for source in _managed_existing_markdown(project_root):
+    for source in _managed_existing_markdown(project_root, source_paths):
         try:
             content = _read_content(project_root, source, content_overrides)
         except (OSError, UnicodeDecodeError) as exc:
@@ -288,10 +300,14 @@ def scan_managed_markdown_links(
     )
 
 
-def validate_managed_markdown_links(project_root: str) -> tuple[bool, str]:
+def validate_managed_markdown_links(
+    project_root: str,
+    *,
+    source_paths: Iterable[str] | None = None,
+) -> tuple[bool, str]:
     """返回适合门禁展示的稳定、一次聚合链接校验结果。"""
 
-    result = scan_managed_markdown_links(project_root)
+    result = scan_managed_markdown_links(project_root, source_paths=source_paths)
     if result.ok:
         return True, f"受管正式文档本地链接可导航：已检查 {len(result.links)} 个链接"
     detail = "\n".join(

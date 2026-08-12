@@ -112,9 +112,7 @@ def test_three_intents_produce_complete_project_specific_paths(tmp_path):
     expected_tail = [
         "acceptance_plan",
         "impl",
-        "test_plan",
-        "test_code",
-        "test_execution",
+        "qa",
         "topic_acceptance",
         "regression_test",
         "overall_acceptance",
@@ -261,7 +259,7 @@ def test_three_gates_advance_in_the_required_order(tmp_path):
 
     code, out, err = _run(["gate", "spec", "--confirmed"], tmp_path)
     assert code == 0, err
-    assert "进入 code_design" in out
+    assert "进入 spike" in out
 
 
 def _state_at_impl(root: Path) -> WorkflowState:
@@ -322,7 +320,7 @@ def test_return_accepts_only_real_earlier_stage(tmp_path):
         [
             "return",
             "--to",
-            "test_execution",
+            "qa",
             "--topic",
             "安装",
             "--reason",
@@ -530,6 +528,87 @@ def test_accept_existing_code_preserves_original_baseline(
     assert len(journal_entries) == 1
 
 
+def test_material_change_reconfirms_the_new_gate_state(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """材料变化清门后必须更新新 GateState，不能继续写已经失效的旧对象。"""
+
+    stage_state = cli_mod.state_mod.StageState(
+        status="in_progress",
+        discussion_material_hash="old-materials",
+        plan_confirmed_hash="old-plan",
+        code_baseline_hash="old-code",
+    )
+    stage_state.gate.discussion_complete = True
+    workflow_state = WorkflowState(
+        workflow_id="wf",
+        intent="product_change",
+        run_status="active",
+        current_stage="impl",
+        stage_path=["impl"],
+        stage_path_version=2,
+        topics=["上传文件"],
+        stages={"impl": stage_state},
+    )
+
+    class ImplStrategy:
+        def discussion_validate(self, _root, _state):
+            return True, "代码计划完整"
+
+    journal_entries: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(cli_mod, "resolve_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(cli_mod.state_mod, "load_state", lambda _root: workflow_state)
+    monkeypatch.setattr(cli_mod.state_mod, "save_state", lambda _root, _state: None)
+    monkeypatch.setattr(cli_mod, "refuse_if_pending_start_transaction", lambda _root: None)
+    monkeypatch.setattr(cli_mod, "ensure_stage_path_current", lambda _root, _state: False)
+    monkeypatch.setattr(
+        cli_mod,
+        "restore_recovery_context_from_journal",
+        lambda _root, _state: False,
+    )
+    monkeypatch.setattr(cli_mod, "clear_completed_material_recovery", lambda _root, _state: None)
+    monkeypatch.setattr(cli_mod, "ensure_impl_recovery_baseline", lambda _root, _state: False)
+    monkeypatch.setattr(cli_mod, "build_stage_path", lambda _intent, _root: [])
+    monkeypatch.setattr(
+        cli_mod,
+        "get_stage_strategy",
+        lambda _name, _state, _instances: ImplStrategy(),
+    )
+    monkeypatch.setattr(cli_mod, "compute_stage_material_hash", lambda _root, _stage: "new-materials")
+    monkeypatch.setattr(cli_mod, "_has_loaded_stage_materials", lambda _root, _state, _stage: True)
+    monkeypatch.setattr(cli_mod, "ensure_stage_artifact_baseline", lambda _root, _state, _stage: False)
+    monkeypatch.setattr(cli_mod.rollback_mod, "compute_plan_hash", lambda _root, _topics: "new-plan")
+    monkeypatch.setattr(cli_mod, "compute_non_test_code_snapshot_hash", lambda _root: "new-code")
+    monkeypatch.setattr(
+        cli_mod.journal_mod,
+        "append_entry",
+        lambda *args, **kwargs: journal_entries.append((args, kwargs)),
+    )
+    args = SimpleNamespace(
+        stage="impl",
+        rebaseline=False,
+        prepare_code=False,
+        accept_existing_code=False,
+        accept_existing_test_code=False,
+        skip=False,
+        discuss_done=True,
+        confirmed=False,
+    )
+
+    cli_mod.cmd_gate(args)
+    output = capsys.readouterr().out
+
+    assert stage_state.gate.discussion_complete is True
+    assert stage_state.discussion_material_hash == "new-materials"
+    assert stage_state.plan_confirmed_hash == "new-plan"
+    assert stage_state.code_baseline_hash == "new-code"
+    assert "impl 讨论完毕" in output
+    assert "实施计划已重新确认" not in output
+    assert any(entry[0][1] == "门禁讨论完毕" for entry in journal_entries)
+
+
 def test_done_marks_completed_and_preserves_formal_documents(tmp_path):
     """Workflow-Test
     主题：主题验收、全量回归和最终同步完成后正式收工
@@ -576,13 +655,30 @@ def _write_legacy_order_run(root: Path):
     state = load_state(str(root))
     topic = "旧顺序迁移主题"
     state.topics = [topic]
+    legacy_path: list[str] = []
+    for stage_name in state.stage_path:
+        if stage_name == "spike":
+            legacy_path.append("revise_code_design")
+        if stage_name == "qa":
+            legacy_path.extend(("test_plan", "test_code", "test_execution"))
+            continue
+        legacy_path.append(stage_name)
+    state.stage_path = legacy_path
+    state.stage_path_version = 0
+    for stage_name in ("revise_code_design", "test_plan", "test_code", "test_execution"):
+        state.stages.setdefault(stage_name, cli_mod.state_mod.StageState())
+    state.stages.pop("qa", None)
     state.stage_path.remove("test_plan")
     state.stage_path.insert(state.stage_path.index("impl"), "test_plan")
-    state.current_stage = "regression_test"
-    for stage_name in state.stage_path[state.stage_path.index("acceptance_plan") :]:
-        stage_state = state.stages[stage_name]
-        stage_state.status = "done"
-        stage_state.gate = cli_mod.state_mod.GateState(True, True, True)
+    state.current_stage = "impl"
+    for stage_name, stage_state in state.stages.items():
+        stage_state.status = "pending"
+        stage_state.gate = cli_mod.state_mod.GateState()
+    for stage_name in state.stage_path[: state.stage_path.index("impl")]:
+        state.stages[stage_name].status = "done"
+        state.stages[stage_name].gate = cli_mod.state_mod.GateState(True, True, True)
+    state.stages["impl"].status = "in_progress"
+    state.stages["impl"].gate.discussion_complete = True
     state.stages["test_execution"].test_tasks = {
         topic: {
             "TC-01": cli_mod.state_mod.TestTaskState(
@@ -634,6 +730,7 @@ def _write_legacy_order_run(root: Path):
         "[需求](./spec/产品总说明.md)",
         f"[{topic}](./{paths['acceptance_plan']})",
         f"[AC-01](./{paths['acceptance_plan']}#ac-01)",
+        "本轮未执行穿刺，无可复用资产",
         f"[TC-01](./{paths['test_plan']}#tc-01)",
         f"[实施计划](./{paths['impl_doc']})",
         f"[实施记录](./{paths['impl_doc']})",
@@ -679,7 +776,7 @@ def test_legacy_order_status_preview_is_zero_write(tmp_path):
     assert code == 0, out + err
     assert "旧顺序迁移预览" in out
     assert "本次只读，写入 0 个文件" in out
-    assert "已有产品代码不删除" in out
+    assert "保留：已确认产品设计、验收计划、实施事实和所有正式文件" in out
     assert _migration_bytes(tmp_path, paths) == before
 
 
@@ -690,9 +787,12 @@ def test_legacy_order_migration_clears_old_facts_and_is_idempotent(tmp_path):
 
     migrated = load_state(str(tmp_path))
     assert migrated.current_stage == "impl"
-    assert migrated.stage_path.index("impl") < migrated.stage_path.index("test_plan")
-    assert migrated.stages["test_execution"].test_tasks == {}
+    assert migrated.stage_path.index("impl") < migrated.stage_path.index("qa")
+    assert migrated.stages["qa"].test_tasks == {}
     assert migrated.stages["topic_acceptance"].acceptance_records == {}
+    assert {"test_plan", "test_code", "test_execution"} <= set(
+        migrated.legacy_stage_facts
+    )
     assert migrated.regression_test == cli_mod.state_mod.RegressionTestState()
     assert migrated.verification.test_plan_hash is None
     assert migrated.verification.test_result_hash is None

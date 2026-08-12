@@ -19,7 +19,38 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _setup(tmp_path: Path, method: str = "自动化测试") -> WorkflowState:
+def _test_task(record_id: str = "RUN-1") -> ExecutionTask:
+    return ExecutionTask(
+        test_entries=["tests/test_upload.py::test_upload"],
+        command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
+        report_adapter="pytest-junitxml",
+        report_path=".workflow_loop/test_reports/upload.xml",
+        status="passed",
+        current_record=ExecutionRecord(
+            test_entries=["tests/test_upload.py::test_upload"],
+            command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
+            status="passed",
+            exit_code=0,
+            record_id=record_id,
+            code_snapshot_hash="code",
+            test_code_hash="tests",
+            report_adapter="pytest-junitxml",
+            report_hash="a" * 64,
+            report_size=1024,
+            executed_count=1,
+            skipped_count=0,
+            failed_count=0,
+            error_count=0,
+            matched_test_entries=["tests/test_upload.py::test_upload"],
+        ),
+    )
+
+
+def _setup(
+    tmp_path: Path,
+    method: str = "自动化测试",
+    execution_stage: str = "qa",
+) -> WorkflowState:
     topic = "上传文件"
     _write(
         tmp_path / "src" / "upload.py",
@@ -53,35 +84,8 @@ def _setup(tmp_path: Path, method: str = "自动化测试") -> WorkflowState:
         current_stage="topic_acceptance",
         topics=[topic],
         stages={
-            "test_execution": StageState(
-                test_tasks={
-                    topic: {
-                        "TC-01": ExecutionTask(
-                            test_entries=["tests/test_upload.py::test_upload"],
-                            command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
-                            report_adapter="pytest-junitxml",
-                            report_path=".workflow_loop/test_reports/upload.xml",
-                            status="passed",
-                            current_record=ExecutionRecord(
-                                test_entries=["tests/test_upload.py::test_upload"],
-                                command=["pytest", "tests/test_upload.py::test_upload", "--junitxml=report.xml"],
-                                status="passed",
-                                exit_code=0,
-                                record_id="RUN-1",
-                                code_snapshot_hash="code",
-                                test_code_hash="tests",
-                                report_adapter="pytest-junitxml",
-                                report_hash="a" * 64,
-                                report_size=1024,
-                                executed_count=1,
-                                skipped_count=0,
-                                failed_count=0,
-                                error_count=0,
-                                matched_test_entries=["tests/test_upload.py::test_upload"],
-                            ),
-                        )
-                    }
-                }
+            execution_stage: StageState(
+                test_tasks={topic: {"TC-01": _test_task()}}
             ),
             "topic_acceptance": StageState(),
         },
@@ -132,7 +136,7 @@ def test_automated_acceptance_rejects_incomplete_or_invalid_machine_facts(
     value,
 ):
     state = _setup(tmp_path)
-    task = state.stages["test_execution"].test_tasks["上传文件"]["TC-01"]
+    task = state.stages["qa"].test_tasks["上传文件"]["TC-01"]
     assert task.current_record is not None
     setattr(task.current_record, field, value)
 
@@ -140,6 +144,84 @@ def test_automated_acceptance_rejects_incomplete_or_invalid_machine_facts(
 
     assert created == []
     assert state.stages["topic_acceptance"].acceptance_records.get("上传文件", {}) == {}
+
+
+def test_current_qa_tasks_drive_automated_and_mixed_acceptance_with_legacy_fallback(
+    tmp_path,
+):
+    """Workflow-Test
+    主题：完整研发流程按最少用户环节推进并兼容旧轮次
+    测试项：TC-05 当前 QA 机器记录可建立并复核验收记录
+    验收条件：AC-01 新轮次只生成精简后的完整研发路径
+    测试方式：自动化测试
+    测试层级：集成测试
+    产品入口：`workflow gate topic_acceptance` 和 `workflow acceptance record`
+    测试入口：`tests/test_acceptance_records.py::test_current_qa_tasks_drive_automated_and_mixed_acceptance_with_legacy_fallback`
+    代码入口：`src/workflow_loop/acceptance_records.py::ensure_automated_records`
+    准备数据：分别构造只有 `qa`（测试验证）任务、只有旧 `test_execution`（测试执行）任务、两种状态并存，以及 `qa` 存在但没有有效任务的隔离工作流；混合验收样本同时准备用户原话
+    执行动作：建立纯自动验收记录、复核记录当前性，并为混合验收记录用户结果
+    关键断言：只有 `qa` 时可建立并复核精确机器编号；只有旧状态时仍可兼容；两者并存时必须使用 `qa`；`qa` 存在但无有效任务时不得改用旧成功记录；混合记录保留用户原话和当前机器编号
+    预期证据：pytest JUnit XML 报告精确命中本入口，并保存四种阶段组合的记录建立与当前性结果、机器记录编号和混合验收字段
+    """
+    current_state = _setup(tmp_path / "current")
+    current_records = records_mod.ensure_automated_records(
+        str(tmp_path / "current"),
+        current_state,
+    )
+    assert len(current_records) == 1
+    current_record = current_records[0]
+    assert current_record.test_record_ids == ["RUN-1"]
+    assert records_mod.record_is_current(current_record, current_state)
+
+    legacy_state = _setup(tmp_path / "legacy", execution_stage="test_execution")
+    legacy_records = records_mod.ensure_automated_records(
+        str(tmp_path / "legacy"),
+        legacy_state,
+    )
+    assert len(legacy_records) == 1
+    assert legacy_records[0].test_record_ids == ["RUN-1"]
+    assert records_mod.record_is_current(legacy_records[0], legacy_state)
+
+    preferred_state = _setup(tmp_path / "preferred")
+    preferred_state.stages["qa"].test_tasks["上传文件"]["TC-01"] = _test_task(
+        "RUN-QA"
+    )
+    preferred_state.stages["test_execution"] = StageState(
+        test_tasks={"上传文件": {"TC-01": _test_task("RUN-LEGACY")}}
+    )
+    preferred_records = records_mod.ensure_automated_records(
+        str(tmp_path / "preferred"),
+        preferred_state,
+    )
+    assert preferred_records[0].test_record_ids == ["RUN-QA"]
+    assert records_mod.record_is_current(preferred_records[0], preferred_state)
+
+    rejected_state = _setup(tmp_path / "rejected")
+    rejected_state.stages["qa"] = StageState()
+    rejected_state.stages["test_execution"] = StageState(
+        test_tasks={"上传文件": {"TC-01": _test_task("RUN-LEGACY")}}
+    )
+    assert records_mod.ensure_automated_records(
+        str(tmp_path / "rejected"),
+        rejected_state,
+    ) == []
+
+    mixed_state = _setup(tmp_path / "mixed", method="自动化测试 + 人工验收")
+    mixed_record = records_mod.record_user_result(
+        str(tmp_path / "mixed"),
+        mixed_state,
+        topic="上传文件",
+        criterion_id="AC-01",
+        result="passed",
+        actual_result="用户看到文件已经上传",
+        user_answer="确认通过",
+        evidence="用户原话：确认通过",
+    )
+    assert mixed_record.user_answer == "确认通过"
+    assert mixed_record.actual_result == "用户看到文件已经上传"
+    assert mixed_record.evidence == "用户原话：确认通过"
+    assert mixed_record.test_record_ids == ["RUN-1"]
+    assert records_mod.record_is_current(mixed_record, mixed_state)
 
 
 def test_manual_acceptance_record_requires_user_observation_and_answer(tmp_path):

@@ -11,6 +11,7 @@ from . import artifact_paths as artifact_paths_mod
 from . import process_runner as process_runner_mod
 from . import test_runner as test_runner_mod
 from . import state as state_mod
+from . import traceability as traceability_mod
 from .state import load_state
 from .test_mapping import (
     automated_topics,
@@ -18,7 +19,6 @@ from .test_mapping import (
     parse_test_plan_items,
 )
 from .topic import topic_file_key, topic_paths
-from .traceability import validate_structure as validate_traceability_structure
 from .topic_relations import relation_signature, read_topic_index
 from .verification import (
     compute_code_snapshot_hash,
@@ -1491,7 +1491,7 @@ def validate_acceptance_plan_documents(
     if not index_ok:
         issues.append(f"{artifact_paths_mod.ACCEPTANCE_INDEX_DOC}：{index_detail}")
 
-    traceability_ok, traceability_detail = validate_traceability_structure(
+    traceability_ok, traceability_detail = traceability_mod.validate_structure(
         project_root,
         workflow_id,
         topics,
@@ -1502,19 +1502,21 @@ def validate_acceptance_plan_documents(
 
     traceability_full_path = os.path.join(project_root, TRACEABILITY_PATH)
     traceability_rows: list[list[str]] = []
+    traceability_headers: list[str] | None = None
     if os.path.isfile(traceability_full_path):
         traceability_content = _read_text(project_root, TRACEABILITY_PATH)
         workflow_content = _workflow_section(traceability_content, workflow_id)
         if workflow_content is None:
             issues.append(f"{TRACEABILITY_PATH}：缺少当前工作流章节 {workflow_id}")
         else:
-            traceability_rows = [
-                row
-                for row in _markdown_table_rows(workflow_content)
-                if len(row) == 9 and row[0] != "需求来源与设计依据"
-            ]
+            for headers, table_rows in _markdown_tables(workflow_content):
+                if headers not in traceability_mod.SUPPORTED_HEADERS:
+                    continue
+                traceability_headers = headers
+                traceability_rows = table_rows
+                break
             if not traceability_rows:
-                issues.append(f"{TRACEABILITY_PATH}：当前工作流章节没有九列交付链路记录")
+                issues.append(f"{TRACEABILITY_PATH}：当前工作流章节没有受支持的交付链路记录")
     elif traceability_ok:
         issues.append(f"{TRACEABILITY_PATH}：文件不存在")
 
@@ -1526,9 +1528,6 @@ def validate_acceptance_plan_documents(
         "通过标准",
         "不通过标准",
         "产品设计依据",
-        # 旧版字段在迁移期继续要求，确保旧校验器和正式文档含义一致。
-        "条件与触发",
-        "预期结果",
     )
     placeholder_values = {
         "待补充", "待确认", "待定", "todo", "tbd", "正常", "符合预期", "正确处理",
@@ -1596,10 +1595,15 @@ def validate_acceptance_plan_documents(
             all_criteria.append(f"{topic}:{criterion_id}")
             if not traceability_rows:
                 continue
+            if traceability_headers is None:
+                continue
+            topic_column = traceability_headers.index("验收主题")
+            criterion_column = traceability_headers.index("验收条件")
             matching_rows = [
                 row
                 for row in traceability_rows
-                if paths["acceptance_plan"] in row[1] and criterion_id in row[2]
+                if paths["acceptance_plan"] in row[topic_column]
+                and criterion_id in row[criterion_column]
             ]
             if len(matching_rows) != 1:
                 issues.append(
@@ -1607,12 +1611,33 @@ def validate_acceptance_plan_documents(
                 )
                 continue
             row = matching_rows[0]
-            expected_statuses = ["待制定", "待制定", "待执行", "待执行", "待执行", "待更新"]
-            if row[3:] != expected_statuses:
+            expected_statuses = {
+                "测试项": "待制定",
+                "实施计划与任务": "待制定",
+                "实施记录与代码": "待执行",
+                "测试结果": "待执行",
+                "验收结果": "待执行",
+                "更新后的代码设计": "待更新",
+            }
+            actual_statuses = {
+                header: row[traceability_headers.index(header)]
+                for header in expected_statuses
+            }
+            if actual_statuses != expected_statuses:
                 issues.append(
-                    f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 后续六列："
-                    f"预期 {expected_statuses}，实际 {row[3:]}"
+                    f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 后续状态列："
+                    f"预期 {expected_statuses}，实际 {actual_statuses}"
                 )
+
+    if traceability_headers is not None and "穿刺结论与可复用内容" in traceability_headers:
+        try:
+            traceability_mod.collect_spike_asset_acceptance_links(
+                project_root,
+                workflow_id,
+                topics,
+            )
+        except ValueError as exc:
+            issues.append(f"{TRACEABILITY_PATH} 穿刺结论与可复用内容：{exc}")
 
     if issues:
         return False, "\n".join(
@@ -1807,7 +1832,7 @@ def validate_downstream_traceability(
     topics: list[str],
 ) -> tuple[bool, str]:
     """后续阶段共用的追踪表门禁，不要求测试计划正文结构。"""
-    return validate_traceability_structure(project_root, workflow_id, topics)
+    return traceability_mod.validate_structure(project_root, workflow_id, topics)
 
 
 def validate_test_plan_documents(
@@ -2033,7 +2058,7 @@ def _validate_topic_acceptance_result(
         method = _field(criterion_content, "验收方式")
         if method not in valid_methods or method != methods.get(criterion_id):
             failures.append(f"{rel_path} 的 {criterion_id} 验收方式不合法")
-        for label in ("验收条件", "自动化依据", "实际结果", "验收证据", "程序记录"):
+        for label in ("验收条件", "自动化依据", "实际结果", "验收证据", "验收记录编号"):
             if not _has_real_text(_field(criterion_content, label)):
                 failures.append(f"{rel_path} 的 {criterion_id} 缺少具体“{label}”")
         if _field(criterion_content, "判定") != "通过":
@@ -2043,8 +2068,8 @@ def _validate_topic_acceptance_result(
                 failures.append(f"{rel_path} 的 {criterion_id} 实际结果与程序记录不一致")
             if _field(criterion_content, "验收证据") != record.evidence:
                 failures.append(f"{rel_path} 的 {criterion_id} 验收证据与程序记录不一致")
-            if _field(criterion_content, "程序记录") != record.record_id:
-                failures.append(f"{rel_path} 的 {criterion_id} 程序记录编号不一致")
+            if _field(criterion_content, "验收记录编号") != record.record_id:
+                failures.append(f"{rel_path} 的 {criterion_id} 验收记录编号不一致")
         else:
             failures.append(
                 _unchecked(
@@ -2332,9 +2357,10 @@ def validate_test_execution_results(
     state = load_state(project_root)
     if state is None or state.workflow_id != workflow_id:
         return False, "找不到当前工作流的测试执行状态"
-    stage_state = state.stages.get("test_execution")
+    # 新流程把任务和机器记录统一保存在 qa；旧轮次仍读取 test_execution。
+    stage_state = state.stages.get("qa") or state.stages.get("test_execution")
     if stage_state is None:
-        return False, "缺少 test_execution（测试执行阶段）状态，正式结果必须来自真实执行记录"
+        return False, "缺少 qa（测试验证）或旧 test_execution 状态，正式结果必须来自真实执行记录"
     for topic in automated:
         topic_items = [item for item in automated_items if item.topic == topic]
         test_ok, test_detail = _validate_topic_test_execution_result(

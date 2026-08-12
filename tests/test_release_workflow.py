@@ -160,29 +160,22 @@ def test_current_release_identity_and_non_tag_publish_rules_are_consistent():
     version_strategy = {
         "产品总说明": (ROOT / "spec" / "产品总说明.md").read_text(encoding="utf-8"),
         "安装到项目": (ROOT / "spec" / "功能_安装到项目.md").read_text(encoding="utf-8"),
-        "领域决定": (ROOT / "CONTEXT.md").read_text(encoding="utf-8"),
-        "版本决策": (
-            ROOT / "docs" / "adr" / "0002-fix-product-version-at-0-1-0.md"
-        ).read_text(encoding="utf-8"),
     }
+    historical_version_decision = (
+        ROOT / "docs" / "adr" / "0002-fix-product-version-at-0-1-0.md"
+    ).read_text(encoding="utf-8")
     required_future_rule = "未在 PyPI 发布过的新版本号"
     assert required_future_rule in version_strategy["产品总说明"]
     assert (
         "未在 Python 公共软件包仓库发布过的新版本号"
         in version_strategy["安装到项目"]
     )
-    assert "尚未被 PyPI 占用的新版本号" in version_strategy["领域决定"]
-    assert "尚未被 PyPI 占用的新版本号" in version_strategy["版本决策"]
-    assert "原“产品版本永久固定为 `0.1.0`”决定已" in version_strategy["版本决策"]
+    assert "已被后续发布与项目更新功能取代" in historical_version_decision
     _print_evidence(
         "CURRENT_RELEASE_IDENTITY",
         {
             "actual_command_identity": actual_identity.stdout.strip(),
             "future_version_rules": {
-                "CONTEXT.md": "尚未被 PyPI 占用的新版本号",
-                "docs/adr/0002-fix-product-version-at-0-1-0.md": (
-                    "尚未被 PyPI 占用的新版本号"
-                ),
                 "spec/产品总说明.md": required_future_rule,
                 "spec/功能_安装到项目.md": (
                     "未在 Python 公共软件包仓库发布过的新版本号"

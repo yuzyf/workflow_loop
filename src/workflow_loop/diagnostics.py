@@ -26,6 +26,7 @@ STAGE_ORDER = (
     "spike",
     "acceptance_plan",
     "impl",
+    "qa",
     "test_plan",
     "test_code",
     "test_execution",

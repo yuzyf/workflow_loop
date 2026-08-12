@@ -300,19 +300,16 @@ def test_light_task_bypasses_full_flow_while_three_existing_routes_stay_intact(t
 
     expected_paths = {
         "from_scratch": [
-            "spec", "code_design", "spike", "acceptance_plan", "impl", "test_plan",
-            "test_code", "test_execution", "topic_acceptance", "regression_test",
+            "spec", "spike", "acceptance_plan", "impl", "qa", "topic_acceptance", "regression_test",
             "overall_acceptance", "update_code_design",
         ],
         "product_change": [
-            "project_design_init", "spec", "revise_code_design", "spike",
-            "acceptance_plan", "impl", "test_plan", "test_code", "test_execution",
+            "project_design_init", "spec", "spike", "acceptance_plan", "impl", "qa",
             "topic_acceptance", "regression_test", "overall_acceptance", "update_code_design",
         ],
         "bugfix": [
             "project_design_init", "reproduce", "spike", "acceptance_plan", "impl",
-            "test_plan", "test_code", "test_execution", "topic_acceptance", "regression_test",
-            "overall_acceptance", "update_code_design",
+            "qa", "topic_acceptance", "regression_test", "overall_acceptance", "update_code_design",
         ],
     }
     for intent, expected_path in expected_paths.items():

@@ -253,11 +253,13 @@ def test_readme_has_the_confirmed_chinese_structure_and_entries():
         "spec/产品总说明.md",
         "spec/功能_安装到项目.md",
         "spec/代码架构设计.md",
-        "DESIGN.md",
-        "CONTEXT.md",
+        "docs/adr/0001-support-native-windows-powershell.md",
+        "docs/adr/0002-fix-product-version-at-0-1-0.md",
         "需求交付追踪表.md",
     ):
         assert f"]({documentation_link})" in readme
+    assert not (ROOT / "DESIGN.md").exists()
+    assert not (ROOT / "CONTEXT.md").exists()
 
     headings = {
         line.strip()
@@ -303,8 +305,8 @@ def test_readme_has_the_confirmed_chinese_structure_and_entries():
                 "spec/产品总说明.md",
                 "spec/功能_安装到项目.md",
                 "spec/代码架构设计.md",
-                "DESIGN.md",
-                "CONTEXT.md",
+                "docs/adr/0001-support-native-windows-powershell.md",
+                "docs/adr/0002-fix-product-version-at-0-1-0.md",
                 "需求交付追踪表.md",
             ],
             "source_commands": [
