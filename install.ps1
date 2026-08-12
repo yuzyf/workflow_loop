@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 
 # ─── 固定版本与固定资产（不可变发布，不使用 latest） ───
 $ProductName = "workflow-loop"
-$ProductVersion = "0.3.1"
+$ProductVersion = "0.3.2"
 $ProductIdentity = "$ProductName $ProductVersion"
 $UvVersion = "0.11.33"
 $UvBaseUrl = "https://github.com/astral-sh/uv/releases/download/$UvVersion"
