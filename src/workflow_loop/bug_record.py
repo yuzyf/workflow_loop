@@ -12,8 +12,9 @@ from .topic import topic_paths
 
 BUG_DIR = "bug"
 BUG_INDEX = artifact_paths_mod.BUG_INDEX_DOC
-WORKFLOW_RE = re.compile(r"^-\s*工作流编号：\s*(.+?)\s*$", re.MULTILINE)
-TOPIC_RE = re.compile(r"^-\s*验收主题：\s*(.+?)\s*$", re.MULTILINE)
+# 固定字段的空白只允许在同一行；``\s*`` 会吞掉换行，导致下一字段被误读。
+WORKFLOW_RE = re.compile(r"^-[ \t]*工作流编号：[ \t]*([^\r\n]+?)[ \t]*$", re.MULTILINE)
+TOPIC_RE = re.compile(r"^-[ \t]*验收主题：[ \t]*([^\r\n]+?)[ \t]*$", re.MULTILINE)
 RESULT_SECTION_RE = re.compile(
     r"^##\s+8\.\s*修复与验收结果\s*$\n(.*?)(?=^##\s+|\Z)",
     re.MULTILINE | re.DOTALL,

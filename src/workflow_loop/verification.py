@@ -308,37 +308,102 @@ def create_validation_credential(
     )
 
 
-def compare_validation_credential(
+def compare_validation_credential_report(
     project_root: str,
     state: WorkflowState,
     stage_name: str,
-) -> tuple[bool, str]:
-    """第三道门只比较第二道门凭据，不再次调用完整校验器或测试进程。"""
+) -> diagnostics_mod.ValidationReport:
+    """返回第三道门凭据比较的逐项事实，不重新执行完整校验或测试进程。"""
+    gate_name = "用户确认前凭据比较"
+    impact = "第二道门的通过事实不能复用，当前阶段不能确认"
+    retry_action = "重新执行本阶段第二道门，生成并保存与当前责任输入一致的校验凭据"
+    report = diagnostics_mod.ValidationReport(stage=stage_name, gate=gate_name)
+
+    def add_error(
+        *,
+        check_id: str,
+        location: str,
+        expected: str,
+        actual: str,
+        evidence: str,
+        next_action: str = retry_action,
+    ) -> None:
+        report.add_error(
+            check_id=check_id,
+            location=location,
+            expected=expected,
+            actual=actual,
+            evidence=evidence,
+            impact=impact,
+            next_action=next_action,
+        )
+
     stage_state = state.stages.get(stage_name)
     credential = stage_state.validation_credential if stage_state is not None else None
     if credential is None:
-        return False, "缺少第二道门校验凭据"
-    errors: list[str] = []
+        add_error(
+            check_id=f"credential.{stage_name}.missing",
+            location=f".workflow_loop/state.json#stages.{stage_name}.validation_credential",
+            expected="存在当前阶段第二道门生成的校验凭据",
+            actual="缺少第二道门校验凭据",
+            evidence="当前阶段状态中的 validation_credential（校验凭据）为空",
+        )
+        return report
+
     if credential.workflow_id != state.workflow_id:
-        errors.append("凭据工作流编号与当前工作流不一致")
+        add_error(
+            check_id=f"credential.{stage_name}.workflow_id",
+            location=f".workflow_loop/state.json#stages.{stage_name}.validation_credential.workflow_id",
+            expected=f"当前工作流编号 {state.workflow_id!r}",
+            actual=f"凭据工作流编号 {credential.workflow_id!r}",
+            evidence="第二道门凭据所属工作流与当前活动工作流不同",
+        )
     if credential.stage != stage_name:
-        errors.append("凭据阶段与当前阶段不一致")
+        add_error(
+            check_id=f"credential.{stage_name}.stage",
+            location=f".workflow_loop/state.json#stages.{stage_name}.validation_credential.stage",
+            expected=f"当前阶段 {stage_name!r}",
+            actual=f"凭据阶段 {credential.stage!r}",
+            evidence="第二道门凭据不是在当前阶段生成",
+        )
     if credential.rules_version != VALIDATION_CREDENTIAL_RULES_VERSION:
-        errors.append(
-            f"校验规则版本已变化：凭据 {credential.rules_version}，当前 {VALIDATION_CREDENTIAL_RULES_VERSION}"
+        add_error(
+            check_id=f"credential.{stage_name}.rules_version",
+            location=f".workflow_loop/state.json#stages.{stage_name}.validation_credential.rules_version",
+            expected=f"当前校验规则版本 {VALIDATION_CREDENTIAL_RULES_VERSION!r}",
+            actual=f"凭据校验规则版本 {credential.rules_version!r}",
+            evidence="第二道门凭据使用的校验规则版本已经不是当前版本",
         )
     if not credential.result:
-        errors.append("凭据没有记录第二道门通过事实")
+        add_error(
+            check_id=f"credential.{stage_name}.result",
+            location=f".workflow_loop/state.json#stages.{stage_name}.validation_credential.result",
+            expected="凭据记录第二道门已通过",
+            actual=f"凭据 result（第二道门结果）为 {credential.result!r}",
+            evidence="当前凭据没有保存可复用的第二道门通过事实",
+        )
 
     current_paths = stage_responsibility_paths(project_root, state, stage_name)
     previous_paths = sorted(credential.bound_files)
-    if current_paths != previous_paths:
-        added = sorted(set(current_paths) - set(previous_paths))
-        removed = sorted(set(previous_paths) - set(current_paths))
-        if added:
-            errors.append(f"责任文件集合新增：{added}")
-        if removed:
-            errors.append(f"责任文件集合移除：{removed}")
+    added_paths = sorted(set(current_paths) - set(previous_paths))
+    removed_paths = sorted(set(previous_paths) - set(current_paths))
+    for path in added_paths:
+        add_error(
+            check_id=f"credential.{stage_name}.responsibility_path.added:{path}",
+            location=path,
+            expected="第二道门和确认时的责任文件集合一致",
+            actual="责任文件集合新增",
+            evidence=f"凭据文件集合不含 {path!r}，当前责任文件集合包含它",
+        )
+    for path in removed_paths:
+        add_error(
+            check_id=f"credential.{stage_name}.responsibility_path.removed:{path}",
+            location=path,
+            expected="第二道门和确认时的责任文件集合一致",
+            actual="责任文件集合移除",
+            evidence=f"凭据文件集合包含 {path!r}，当前责任文件集合不再包含它",
+        )
+
     current_snapshot = snapshots_mod.collect_snapshot(
         project_root,
         sorted(set(current_paths) | set(previous_paths)),
@@ -355,19 +420,54 @@ def compare_validation_credential(
         ("deleted", "删除"),
         ("type_changed", "类型变化"),
     ):
-        if differences[kind]:
-            errors.append(f"责任文件{label}：{differences[kind]}")
+        for path in differences[kind]:
+            # 集合新增或移除和同一路径的快照新增/删除是同一个根因；只保留
+            # 范围事实，避免 AI 看见两个看似不同的修复动作。
+            if (kind == "added" and path in added_paths) or (
+                kind == "deleted" and path in removed_paths
+            ):
+                continue
+            add_error(
+                check_id=f"credential.{stage_name}.file.{kind}:{path}",
+                location=path,
+                expected="责任文件的类型和内容与第二道门保存的快照一致",
+                actual=f"责任文件{label}",
+                evidence=f"逐文件快照比较结果：{kind}={path}",
+            )
 
     current_state = _credential_bound_state(project_root, state, stage_name)
     for key in sorted(set(credential.bound_state) | set(current_state)):
         if credential.bound_state.get(key) != current_state.get(key):
-            errors.append(
-                f"责任状态 {key} 已变化：凭据={credential.bound_state.get(key)!r}，"
-                f"当前={current_state.get(key)!r}"
+            add_error(
+                check_id=f"credential.{stage_name}.state:{key}",
+                location=(
+                    f".workflow_loop/state.json#stages.{stage_name}."
+                    f"validation_credential.bound_state.{key}"
+                ),
+                expected=f"第二道门记录的责任状态 {credential.bound_state.get(key)!r}",
+                actual=f"当前责任状态 {current_state.get(key)!r}",
+                evidence=(
+                    f"责任状态 {key} 已变化："
+                    f"凭据={credential.bound_state.get(key)!r}，"
+                    f"当前={current_state.get(key)!r}"
+                ),
             )
-    if errors:
-        return False, "；".join(errors)
-    return True, f"第二道门凭据有效：{credential.result_hash}"
+    return report
+
+
+def compare_validation_credential(
+    project_root: str,
+    state: WorkflowState,
+    stage_name: str,
+) -> tuple[bool, str]:
+    """兼容旧调用者的字符串入口；门禁命令应使用结构化报告入口。"""
+    report = compare_validation_credential_report(project_root, state, stage_name)
+    if report.passed:
+        stage_state = state.stages.get(stage_name)
+        credential = stage_state.validation_credential if stage_state is not None else None
+        result_hash = credential.result_hash if credential is not None else ""
+        return True, f"第二道门凭据有效：{result_hash}"
+    return False, diagnostics_mod.format_diagnostics(report)
 
 
 def _hash_file_path(full_path: str) -> str:
@@ -423,7 +523,13 @@ def compute_project_file_hashes(
             if item.exists and item.file_type == "file" and item.content_hash
         }
 
-    excluded_roots = {
+    return compute_complete_implementation_file_hashes(project_root)
+
+
+def compute_complete_implementation_file_hashes(project_root: str) -> dict[str, str]:
+    """扫描完整实施范围，不受活动工作流登记路径收窄。"""
+
+    always_excluded_roots = {
         ".git",
         ".workflow_loop",
         ".venv",
@@ -435,6 +541,8 @@ def compute_project_file_hashes(
         ".next",
         ".idea",
         ".vscode",
+    }
+    managed_document_roots = {
         "spec",
         "acceptance",
         "qa",
@@ -445,7 +553,10 @@ def compute_project_file_hashes(
     _, test_entry_path = _project_test_entry(project_root)
     hashes: dict[str, str] = {}
     for root, dirs, files in os.walk(project_root):
-        dirs[:] = [directory for directory in dirs if directory not in excluded_roots]
+        excluded_here = set(always_excluded_roots)
+        if os.path.realpath(root) == os.path.realpath(project_root):
+            excluded_here.update(managed_document_roots)
+        dirs[:] = [directory for directory in dirs if directory not in excluded_here]
         for filename in files:
             relative_path = os.path.relpath(os.path.join(root, filename), project_root)
             normalized = relative_path.replace(os.sep, "/")
@@ -583,6 +694,35 @@ def compute_registered_file_snapshot(
     return snapshots_mod.collect_snapshot(project_root, paths).to_dict()
 
 
+def compute_complete_implementation_file_snapshot(
+    project_root: str,
+    *,
+    scope: str = "all",
+) -> dict[str, object]:
+    """保存完整实施范围的逐文件事实；只用于 impl 的入场和回退基线。"""
+    if scope not in {"product", "test", "all"}:
+        raise ValueError(f"未知快照范围：{scope}")
+    paths = list(compute_complete_implementation_file_hashes(project_root))
+    _, test_entry_path = _project_test_entry(project_root)
+    if scope != "all":
+        selected: list[str] = []
+        for path in paths:
+            filename = os.path.basename(path)
+            suffix = os.path.splitext(filename)[1].lower()
+            is_test = _is_test_path(path) or _is_standalone_test_config(
+                path,
+                test_entry_path,
+            )
+            shared_config = filename in CONFIG_NAMES or suffix in CONFIG_SUFFIXES
+            if (
+                (scope == "test" and (is_test or shared_config))
+                or (scope == "product" and (not is_test or shared_config))
+            ):
+                selected.append(path)
+        paths = selected
+    return snapshots_mod.collect_snapshot(project_root, paths).to_dict()
+
+
 def compare_registered_file_snapshot(
     project_root: str,
     baseline: object,
@@ -592,6 +732,22 @@ def compare_registered_file_snapshot(
     """比较当前登记文件与已保存逐文件基线。"""
     current = snapshots_mod.snapshot_from_dict(
         compute_registered_file_snapshot(project_root, scope=scope)
+    )
+    if baseline is None:
+        return snapshots_mod.compare_snapshots(None, current)
+    previous = snapshots_mod.snapshot_from_dict(baseline)
+    return snapshots_mod.compare_snapshots(previous, current)
+
+
+def compare_complete_implementation_file_snapshot(
+    project_root: str,
+    baseline: object,
+    *,
+    scope: str,
+) -> dict[str, list[str]]:
+    """比较完整实施范围，包含基线后新增、删除和修改的文件。"""
+    current = snapshots_mod.snapshot_from_dict(
+        compute_complete_implementation_file_snapshot(project_root, scope=scope)
     )
     if baseline is None:
         return snapshots_mod.compare_snapshots(None, current)

@@ -20,11 +20,13 @@ from workflow_loop.verification import (
     compute_product_design_hash, compute_code_design_hash,
     get_linked_product_design_paths, check_invalidation, clear_stage_gates,
     clear_completed_material_recovery, recovery_stage_action,
+    compute_complete_implementation_file_hashes,
     compute_registered_file_snapshot, compute_document_snapshot,
     compute_test_plan_document_snapshot, compute_acceptance_plan_document_snapshot,
     test_tasks_payload as _test_tasks_payload,
     inspect_invalidation, apply_invalidation,
     create_validation_credential, compare_validation_credential,
+    compare_validation_credential_report,
 )
 
 
@@ -232,6 +234,42 @@ def test_spike_credential_detects_pending_registration_change_after_gate_two(tmp
     valid, detail = compare_validation_credential(str(tmp_path), state, "spike")
     assert valid is False
     assert "pending_spike_assets_hash" in detail
+
+
+def test_credential_report_keeps_each_independent_change_as_a_separate_fact(tmp_path):
+    """第三道门不能把凭据字段、文件和状态变化拼成一条分号字符串。"""
+    state, script = _spike_credential_state(tmp_path)
+    credential = create_validation_credential(
+        str(tmp_path),
+        state,
+        "spike",
+        "穿刺结论和资产校验通过",
+    )
+    state.stages["spike"].validation_credential = credential
+
+    # 三种互不依赖的变化应保留为三项可处理事实。
+    script.write_text("print('changed after gate two')\n", encoding="utf-8")
+    state.meta["pending_spike_assets"]["items"][0]["purpose"] = "替换后的用途"
+    state.stages["spike"].validation_credential = credential.__class__(
+        **{**credential.__dict__, "rules_version": "old-rules"}
+    )
+
+    report = compare_validation_credential_report(str(tmp_path), state, "spike")
+
+    assert report.passed is False
+    assert len(report.diagnostics) == 3
+    assert {item.check_id for item in report.diagnostics} == {
+        "credential.spike.rules_version",
+        "credential.spike.state:pending_spike_assets_hash",
+        "credential.spike.state:spike_asset_files_hash",
+    }
+    for item in report.diagnostics:
+        assert item.location
+        assert item.expected
+        assert item.actual
+        assert item.evidence
+        assert item.impact
+        assert "workflow gate" not in item.next_action
 
 
 def test_product_design_hash_uses_only_linked_feature_documents(tmp_path):
@@ -557,6 +595,25 @@ def test_active_snapshot_without_registered_paths_does_not_guess_core_code(tmp_p
     dependency.write_text("two\n", encoding="utf-8")
 
     assert compute_non_test_code_snapshot_hash(str(tmp_path)) == baseline
+
+
+def test_complete_implementation_inventory_ignores_generated_roots_not_nested_source(
+    tmp_path,
+):
+    """完整观察范围排除顶层流程/依赖目录，但不能漏掉源码中的同名目录。"""
+    create_project(str(tmp_path))
+    nested_source = tmp_path / "src" / "impl" / "engine.py"
+    process_document = tmp_path / "impl" / "执行记录.py"
+    dependency = tmp_path / "node_modules" / "pkg" / "index.py"
+    for path in (nested_source, process_document, dependency):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("value = 1\n", encoding="utf-8")
+
+    inventory = compute_complete_implementation_file_hashes(str(tmp_path))
+
+    assert "src/impl/engine.py" in inventory
+    assert "impl/执行记录.py" not in inventory
+    assert "node_modules/pkg/index.py" not in inventory
 
 
 def test_test_snapshot_uses_only_test_plan_entries_and_registered_runner(tmp_path):
@@ -1310,6 +1367,17 @@ def test_check_invalidation_acceptance_plan_changed(tmp_path):
     # 写入原始 acceptance plan
     with open(os.path.join(acc_dir, "test_topic_验收计划.md"), "w") as f:
         f.write("original")
+    with open(os.path.join(acc_dir, "索引.md"), "w") as f:
+        f.write(
+            """# 验收索引
+
+## test
+
+| 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
+|---|---|---|---|---|
+| 1 | test_topic | 无 | [计划](./test_topic_验收计划.md) | `./test_topic_验收结果.md`（待生成） |
+"""
+        )
     # 计算 acceptance_plan 哈希
     ap_hash = compute_acceptance_plan_hash(str(tmp_path), "test_topic")
     # 构造 state，绑定 acceptance_plan_hash
@@ -1413,7 +1481,7 @@ def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
 
 | 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
 |---|---|---|---|---|
-| 1 | test_topic | 无 | [计划](./test_topic_验收计划.md) | 待生成 |
+| 1 | test_topic | 无 | [计划](./test_topic_验收计划.md) | `./test_topic_验收结果.md`（待生成） |
 """,
         encoding="utf-8",
     )
@@ -1439,8 +1507,8 @@ def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
 
 | 展示顺序 | 验收主题 | 前置主题 | 验收计划 | 主题验收结果 |
 |---|---|---|---|---|
-| 1 | test_topic | 无 | [计划](./test_topic_验收计划.md) | 待生成 |
-| 2 | new_topic | 无 | [计划](./new_topic_验收计划.md) | 待生成 |
+| 1 | test_topic | 无 | [计划](./test_topic_验收计划.md) | `./test_topic_验收结果.md`（待生成） |
+| 2 | new_topic | 无 | [计划](./new_topic_验收计划.md) | `./new_topic_验收结果.md`（待生成） |
 """,
         encoding="utf-8",
     )

@@ -13,6 +13,7 @@ from workflow_loop import rollback
 from workflow_loop import spike_reuse
 from workflow_loop import state as state_mod
 from workflow_loop import traceability as traceability_mod
+from workflow_loop import diagnostics as diagnostics_mod
 from workflow_loop.stages.base import clean_spike_tmp, plan_spike_tmp_cleanup
 
 
@@ -303,8 +304,12 @@ def _patch_spike_confirmation_dependencies(monkeypatch, root: Path) -> None:
     monkeypatch.setattr(cli_mod, "compute_stage_material_hash", lambda _root, _stage: "materials")
     monkeypatch.setattr(
         cli_mod.verification_mod,
-        "compare_validation_credential",
-        lambda _root, _state, _stage: (True, "凭据有效"),
+        "compare_validation_credential_report",
+        lambda _root, _state, stage: diagnostics_mod.ValidationReport(
+            stage=stage,
+            gate="用户确认前凭据比较",
+            passed=True,
+        ),
     )
     monkeypatch.setattr(cli_mod, "_register_stage_artifact_keys", lambda *_args: {})
     monkeypatch.setattr(cli_mod, "apply_stage_completion_updates", lambda *_args: [])

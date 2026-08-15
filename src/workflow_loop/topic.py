@@ -7,6 +7,18 @@ from .state import load_state
 from .topic_relations import read_topic_index
 
 
+# 固定字段只接受冒号后的同一行内容。这里不能使用 ``\s*``，否则空字段会
+# 跨过换行把下一字段误当成值。
+WORKFLOW_FIELD_RE = re.compile(
+    r"^-[ \t]*工作流编号：[ \t]*([^\r\n]+?)[ \t]*$",
+    re.MULTILINE,
+)
+TOPIC_FIELD_RE = re.compile(
+    r"^-[ \t]*验收主题：[ \t]*([^\r\n]+?)[ \t]*$",
+    re.MULTILINE,
+)
+
+
 def topic_file_key(project_root: str, topic: str) -> str:
     """取得验收主题的稳定文件标识：优先项目映射，缺少时确定性生成（不保存）。
 
@@ -38,14 +50,11 @@ def list_acceptance_index_topics(
     effective_workflow_id = workflow_id or (state.workflow_id if state is not None else None)
     if effective_workflow_id is None:
         return []
-    try:
-        relations = read_topic_index(
-            project_root,
-            artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
-            effective_workflow_id,
-        )
-    except ValueError:
-        return []
+    relations = read_topic_index(
+        project_root,
+        artifact_paths_mod.ACCEPTANCE_INDEX_DOC,
+        effective_workflow_id,
+    )
     return [relation.topic for relation in relations]
 
 
@@ -65,10 +74,10 @@ def list_reproduce_topics(project_root: str, workflow_id: str | None = None) -> 
         with open(os.path.join(bug_dir, filename), "r", encoding="utf-8") as f:
             content = f.read()
         if workflow_id is not None:
-            workflow_match = re.search(r"^-\s*工作流编号：\s*(.+?)\s*$", content, re.MULTILINE)
+            workflow_match = WORKFLOW_FIELD_RE.search(content)
             if workflow_match is None or workflow_match.group(1).strip() != workflow_id:
                 continue
-        topic_match = re.search(r"^-\s*验收主题：\s*(.+?)\s*$", content, re.MULTILINE)
+        topic_match = TOPIC_FIELD_RE.search(content)
         if topic_match is not None:
             topics.append(topic_match.group(1).strip())
     return topics

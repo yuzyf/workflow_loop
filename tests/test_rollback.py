@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -8,7 +9,10 @@ import pytest
 from workflow_loop import project as project_mod
 from workflow_loop import rollback
 from workflow_loop.state import GateState, StageState, WorkflowState
-from workflow_loop.verification import compute_non_test_code_snapshot_hash
+from workflow_loop.verification import (
+    compute_complete_implementation_file_snapshot,
+    compute_non_test_code_snapshot_hash,
+)
 
 
 BACKUP_TOPIC = "项目修改可恢复且正式测试结果来自真实执行"
@@ -43,9 +47,18 @@ def _append_impl_record(root: Path, paths: list[str]) -> None:
     for path in paths:
         content = (root / path).read_text(encoding="utf-8")
         location = next(
-            (line.strip() for line in content.splitlines() if line.strip()),
-            path,
+            (
+                line.removeprefix("def ").split("(", 1)[0].strip()
+                for line in content.splitlines()
+                if line.startswith("def ")
+            ),
+            None,
         )
+        if location is None:
+            location = next(
+                (line.strip() for line in content.splitlines() if line.strip()),
+                path,
+            )
         rows.append(
             f"| {path} | `{location}` | 将该位置更新为实施后的真实内容 | "
             "读取文件可观察到该位置的当前输出 | AC-01 |"
@@ -97,6 +110,12 @@ def _impl_state(root: Path, paths: list[str]) -> WorkflowState:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _freeze_complete_impl_inventory(root: Path, state: WorkflowState) -> None:
+    state.meta[rollback.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY] = (
+        compute_complete_implementation_file_snapshot(str(root), scope="all")
+    )
 
 
 def _git(root: Path, *arguments: str) -> None:
@@ -203,6 +222,165 @@ def test_adjusted_plan_accepts_unsampled_file_equal_to_clean_git_head(tmp_path):
     assert "src/helper.py" in manifest["core_registered_paths"]
 
 
+def test_adjusted_plan_recovers_changed_sampled_file_from_matching_git_head(tmp_path):
+    """旧清单已有原始哈希时，可从哈希一致的 HEAD 补回修改前副本。"""
+    app = tmp_path / "src" / "app.py"
+    helper = tmp_path / "src" / "helper.py"
+    _write(app, "old app\n")
+    _write(helper, "old helper\n")
+    _commit_code_baseline(tmp_path, "src/app.py", "src/helper.py")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    _write(
+        tmp_path / "spec" / "代码架构设计.md",
+        """## 6. 各产品功能的代码设计
+
+| 图中步骤 | 代码位置 |
+|---|---|
+| 辅助逻辑 | `src/helper.py::run` |
+""",
+    )
+    rollback.prepare_impl(str(tmp_path), state)
+    manifest_path = tmp_path / state.rollback.manifest_path
+    first = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert first["initial_inventory"]["src/helper.py"] == _sha256(helper)
+    assert "src/helper.py" not in first["entries"]
+
+    helper.write_text("implemented helper\n", encoding="utf-8")
+    _impl_document(tmp_path, ["src/app.py", "src/helper.py"])
+    detail, paths = rollback.prepare_impl(str(tmp_path), state)
+    second = json.loads(manifest_path.read_text(encoding="utf-8"))
+    helper_entry = second["entries"]["src/helper.py"]
+    helper_backup = manifest_path.parent / helper_entry["backup_path"]
+
+    assert "完整" in detail
+    assert paths == ["src/app.py", "src/helper.py"]
+    assert helper_backup.read_bytes() == b"old helper\n"
+    assert helper_entry["content_hash"] == first["initial_inventory"]["src/helper.py"]
+    assert helper.read_text(encoding="utf-8") == "implemented helper\n"
+
+    restored = rollback.restore(str(tmp_path), state)
+
+    assert "src/helper.py" in restored
+    assert helper.read_text(encoding="utf-8") == "old helper\n"
+
+
+def test_adjusted_plan_reports_initial_and_head_hash_when_they_differ(tmp_path):
+    """HEAD 已变化时，失败原因必须同时给出首次清单和 HEAD 的真实哈希。"""
+    app = tmp_path / "src" / "app.py"
+    helper = tmp_path / "src" / "helper.py"
+    _write(app, "old app\n")
+    _write(helper, "old helper\n")
+    _commit_code_baseline(tmp_path, "src/app.py", "src/helper.py")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    _write(
+        tmp_path / "spec" / "代码架构设计.md",
+        """## 6. 各产品功能的代码设计
+
+| 图中步骤 | 代码位置 |
+|---|---|
+| 辅助逻辑 | `src/helper.py::run` |
+""",
+    )
+    rollback.prepare_impl(str(tmp_path), state)
+    initial_hash = json.loads(
+        (tmp_path / state.rollback.manifest_path).read_text(encoding="utf-8")
+    )["initial_inventory"]["src/helper.py"]
+
+    helper.write_text("new committed helper\n", encoding="utf-8")
+    _git(tmp_path, "add", "--", "src/helper.py")
+    _git(tmp_path, "commit", "-m", "move helper head")
+    head_hash = _sha256(helper)
+    helper.write_text("implemented helper\n", encoding="utf-8")
+    _impl_document(tmp_path, ["src/app.py", "src/helper.py"])
+
+    with pytest.raises(ValueError) as error:
+        rollback.prepare_impl(str(tmp_path), state)
+
+    detail = str(error.value)
+    assert f"首次清单 SHA-256={initial_hash}" in detail
+    assert f"Git HEAD SHA-256={head_hash}" in detail
+    assert "两个哈希不一致" in detail
+    assert "没有未提交差异且当前字节与 HEAD 完全一致" not in detail
+
+
+def test_reprepare_rejects_a_manifest_changed_without_state_hash_update(tmp_path):
+    """补副本前必须先验证旧清单原始字节仍与状态中的清单哈希一致。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "old app\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    manifest_path = tmp_path / state.rollback.manifest_path
+    manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="清单哈希与 state.json 不一致"):
+        rollback.prepare_impl(str(tmp_path), state)
+
+
+def test_reprepare_reports_invalid_initial_inventory_structure(tmp_path):
+    """哈希已同步但结构损坏时，应给字段原因而不是泄漏 Python 类型异常。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "old app\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    manifest_path = tmp_path / state.rollback.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["initial_inventory"] = []
+    rollback._write_manifest(str(tmp_path), state, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match=r"initial_inventory（初始文件哈希表）必须是对象",
+    ):
+        rollback.prepare_impl(str(tmp_path), state)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows Git 不保留 POSIX 可执行位")
+def test_adjusted_plan_preserves_clean_executable_mode_from_git_head(tmp_path):
+    """Git 普通可执行文件可补副本，并保留 HEAD 的 100755 模式。"""
+    app = tmp_path / "src" / "app.py"
+    helper = tmp_path / "scripts" / "helper.sh"
+    _write(app, "old app\n")
+    _write(helper, "#!/bin/sh\nexit 0\n")
+    helper.chmod(0o755)
+    _commit_code_baseline(tmp_path, "src/app.py", "scripts/helper.sh")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+
+    _impl_document(tmp_path, ["src/app.py", "scripts/helper.sh"])
+    rollback.prepare_impl(str(tmp_path), state)
+    manifest = json.loads(
+        (tmp_path / state.rollback.manifest_path).read_text(encoding="utf-8")
+    )
+
+    assert manifest["entries"]["scripts/helper.sh"]["mode"] == 0o755
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows 创建 Git 符号链接需要额外权限")
+def test_adjusted_plan_rejects_git_head_symlink_blob_as_a_file_baseline(tmp_path):
+    """HEAD 的 120000 链接对象不能被当作普通文件原文写入回退副本。"""
+    app = tmp_path / "src" / "app.py"
+    target = tmp_path / "src" / "target.py"
+    helper = tmp_path / "src" / "helper.py"
+    _write(app, "old app\n")
+    _write(target, "target\n")
+    helper.symlink_to("target.py")
+    _commit_code_baseline(tmp_path, "src/app.py", "src/helper.py", "src/target.py")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+
+    helper.unlink()
+    helper.write_text("target.py", encoding="utf-8")
+    _impl_document(tmp_path, ["src/app.py", "src/helper.py"])
+
+    with pytest.raises(ValueError) as error:
+        rollback.prepare_impl(str(tmp_path), state)
+
+    detail = str(error.value)
+    assert "Git HEAD 文件模式=120000（符号链接）" in detail
+    assert "不能把链接目标文字当作文件原文" in detail
+
+
 def test_adjusted_plan_rejects_unsampled_untracked_file_even_inside_git_repo(tmp_path):
     """Git 仓库中的未跟踪文件也不能被倒推成实施前原内容。"""
     app = tmp_path / "src" / "app.py"
@@ -293,7 +471,7 @@ def test_impl_reentry_allows_only_unchanged_confirmed_test_files(tmp_path):
     rollback.prepare_impl(str(tmp_path), state)
     rollback.prepare_test_code_baseline(str(tmp_path), state)
 
-    app.write_text("implemented\n", encoding="utf-8")
+    app.write_text("def run():\n    return 'implemented'\n", encoding="utf-8")
     test_file.write_text("confirmed test\n", encoding="utf-8")
     _append_impl_record(tmp_path, ["src/app.py"])
     rollback.finalize_test_code_changes(str(tmp_path), state)
@@ -338,7 +516,7 @@ def test_impl_reentry_ignores_unchanged_unplanned_test_baseline_before_confirmat
     manifest.pop("core_registered_paths")
     rollback._write_manifest(str(tmp_path), state, manifest)
 
-    app.write_text("implemented\n", encoding="utf-8")
+    app.write_text("def run():\n    return 'implemented'\n", encoding="utf-8")
     _append_impl_record(tmp_path, ["src/app.py"])
 
     valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
@@ -397,6 +575,180 @@ def test_planned_actual_and_recorded_implementation_paths_must_match(tmp_path):
     assert "实施后记录列出但没有真实差异" in detail
 
 
+def test_implementation_change_report_keeps_each_path_and_record_location(tmp_path):
+    """三方核对报告逐文件给出可处理事实，不能把路径列表塞回一条错误文字。"""
+    planned_only = tmp_path / "src" / "planned_only.py"
+    actual_unrecorded = tmp_path / "src" / "actual_unrecorded.py"
+    recorded_without_change = tmp_path / "src" / "recorded_without_change.py"
+    outside_plan = tmp_path / "src" / "outside_plan.py"
+    for path in (planned_only, actual_unrecorded, recorded_without_change, outside_plan):
+        _write(path, "before\n")
+    state = _impl_state(
+        tmp_path,
+        [
+            "src/planned_only.py",
+            "src/actual_unrecorded.py",
+            "src/recorded_without_change.py",
+        ],
+    )
+    _write(
+        tmp_path / "spec" / "代码架构设计.md",
+        """## 6. 各产品功能的代码设计
+
+| 图中步骤 | 代码位置 |
+|---|---|
+| 计划外核心路径 | `src/outside_plan.py::run` |
+""",
+    )
+    rollback.prepare_impl(str(tmp_path), state)
+    actual_unrecorded.write_text("after\n", encoding="utf-8")
+    outside_plan.write_text("after\n", encoding="utf-8")
+    _append_impl_record(
+        tmp_path,
+        ["src/recorded_without_change.py", "src/outside_plan.py"],
+    )
+
+    report = rollback.validate_implementation_changes_report(str(tmp_path), state)
+
+    assert report.passed is False
+    facts = {(item.check_id, item.location, item.actual) for item in report.errors}
+    assert any(
+        check_id == "impl.implementation_relation.planned_but_unchanged"
+        and "src/planned_only.py" in actual
+        and "impl/上传文件_实施记录.md:" in location
+        for check_id, location, actual in facts
+    )
+    assert any(
+        check_id == "impl.implementation_relation.actual_outside_plan"
+        and location.startswith("src/outside_plan.py")
+        and "src/outside_plan.py" in actual
+        for check_id, location, actual in facts
+    )
+    assert any(
+        check_id == "impl.implementation_relation.actual_unrecorded"
+        and location.startswith("src/actual_unrecorded.py")
+        and "src/actual_unrecorded.py" in actual
+        for check_id, location, actual in facts
+    )
+    assert any(
+        check_id == "impl.implementation_relation.recorded_without_change"
+        and "impl/上传文件_实施记录.md:" in location
+        and "src/recorded_without_change.py" in actual
+        for check_id, location, actual in facts
+    )
+    assert all("['src/" not in item.actual for item in report.errors)
+
+
+def test_invalid_record_path_blocks_only_the_dependent_set_comparison(tmp_path):
+    """记录文件列无效时保留真实行列，三方集合只能明确标为未检查。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "def run():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    app.write_text("def run():\n    return 'after'\n", encoding="utf-8")
+    document = tmp_path / "impl" / "上传文件_实施记录.md"
+    document.write_text(
+        document.read_text(encoding="utf-8")
+        + """
+
+## 3. 实施后记录
+
+### 3.1 实际代码修改
+
+| 文件 | 类、函数或配置项 | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 对应验收条件 |
+| --- | --- | --- | --- | --- |
+| 暂无 | 暂无 | 暂无 | 暂无 | 暂无 |
+""",
+        encoding="utf-8",
+    )
+
+    report = rollback.validate_implementation_changes_report(str(tmp_path), state)
+
+    assert report.passed is False
+    assert len(report.errors) == 1
+    path_error = report.errors[0]
+    assert path_error.check_id == "impl.implementation_record.path_invalid"
+    assert path_error.location.endswith("，“文件”列")
+    assert "实施后记录的“文件”列" in path_error.actual
+    assert "代码修改计划包含" not in path_error.actual
+    assert len(report.not_checked) == 1
+    relation = report.not_checked[0]
+    assert relation.check_id == "impl.implementation_relation.not_checked"
+    assert relation.depends_on == (path_error.check_id,)
+    assert "实际差异文件=['src/app.py']" in relation.evidence
+
+
+def test_complete_inventory_reports_unregistered_modified_and_new_files(tmp_path):
+    """观察全集独立于计划集合，未登记旧文件和新测试文件都必须被发现。"""
+    app = tmp_path / "src" / "app.py"
+    hidden = tmp_path / "src" / "hidden.py"
+    new_test = tmp_path / "tests" / "test_new.py"
+    _write(app, "def run():\n    return 'before'\n")
+    _write(hidden, "def hidden():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    _freeze_complete_impl_inventory(tmp_path, state)
+    rollback.prepare_impl(str(tmp_path), state)
+
+    app.write_text("def run():\n    return 'after'\n", encoding="utf-8")
+    hidden.write_text("def hidden():\n    return 'after'\n", encoding="utf-8")
+    _write(new_test, "def test_new():\n    assert True\n")
+    _append_impl_record(
+        tmp_path,
+        ["src/app.py", "src/hidden.py", "tests/test_new.py"],
+    )
+
+    report = rollback.validate_implementation_changes_report(str(tmp_path), state)
+
+    assert report.passed is False
+    outside_plan = [
+        item
+        for item in report.errors
+        if item.check_id == "impl.implementation_relation.actual_outside_plan"
+    ]
+    assert [item.location.split("（", 1)[0] for item in outside_plan] == [
+        "src/hidden.py",
+        "tests/test_new.py",
+    ]
+    assert all("恢复该文件到实施前内容" in item.next_action for item in outside_plan)
+
+
+def test_complete_inventory_detects_deleted_unregistered_file_and_blocks_restore(
+    tmp_path,
+):
+    """完整基线中的未登记文件被删除时，中止不能假装已安全恢复。"""
+    app = tmp_path / "src" / "app.py"
+    hidden = tmp_path / "src" / "hidden.py"
+    _write(app, "def run():\n    return 'before'\n")
+    _write(hidden, "def hidden():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    _freeze_complete_impl_inventory(tmp_path, state)
+    rollback.prepare_impl(str(tmp_path), state)
+    hidden.unlink()
+
+    manifest = json.loads(
+        (tmp_path / state.rollback.manifest_path).read_text(encoding="utf-8")
+    )
+    assert rollback.changed_paths_since_prepare(str(tmp_path), manifest) == [
+        "src/hidden.py"
+    ]
+    with pytest.raises(ValueError, match="src/hidden.py"):
+        rollback.restore(str(tmp_path), state)
+
+
+def test_prepare_rejects_unregistered_change_after_impl_entry(tmp_path):
+    """入场到保存副本之间修改未登记文件，不能把修改后内容当成原内容。"""
+    app = tmp_path / "src" / "app.py"
+    hidden = tmp_path / "src" / "hidden.py"
+    _write(app, "def run():\n    return 'before'\n")
+    _write(hidden, "def hidden():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    _freeze_complete_impl_inventory(tmp_path, state)
+    hidden.write_text("def hidden():\n    return 'changed too early'\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"修改=\['src/hidden.py'\]"):
+        rollback.prepare_impl(str(tmp_path), state)
+
+
 def test_legacy_manifest_does_not_invent_changes_for_unrecorded_core_paths(tmp_path):
     """旧清单没有采样的路径不得因新版登记范围扩大而被倒推成新增。"""
     app = tmp_path / "src" / "app.py"
@@ -434,7 +786,7 @@ def test_legacy_manifest_does_not_invent_changes_for_unrecorded_core_paths(tmp_p
 def test_existing_implementation_checks_plan_record_and_real_files(tmp_path):
     """既有代码例外只核对计划、记录和当前文件，不声称比较基线差异。"""
     app = tmp_path / "src" / "app.py"
-    _write(app, "already implemented\n")
+    _write(app, "def run():\n    return 'already implemented'\n")
     state = _impl_state(tmp_path, ["src/app.py"])
     _append_impl_record(tmp_path, ["src/app.py"])
 
@@ -450,12 +802,25 @@ def test_existing_implementation_checks_plan_record_and_real_files(tmp_path):
 
 
 def test_implementation_record_reports_every_invalid_row_fact_at_once(tmp_path):
-    """同一记录行中的假位置、占位内容和错误 AC 必须一次全部报告。"""
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-08 实施记录一行的全部真实错误一次说清
+    验收条件：AC-05 代码位置泛称指出文件内可定位名称规则
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate impl` 的实施记录与真实代码核对
+    测试入口：`tests/test_rollback.py::test_implementation_record_reports_every_invalid_row_fact_at_once`
+    代码入口：`src/workflow_loop/rollback.py::validate_implementation_changes_report`
+    准备数据：建立真实修改文件 `src/app.py`，实施后记录同一行写入位置泛称“组件”、逻辑占位值、输出占位值和不存在的 AC-99。
+    执行动作：执行实施变化三方核对。
+    关键断言：同一次输出定位实施记录文件和错误行，显示目标代码文件与“组件”原值，说明必须改为文件内真实函数名、类名或配置项；同一行其它独立错误也全部出现。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需包含记录位置、原值、真实名称规则、两个占位错误和 AC 错误。
+    """
     app = tmp_path / "src" / "app.py"
-    _write(app, "def run():\n    return 'before'\n")
+    _write(app, "# 组件不是代码符号\ndef run():\n    return 'before'\n")
     state = _impl_state(tmp_path, ["src/app.py"])
     rollback.prepare_impl(str(tmp_path), state)
-    _write(app, "def run():\n    return 'after'\n")
+    _write(app, "# 组件不是代码符号\ndef run():\n    return 'after'\n")
     document = tmp_path / "impl" / "上传文件_实施记录.md"
     document.write_text(
         document.read_text(encoding="utf-8")
@@ -467,7 +832,7 @@ def test_implementation_record_reports_every_invalid_row_fact_at_once(tmp_path):
 
 | 文件 | 类、函数或配置项 | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 对应验收条件 |
 | --- | --- | --- | --- | --- |
-| src/app.py | `missing_symbol` | TODO | 符合预期 | AC-99 |
+| src/app.py | 组件 | TODO | 符合预期 | AC-99 |
 """,
         encoding="utf-8",
     )
@@ -476,12 +841,34 @@ def test_implementation_record_reports_every_invalid_row_fact_at_once(tmp_path):
 
     assert valid is False
     assert "impl/上传文件_实施记录.md" in detail
-    assert "missing_symbol" in detail
+    assert "记录位置='组件'" in detail
     assert "代码位置无法在当前文件中定位" in detail
+    assert "必须填写目标文件内可定位的真实函数名、类名或配置项" in detail
+    assert "“组件”等泛称无效" in detail
     assert "实际修改的代码逻辑使用占位内容" in detail
     assert "数据、状态或输出的实际变化使用占位内容" in detail
     assert "AC-99" in detail
     assert "验收计划中不存在" in detail
+
+
+def test_code_location_requires_a_real_declaration_not_a_comment(tmp_path):
+    """位置列中的真实函数名可以通过，注释里的同名泛称不能通过。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "# component is only a comment\ndef run():\n    return True\n")
+
+    assert rollback._location_exists(str(tmp_path), "src/app.py", "run") is True
+    assert rollback._location_exists(str(tmp_path), "src/app.py", "component") is False
+
+
+def test_document_location_requires_an_exact_markdown_heading(tmp_path):
+    """模板和规范文件可用真实标题定位，普通段落里的同词不能通过。"""
+    document = tmp_path / "docs" / "rules.md"
+    _write(document, "# 工作规范\n\n## 门禁失败信息\n\n诊断只是普通段落文字。\n")
+
+    assert rollback._location_exists(
+        str(tmp_path), "docs/rules.md", "门禁失败信息"
+    ) is True
+    assert rollback._location_exists(str(tmp_path), "docs/rules.md", "诊断") is False
 
 
 def test_tampered_backup_blocks_restore_before_project_change(tmp_path):

@@ -46,6 +46,7 @@ from ..verification import (
     get_linked_product_design_paths,
 )
 from .. import rollback as rollback_mod
+from .. import verification as verification_mod
 from .base import StageStrategy, clean_spike_tmp
 
 
@@ -274,17 +275,25 @@ class AcceptancePlanStage(StageStrategy):
             errors.append("验收计划文档内容：未检查：无法确定当前工作流和主题")
             return _validation_result(errors, "验收计划文档完整")
 
-        if state.intent == "bugfix":
-            topics = current_workflow_topics(project_root)
-            if not topics:
-                errors.append("修 bug 的验收主题必须先在缺陷复现阶段确定")
-        else:
-            # 当前 Run 已记录主题时复核这些主题；否则从历史中排除旧主题，找本次新增主题。
-            topics = current_workflow_topics(project_root) or candidate_topics(project_root)
-        if not topics:
+        topic_index_error: str | None = None
+        try:
+            if state.intent == "bugfix":
+                topics = current_workflow_topics(project_root)
+                if not topics:
+                    errors.append("修 bug 的验收主题必须先在缺陷复现阶段确定")
+            else:
+                # 当前 Run 已记录主题时复核这些主题；否则从历史中排除旧主题，找本次新增主题。
+                topics = current_workflow_topics(project_root) or candidate_topics(project_root)
+        except ValueError as exc:
+            topics = []
+            topic_index_error = str(exc)
+            errors.append(f"验收主题索引：{topic_index_error}")
+        if not topics and topic_index_error is None:
             errors.append("没有找到本次新增的验收主题；主题名称不能复用项目历史中的名称")
         if not acc_dir_exists:
             errors.append("验收计划文档校验：未检查：acceptance/ 目录不存在")
+        elif topic_index_error is not None:
+            errors.append("验收计划文档校验：未检查：验收主题索引无法解析")
         elif not topics:
             errors.append("验收计划文档校验：未检查：没有可校验的验收主题")
         else:
@@ -601,8 +610,43 @@ class ImplStage(StageStrategy):
         if stage_state is None or stage_state.code_baseline_hash is None:
             errors.append("缺少进入 impl 时的代码基线，不能确认计划前没有修改代码")
             return _validation_result(errors, "全部验收主题的实施前计划已就绪，代码尚未修改")
+        complete_snapshot = workflow_state.meta.get(
+            rollback_mod.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY
+        )
+        complete_differences: dict[str, list[str]] | None = None
+        complete_changed_paths: list[str] = []
+        if isinstance(complete_snapshot, dict):
+            try:
+                complete_differences = (
+                    verification_mod.compare_complete_implementation_file_snapshot(
+                        project_root,
+                        complete_snapshot,
+                        scope="all",
+                    )
+                )
+            except (OSError, ValueError) as exc:
+                errors.append(
+                    "完整实施范围基线无法比较；"
+                    f"未检查未登记源码、测试、脚本和配置是否变化：{exc}"
+                )
+            else:
+                complete_changed_paths = sorted(
+                    {
+                        path
+                        for category, paths in complete_differences.items()
+                        if category != "not_checked"
+                        for path in paths
+                    }
+                )
         current_hash = compute_non_test_code_snapshot_hash(project_root)
-        if current_hash == stage_state.code_baseline_hash:
+        complete_scope_unchanged = (
+            complete_differences is not None and not complete_changed_paths
+        )
+        legacy_scope_only = not isinstance(complete_snapshot, dict)
+        if (
+            current_hash == stage_state.code_baseline_hash
+            and (complete_scope_unchanged or legacy_scope_only)
+        ):
             return _validation_result(errors, "全部验收主题的实施前计划已就绪，代码尚未修改")
         # 实施中重新确认计划：已经保存首次原内容且全部实际变化都在计划内时，
         # 允许在代码已变化的情况下重新通过讨论门（不覆盖首次副本）。
@@ -622,15 +666,80 @@ class ImplStage(StageStrategy):
                 planned = set(rollback_mod.planned_code_paths(project_root, workflow_state.topics))
             except ValueError as exc:
                 errors.append(str(exc))
-            unexpected = sorted(set(changed) - planned - set(manifest.get("entries", {})))
+            observed_changes = set(changed) | set(complete_changed_paths)
+            unexpected = sorted(
+                observed_changes - planned - set(manifest.get("entries", {}))
+            )
             if unexpected:
                 errors.append(f"实施计划确认前存在计划外的代码变化，不能通过 impl 的第一道门: {unexpected}")
             return _validation_result(
                 errors,
                 "实施计划重新确认：首次原内容已保存，当前变化均在计划内",
             )
-        errors.append("实施计划确认前代码已经变化，不能通过 impl 的第一道门")
+        if complete_differences is not None and complete_changed_paths:
+            errors.append(
+                "实施计划确认前代码已经变化，不能通过 impl 的第一道门；"
+                "相对入场基线的完整实施范围文件变化："
+                f"{verification_mod.format_registered_differences(complete_differences)}"
+            )
+        else:
+            baseline_snapshot = workflow_state.meta.get(
+                rollback_mod.IMPL_CODE_BASELINE_SNAPSHOT_KEY
+            )
+        if (
+            not complete_changed_paths
+            and current_hash != stage_state.code_baseline_hash
+            and isinstance(baseline_snapshot, dict)
+        ):
+            try:
+                differences = verification_mod.compare_registered_file_snapshot(
+                    project_root,
+                    baseline_snapshot,
+                    scope="product",
+                )
+            except (OSError, ValueError) as exc:
+                errors.append(
+                    "实施代码基线：整体哈希已经变化，但逐文件差异未检查；"
+                    f"无法比较冻结快照：{exc}"
+                )
+            else:
+                errors.append(
+                    "实施计划确认前代码已经变化，不能通过 impl 的第一道门；"
+                    "相对冻结基线的登记文件变化："
+                    f"{verification_mod.format_registered_differences(differences)}"
+                )
+        elif (
+            not complete_changed_paths
+            and current_hash != stage_state.code_baseline_hash
+            and not isinstance(baseline_snapshot, dict)
+        ):
+            errors.append(
+                "实施计划确认前代码已经变化，不能通过 impl 的第一道门；"
+                "当前状态只有整体 code_baseline_hash，逐文件变化未检查"
+            )
+        errors.append(
+            "code_baseline_hash 是进入 impl 时冻结的工作区产品文件快照，不是 Git 提交；"
+            "workflow discuss 和 git commit 不会重写它。先恢复未确认的遗留修改；"
+            "如果用户明确确认当前代码应成为新的实施前现状，再由 AI 执行 "
+            "`workflow gate impl --rebaseline`。"
+        )
         return _validation_result(errors, "实施计划重新确认完成")
+
+    def code_validation_report(self, project_root: str, workflow_state=None):
+        """返回实施三方核对的原始诊断，命令层不得再从文字反推事实。"""
+        state = workflow_state or load_state(project_root)
+        if state is None:
+            return None
+        return rollback_mod.validate_implementation_changes_report(project_root, state)
+
+    @staticmethod
+    def legacy_diagnostic_prefixes_covered_by_report() -> tuple[str, ...]:
+        """旧文字接口中已由结构化三方报告覆盖的顶层错误类别。"""
+        return (
+            "实施代码变化和计划范围：",
+            "回退依据：",
+            "基线后真实文件差异：",
+        )
 
     # 门禁的代码侧校验（第 2 道闸）
     def code_validate(self, project_root: str) -> tuple[bool, str]:

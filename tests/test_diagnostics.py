@@ -1,6 +1,10 @@
 import pytest
 
-from workflow_loop.cli import _format_failure_diagnostics, current_stage_next_instruction
+from workflow_loop.cli import (
+    _deduplicate_diagnostics,
+    _format_failure_diagnostics,
+    current_stage_next_instruction,
+)
 from workflow_loop.diagnostics import (
     Diagnostic,
     NextCommand,
@@ -191,6 +195,177 @@ def test_cli_failure_adapter_keeps_all_rows_and_marks_dependent_checks():
     assert "第 25 行" in rendered
     assert "错误 2 项，未检查 1 项" in rendered
     assert rendered.count("下一步命令: workflow gate update_code_design") == 1
+
+
+def test_cli_adapter_preserves_structured_facts_and_real_dependencies():
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-01 一次列全错误并标明未检查依赖
+    验收条件：AC-01 一次收集全部可独立确定的问题
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate impl --discuss-done` 失败报告
+    测试入口：`tests/test_diagnostics.py::test_cli_adapter_preserves_structured_facts_and_real_dependencies`
+    代码入口：`src/workflow_loop/cli.py::_format_failure_diagnostics`
+    准备数据：建立含一项独立错误、一项依赖该错误的未检查项和一条无效下层命令的结构化诊断报告。
+    执行动作：通过门禁命令层格式化该报告，并传入当前门禁唯一有效的下一命令。
+    关键断言：独立错误和未检查项各出现一次；未检查项指明真实前置检查；下层事实全部保留；无效下层命令被当前门禁命令替换且只出现一次。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；测试断言需保留检查编号、位置、预期、实际、证据、影响、改法、依赖和唯一命令。
+    """
+    source_report = ValidationReport(
+        stage="impl",
+        gate="实施计划解析",
+        next_command=NextCommand(
+            command="workflow should-not-survive",
+            executor="错误的下层执行者",
+            side_effects="错误的下层副作用",
+            success_condition="错误的下层成功条件",
+            next_stage="错误阶段",
+        ),
+    )
+    source_report.add_error(
+        check_id="impl.plan.path",
+        location="impl/上传文件_实施记录.md 第 83 行，文件列",
+        expected="单一项目内相对路径 `src/upload.py`",
+        actual="`src/upload.py` 与 `tests/test_upload.py` 写在同一个单元格",
+        evidence="实施计划第 83 行的文件单元格包含两个 Markdown 代码路径",
+        impact="不能保存每个目标文件的修改前副本",
+        next_action="把两个文件拆成两条计划记录，并分别填写真实符号",
+    )
+    source_report.add_not_checked(
+        check_id="impl.rollback.prepare",
+        location=".workflow_loop/rollback/",
+        expected="每个计划文件都有可验证的首次原内容副本",
+        actual="未检查：实施计划路径无法单独解析",
+        evidence="前置检查 impl.plan.path 失败",
+        impact="不能安全开始代码实施",
+        next_action="先修正 impl.plan.path，再保存实施前回退副本",
+        depends_on="impl.plan.path",
+    )
+
+    rendered = _format_failure_diagnostics(
+        stage_name="impl",
+        gate_name="讨论完成校验",
+        details=source_report,
+        command="workflow gate impl --discuss-done",
+        side_effects="只核对实施计划和当前状态，不修改产品代码",
+        success_condition="实施计划中的每个文件和符号都能单独定位",
+        next_stage="impl（代码实施）",
+    )
+
+    for expected in (
+        "impl.plan.path",
+        "impl.rollback.prepare",
+        "单一项目内相对路径 `src/upload.py`",
+        "实施计划第 83 行的文件单元格包含两个 Markdown 代码路径",
+        "把两个文件拆成两条计划记录，并分别填写真实符号",
+        "前置检查: impl.plan.path",
+    ):
+        assert expected in rendered
+    assert "impl.prerequisite" not in rendered
+    assert "workflow should-not-survive" not in rendered
+    assert rendered.count("下一步命令: workflow gate impl --discuss-done") == 1
+
+
+def test_repeated_failure_report_is_byte_stable_and_exposes_one_next_command():
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-09 重复失败报告全文和哈希稳定且只有一条命令
+    验收条件：AC-06 相同输入稳定输出并只给一个有效下一动作
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate regression_test` 的最终失败报告渲染
+    测试入口：`tests/test_diagnostics.py::test_repeated_failure_report_is_byte_stable_and_exposes_one_next_command`
+    代码入口：`src/workflow_loop/diagnostics.py::format_validation_report`
+    准备数据：用相同项目事实建立含两项顺序不同的独立错误、一项依赖错误的未检查项和一条完整下一命令的两份诊断报告。
+    执行动作：分别渲染两份报告并计算报告哈希。
+    关键断言：两次完整输出逐字一致且哈希一致；错误和未检查项顺序稳定；只出现一次完整下一命令，并明确状态未变时不要原样重试。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需直接比较完整文本、完整哈希和下一命令出现次数。
+    """
+    first_error = Diagnostic(
+        kind="error",
+        check_id="regression.entry",
+        location=".workflow_loop/project.json 字段 test_entry",
+        expected="一个存在的项目内统一测试入口",
+        actual="scripts/missing.sh",
+        evidence="项目内该路径不存在",
+        impact="无法启动最终全量回归",
+        next_action="登记存在的统一测试入口",
+    )
+    second_error = Diagnostic(
+        kind="error",
+        check_id="regression.record",
+        location=".workflow_loop/state.json 字段 regression_test.current_record",
+        expected="绑定当前代码的完整机器记录",
+        actual="记录绑定旧代码哈希",
+        evidence="记录哈希与当前代码哈希不同",
+        impact="不能证明当前代码通过最终回归",
+        next_action="修复入口后重新执行最终回归",
+    )
+    not_checked = Diagnostic(
+        kind="not_checked",
+        check_id="regression.execution",
+        location="统一全量测试入口",
+        expected="真实执行统一全量测试入口",
+        actual="未检查：测试入口无效，不能可靠执行",
+        evidence="前置检查 regression.entry 失败",
+        impact="不能判断最终回归是否通过",
+        next_action="先修复 regression.entry，再执行最终回归",
+        depends_on="regression.entry",
+    )
+    next_command = NextCommand(
+        command="workflow gate regression_test",
+        executor="AI",
+        side_effects="自动执行已登记的统一全量测试入口",
+        success_condition="退出码为 0 且机器报告证明所有测试真实执行并通过",
+        next_stage="overall_acceptance（整体验收）",
+    )
+    report_a = ValidationReport(
+        stage="regression_test",
+        gate="第二道门",
+        diagnostics=[second_error, not_checked, first_error],
+        next_command=next_command,
+    )
+    report_b = ValidationReport(
+        stage="regression_test",
+        gate="第二道门",
+        diagnostics=[first_error, second_error, not_checked],
+        next_command=next_command,
+    )
+
+    rendered_a = format_validation_report(report_a)
+    rendered_b = format_validation_report(report_b)
+
+    assert rendered_a == rendered_b
+    assert report_a.report_hash == report_b.report_hash
+    assert rendered_a.count("下一步命令: workflow gate regression_test") == 1
+    assert "状态和内容未变化时不要重复执行同一条失败命令" in rendered_a
+
+
+def test_deduplicate_keeps_distinct_checks_at_the_same_location():
+    """不同规则即使碰巧报在同一位置，也不能在汇总时丢掉其中一项。"""
+    first = Diagnostic(
+        kind="error",
+        check_id="impl.record.location",
+        location="impl/上传文件_实施记录.md 第 41 行",
+        expected="目标文件内真实函数名",
+        actual="组件",
+        evidence="目标文件没有名为“组件”的声明",
+        impact="无法核对实际修改位置",
+        next_action="填写真实函数名",
+    )
+    second = Diagnostic(
+        kind="error",
+        check_id="impl.record.acceptance",
+        location="impl/上传文件_实施记录.md 第 41 行",
+        expected="至少一个存在的 AC 编号",
+        actual="组件",
+        evidence="同一行的验收条件列没有 AC 编号",
+        impact="无法追踪修改对应的验收条件",
+        next_action="填写存在的 AC 编号",
+    )
+
+    assert _deduplicate_diagnostics([first, second]) == [first, second]
 
 
 def test_regression_instruction_exposes_only_the_real_execution_command():

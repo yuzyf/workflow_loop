@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from . import artifact_paths as artifact_paths_mod
+from . import diagnostics as diagnostics_mod
 from . import project as project_mod
 from . import state as state_mod
 from . import test_entry as test_entry_mod
@@ -59,6 +60,24 @@ class RecordedCodeChange:
     acceptance_conditions: str
 
 
+@dataclass(frozen=True)
+class PlannedCodeChange:
+    """实施前计划中的一条可定位文件事实。"""
+
+    topic: str
+    document_path: str
+    line: int
+    path: str
+
+
+@dataclass(frozen=True)
+class _ImplementationChangeValidation:
+    """三方核对的结构化失败事实和兼容旧调用方的成功说明。"""
+
+    report: diagnostics_mod.ValidationReport
+    detail: str
+
+
 _RECORD_PLACEHOLDERS = {
     "",
     "-",
@@ -76,6 +95,9 @@ _RECORD_PLACEHOLDERS = {
     "实际修改逻辑",
     "返回可检查结果",
 }
+IMPL_CODE_BASELINE_SNAPSHOT_KEY = "impl_code_baseline_snapshot"
+IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY = "impl_complete_baseline_snapshot"
+IMPL_COMPLETE_INVENTORY_MANIFEST_KEY = "implementation_inventory_before"
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -237,24 +259,29 @@ def _manifest_full_path(project_root: str, workflow_id: str) -> str:
     return os.path.join(project_root, _manifest_rel_path(workflow_id))
 
 
-def _normalized_relative_path(project_root: str, raw_path: str) -> str:
+def _normalized_relative_path(
+    project_root: str,
+    raw_path: str,
+    *,
+    purpose: str = "代码修改计划",
+) -> str:
     if not isinstance(raw_path, str):
-        raise ValueError(f"代码修改计划包含无法定位的文件路径：{raw_path!r}")
+        raise ValueError(f"{purpose}包含无法定位的文件路径：{raw_path!r}")
     value = raw_path.strip().strip("`").replace("\\", "/")
     if not value or value in {"新增", "暂无", "无", "相关文件"}:
-        raise ValueError(f"代码修改计划包含无法定位的文件路径：{raw_path!r}")
+        raise ValueError(f"{purpose}包含无法定位的文件路径：{raw_path!r}")
     if any(character in value for character in GLOB_CHARS):
-        raise ValueError(f"代码修改计划不能使用通配符：{value}")
+        raise ValueError(f"{purpose}不能使用通配符：{value}")
     path = PurePosixPath(value)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"代码修改计划必须使用项目内相对路径：{value}")
+        raise ValueError(f"{purpose}必须使用项目内相对路径：{value}")
     if path.parts[0] in PROCESS_ROOTS or value in MANAGED_DOC_FILES:
-        raise ValueError(f"代码修改计划不能把工作流过程文档当成实施代码：{value}")
+        raise ValueError(f"{purpose}不能把工作流过程文档当成实施代码：{value}")
 
     return _safe_project_relative_path(
         project_root,
         value,
-        purpose="代码修改计划路径",
+        purpose=f"{purpose}路径",
     )
 
 
@@ -373,6 +400,9 @@ def _location_candidates(location: str) -> list[str]:
     values = quoted or [location]
     candidates: list[str] = []
     for value in values:
+        whole_value = value.strip().strip("`* ")
+        if whole_value:
+            candidates.append(whole_value)
         for part in re.split(r"<br\s*/?>|[、，,；;]", value):
             part = part.strip().strip("`* ")
             if not part:
@@ -400,7 +430,23 @@ def _location_exists(project_root: str, path: str, location: str) -> bool:
             content = stream.read()
     except (OSError, UnicodeDecodeError):
         return False
-    return any(candidate in content for candidate in _location_candidates(location))
+    for candidate in _location_candidates(location):
+        escaped = re.escape(candidate)
+        declaration_patterns = [
+            rf"^[ \t]*(?:async[ \t]+)?def[ \t]+{escaped}\b",
+            rf"^[ \t]*class[ \t]+{escaped}\b",
+            rf"^[ \t]*(?:export[ \t]+)?(?:async[ \t]+)?function[ \t]+{escaped}\b",
+            rf"^[ \t]*(?:const|let|var)[ \t]+{escaped}\b[ \t]*(?:=|:)",
+            rf"^[ \t]*(?:public|private|protected|static)[ \t]+{escaped}\b[ \t]*(?:=|:|\()",
+            rf"^[ \t]*[\"']?{escaped}[\"']?[ \t]*(?:=|:)",
+        ]
+        if path.lower().endswith(".md"):
+            declaration_patterns.append(
+                rf"^[ \t]*#{{1,6}}[ \t]+{escaped}[ \t]*$"
+            )
+        if any(re.search(pattern, content, re.MULTILINE) for pattern in declaration_patterns):
+            return True
+    return False
 
 
 def _acceptance_ids(project_root: str, topic: str) -> tuple[set[str], str | None]:
@@ -426,12 +472,13 @@ def _acceptance_ids(project_root: str, topic: str) -> tuple[set[str], str | None
     return identifiers, None
 
 
-def _recorded_code_changes(
+def _recorded_code_changes_with_diagnostics(
     project_root: str,
     topics: list[str],
-) -> tuple[list[RecordedCodeChange], list[str]]:
+) -> tuple[list[RecordedCodeChange], list[diagnostics_mod.Diagnostic]]:
+    """读取实施后记录，并在事实产生处保留每个单元格的诊断。"""
     changes: list[RecordedCodeChange] = []
-    errors: list[str] = []
+    diagnostics: list[diagnostics_mod.Diagnostic] = []
     required_headers = (
         "文件",
         "类、函数或配置项",
@@ -442,7 +489,19 @@ def _recorded_code_changes(
         relative_path = topic_paths(project_root, topic)["impl_doc"]
         full_path = os.path.join(project_root, relative_path)
         if not os.path.isfile(full_path):
-            errors.append(f"{relative_path}：缺少主题实施文档")
+            evidence = f"{relative_path}：缺少主题实施文档"
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_record.document_missing",
+                    location=relative_path,
+                    expected="当前验收主题有一份实施记录文档，并包含实施后记录",
+                    actual="主题实施文档不存在",
+                    evidence=evidence,
+                    impact="无法读取本主题实际修改记录，不能核对实施记录与真实文件差异",
+                    next_action="创建或恢复本主题的实施记录文档，并填写实施后记录",
+                )
+            )
             continue
         try:
             with open(full_path, "r", encoding="utf-8") as stream:
@@ -456,13 +515,35 @@ def _recorded_code_changes(
                 required_headers=required_headers,
             )
         except (OSError, ValueError) as exc:
-            errors.append(str(exc))
+            evidence = str(exc)
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_record.table_invalid",
+                    location=f"{relative_path}，“3.4.1 实际代码修改”",
+                    expected="实施后记录包含字段完整、列数正确的实际代码修改表",
+                    actual=evidence,
+                    evidence=evidence,
+                    impact="无法从实施记录得到可核对的文件集合",
+                    next_action="修正该章节的实际代码修改表头、列数和数据行后再核对",
+                )
+            )
             continue
 
         accepted_ids, acceptance_error = _acceptance_ids(project_root, topic)
         if acceptance_error:
-            errors.append(
-                f"{relative_path}：验收条件未检查；原因：{acceptance_error}"
+            evidence = f"{relative_path}：验收条件未检查；原因：{acceptance_error}"
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_record.acceptance_source_invalid",
+                    location=relative_path,
+                    expected="对应验收条件能从当前主题的验收计划读取明确 AC 编号",
+                    actual=f"无法读取可用验收条件：{acceptance_error}",
+                    evidence=evidence,
+                    impact="实施记录中的 AC 编号不能被验证，不能确认修改对应了本主题验收条件",
+                    next_action="修正或恢复本主题验收计划中的 AC 定位编号，再核对实施记录",
+                )
             )
         for local_line, row in rows:
             line = section_start_line + local_line - 1
@@ -476,48 +557,152 @@ def _recorded_code_changes(
             ).strip()
             prefix = f"{relative_path}:{line}"
             try:
-                path = _normalized_relative_path(project_root, row["文件"])
+                path = _normalized_relative_path(
+                    project_root,
+                    row["文件"],
+                    purpose="实施后记录的“文件”列",
+                )
             except ValueError as exc:
-                errors.append(f"{prefix}，“文件”列：{exc}")
+                evidence = f"{prefix}，“文件”列：{exc}"
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.path_invalid",
+                        location=f"{prefix}，“文件”列",
+                        expected="文件列写入实际修改文件的项目内相对路径，不能使用流程文档或占位值",
+                        actual=f"文件列值为 {row['文件']!r}，不能作为实施文件路径：{exc}",
+                        evidence=evidence,
+                        impact="这行实施记录不能映射到真实文件，三方文件集合无法完整核对",
+                        next_action="把“文件”列改为这次实际修改文件的项目内相对路径；不要填写“暂无”等占位值",
+                    )
+                )
                 continue
 
             if _is_record_placeholder(location):
-                errors.append(
+                evidence = (
                     f"{prefix}，“类、函数或配置项”列使用占位内容：{location!r}"
                 )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.location_placeholder",
+                        location=f"{prefix}，“类、函数或配置项”列",
+                        expected="填写目标文件内可定位的真实函数名、类名或配置项",
+                        actual=f"位置值为占位内容 {location!r}",
+                        evidence=evidence,
+                        impact="无法确认这条记录描述了文件中的哪一处实际改动",
+                        next_action="填写当前文件中真实存在的函数名、类名或配置项名称",
+                    )
+                )
             elif not _location_exists(project_root, path, location):
-                errors.append(
+                evidence = (
                     f"{prefix}，“类、函数或配置项”列：代码位置无法在当前文件中定位；"
-                    f"文件={path!r}，记录位置={location!r}"
+                    f"文件={path!r}，记录位置={location!r}。"
+                    "该列必须填写目标文件内可定位的真实函数名、类名或配置项；"
+                    "“组件”等泛称无效。"
+                )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.location_not_found",
+                        location=f"{prefix}，“类、函数或配置项”列",
+                        expected="填写当前文件中真实存在的函数名、类名或配置项",
+                        actual=f"文件 {path!r} 中找不到记录位置 {location!r}",
+                        evidence=evidence,
+                        impact="无法证明实施记录对应当前代码中的真实修改位置",
+                        next_action="把该列改为当前文件内真实可定位的函数名、类名或配置项；不要使用“组件”等泛称",
+                    )
                 )
             if _is_record_placeholder(logic):
-                errors.append(
+                evidence = (
                     f"{prefix}，“实际修改的代码逻辑”列："
                     f"实际修改的代码逻辑使用占位内容 {logic!r}"
                 )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.logic_placeholder",
+                        location=f"{prefix}，“实际修改的代码逻辑”列",
+                        expected="说明该位置实际改变的判断、数据处理或调用逻辑",
+                        actual=f"实际修改逻辑为占位内容 {logic!r}",
+                        evidence=evidence,
+                        impact="无法从记录判断本次实现具体做了什么",
+                        next_action="写出该代码位置实际修改的逻辑，不要保留 TODO 或“暂无”等占位内容",
+                    )
+                )
             if _is_record_placeholder(observable):
-                errors.append(
+                evidence = (
                     f"{prefix}，“数据、状态或输出的实际变化”列："
                     f"数据、状态或输出的实际变化使用占位内容 {observable!r}"
+                )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.observable_placeholder",
+                        location=f"{prefix}，“数据、状态或输出的实际变化”列",
+                        expected="说明可以观察到的数据、状态或输出变化",
+                        actual=f"实际变化为占位内容 {observable!r}",
+                        evidence=evidence,
+                        impact="无法验证实现是否产生了可检查的结果",
+                        next_action="写出可从代码、状态或输出观察到的实际变化",
+                    )
                 )
             referenced_ids = {
                 match.upper()
                 for match in re.findall(r"\bAC-\d+\b", acceptance, re.IGNORECASE)
             }
             if not acceptance or _is_record_placeholder(acceptance):
-                errors.append(
+                evidence = (
                     f"{prefix}，“对应验收条件”列缺少具体 AC 编号：{acceptance!r}"
                 )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.acceptance_missing",
+                        location=f"{prefix}，“对应验收条件”列",
+                        expected="至少写入一个当前主题验收计划中存在的 AC 编号",
+                        actual=f"对应验收条件为 {acceptance!r}，没有具体 AC 编号",
+                        evidence=evidence,
+                        impact="无法将这条实际修改追溯到验收条件",
+                        next_action="填写本主题验收计划中的具体 AC 编号，例如 AC-01",
+                    )
+                )
             elif not referenced_ids:
-                errors.append(
+                evidence = (
                     f"{prefix}，“对应验收条件”列没有可识别的 AC 编号：{acceptance!r}"
+                )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.acceptance_unreadable",
+                        location=f"{prefix}，“对应验收条件”列",
+                        expected="使用 AC-数字 格式引用当前主题的验收条件",
+                        actual=f"对应验收条件为 {acceptance!r}，没有可识别的 AC 编号",
+                        evidence=evidence,
+                        impact="无法将这条实际修改追溯到验收条件",
+                        next_action="把该列改为当前主题验收计划中的 AC-数字编号",
+                    )
                 )
             elif accepted_ids:
                 missing_ids = sorted(referenced_ids - accepted_ids)
                 if missing_ids:
-                    errors.append(
+                    evidence = (
                         f"{prefix}，“对应验收条件”列引用 {missing_ids}，"
                         f"但验收计划中不存在；实际可用编号={sorted(accepted_ids)}"
+                    )
+                    diagnostics.append(
+                        diagnostics_mod.Diagnostic(
+                            kind="error",
+                            check_id="impl.implementation_record.acceptance_unknown",
+                            location=f"{prefix}，“对应验收条件”列",
+                            expected="只引用当前主题验收计划中存在的 AC 编号",
+                            actual=(
+                                f"引用了 {missing_ids}；当前可用编号为 {sorted(accepted_ids)}"
+                            ),
+                            evidence=evidence,
+                            impact="实施记录无法证明该修改满足了本主题的验收条件",
+                            next_action="把该列改为当前主题验收计划中实际存在的 AC 编号",
+                        )
                     )
 
             changes.append(
@@ -532,21 +717,109 @@ def _recorded_code_changes(
                     acceptance_conditions=acceptance,
                 )
             )
-    return changes, list(dict.fromkeys(errors))
+    return changes, diagnostics
 
 
-def planned_code_paths(project_root: str, topics: list[str]) -> list[str]:
-    paths: list[str] = []
+def _recorded_code_changes(
+    project_root: str,
+    topics: list[str],
+) -> tuple[list[RecordedCodeChange], list[str]]:
+    """兼容旧调用方的文字接口；新门禁应使用结构化版本。"""
+    changes, diagnostics = _recorded_code_changes_with_diagnostics(
+        project_root,
+        topics,
+    )
+    return changes, list(dict.fromkeys(item.evidence for item in diagnostics))
+
+
+def _planned_code_changes(
+    project_root: str,
+    topics: list[str],
+) -> tuple[list[PlannedCodeChange], list[diagnostics_mod.Diagnostic]]:
+    """读取实施前计划，并保留每个文件单元格的实际位置。"""
+    changes: list[PlannedCodeChange] = []
+    diagnostics: list[diagnostics_mod.Diagnostic] = []
     for topic in topics:
         relative_path = topic_paths(project_root, topic)["impl_doc"]
         full_path = os.path.join(project_root, relative_path)
         if not os.path.isfile(full_path):
-            raise ValueError(f"缺少主题实施文档：{relative_path}")
-        with open(full_path, "r", encoding="utf-8") as stream:
-            content = stream.read()
-        for raw_path in _table_file_paths(_code_plan_section(content)):
-            paths.append(_normalized_relative_path(project_root, raw_path))
-    return sorted(set(paths))
+            evidence = f"缺少主题实施文档：{relative_path}"
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_plan.document_missing",
+                    location=relative_path,
+                    expected="当前验收主题有一份包含代码修改计划的实施记录文档",
+                    actual="主题实施文档不存在",
+                    evidence=evidence,
+                    impact="无法确定本轮允许修改的文件范围",
+                    next_action="创建或恢复本主题实施记录文档，并填写代码修改计划",
+                )
+            )
+            continue
+        try:
+            with open(full_path, "r", encoding="utf-8") as stream:
+                content = stream.read()
+            section = _code_plan_section(content)
+            section_offset = content.find(section)
+            section_start_line = content[:section_offset].count("\n") + 1
+            rows = _table_rows(
+                section,
+                context=f"{relative_path} 的代码修改计划",
+                required_headers=("文件",),
+            )
+        except (OSError, ValueError) as exc:
+            evidence = str(exc)
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_plan.table_invalid",
+                    location=f"{relative_path}，“2.3 代码修改计划”",
+                    expected="代码修改计划包含带“文件”列且列数正确的表格",
+                    actual=evidence,
+                    evidence=evidence,
+                    impact="无法确定本轮实施计划覆盖的文件范围",
+                    next_action="修正该章节的代码修改计划表头、列数和数据行",
+                )
+            )
+            continue
+        for local_line, row in rows:
+            line = section_start_line + local_line - 1
+            raw_path = row["文件"]
+            prefix = f"{relative_path}:{line}"
+            try:
+                path = _normalized_relative_path(project_root, raw_path)
+            except ValueError as exc:
+                evidence = f"{prefix}，“文件”列：{exc}"
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_plan.path_invalid",
+                        location=f"{prefix}，“文件”列",
+                        expected="文件列写入实际修改文件的项目内相对路径，不能使用流程文档或占位值",
+                        actual=f"文件列值为 {raw_path!r}，不能作为实施文件路径：{exc}",
+                        evidence=evidence,
+                        impact="实施计划范围不完整，不能判断哪些真实改动应由本轮实施解释",
+                        next_action="把“文件”列改为实际修改文件的项目内相对路径；不要填写“暂无”等占位值",
+                    )
+                )
+                continue
+            changes.append(
+                PlannedCodeChange(
+                    topic=topic,
+                    document_path=relative_path,
+                    line=line,
+                    path=path,
+                )
+            )
+    return changes, diagnostics
+
+
+def planned_code_paths(project_root: str, topics: list[str]) -> list[str]:
+    changes, diagnostics = _planned_code_changes(project_root, topics)
+    if diagnostics:
+        raise ValueError("\n".join(item.evidence for item in diagnostics))
+    return sorted({change.path for change in changes})
 
 
 def recorded_code_paths(project_root: str, topics: list[str]) -> list[str]:
@@ -615,7 +888,11 @@ def _validated_manifest_entries(
                 purpose="受管文件路径",
             )
         else:
-            path = _normalized_relative_path(project_root, raw_path)
+            path = _normalized_relative_path(
+                project_root,
+                raw_path,
+                purpose="回退清单文件记录",
+            )
         comparison_key = path.casefold()
         if comparison_key in normalized_keys:
             raise ValueError(f"回退清单包含重复文件路径：{path}")
@@ -639,6 +916,38 @@ def _validated_manifest_entries(
     return normalized_entries
 
 
+def _validated_initial_inventory(
+    project_root: str,
+    manifest: dict,
+) -> dict[str, str]:
+    """校验旧清单用于证明首次内容的逐文件哈希，避免损坏结构泄漏类型异常。"""
+    inventory = manifest.get("initial_inventory")
+    if not isinstance(inventory, dict):
+        raise ValueError("回退清单的 initial_inventory（初始文件哈希表）必须是对象")
+    normalized_inventory: dict[str, str] = {}
+    normalized_keys: set[str] = set()
+    for raw_path, content_hash in inventory.items():
+        if not isinstance(raw_path, str):
+            raise ValueError("初始文件哈希表包含非字符串路径")
+        path = _normalized_relative_path(
+            project_root,
+            raw_path,
+            purpose="初始文件哈希表记录",
+        )
+        comparison_key = path.casefold()
+        if comparison_key in normalized_keys:
+            raise ValueError(f"初始文件哈希表包含重复文件路径：{path}")
+        normalized_keys.add(comparison_key)
+        if not isinstance(content_hash, str) or re.fullmatch(
+            r"[0-9a-f]{64}", content_hash
+        ) is None:
+            raise ValueError(
+                f"初始文件哈希表包含无效 SHA-256：{path}={content_hash!r}"
+            )
+        normalized_inventory[path] = content_hash
+    return normalized_inventory
+
+
 def _validate_backup_entries(project_root: str, manifest: dict) -> None:
     workflow_id = _validated_workflow_id(manifest.get("workflow_id", ""))
     manifest_dir = os.path.dirname(_manifest_full_path(project_root, workflow_id))
@@ -648,6 +957,7 @@ def _validate_backup_entries(project_root: str, manifest: dict) -> None:
         manifest_dir,
         allow_process_documents=False,
     )
+    _validated_initial_inventory(project_root, manifest)
 
 
 def validate_prepared(
@@ -723,11 +1033,13 @@ def _backup_entry_from_bytes(
     }
 
 
-def _clean_git_head_baseline(
+def _trusted_git_head_baseline(
     project_root: str,
     relative_path: str,
-) -> tuple[bytes, int] | None:
-    """仅在路径受 HEAD 跟踪且索引、工作区和 HEAD 都一致时返回原始字节。"""
+    *,
+    expected_content_hash: str | None = None,
+) -> tuple[tuple[bytes, int] | None, str]:
+    """返回可证明等于实施前事实的 HEAD 字节，以及可直接报告的证明结果。"""
 
     git_environment = dict(os.environ)
     for variable in (
@@ -758,18 +1070,61 @@ def _clean_git_head_baseline(
 
     prefix_result = run_git("rev-parse", "--show-prefix")
     if prefix_result is None or prefix_result.returncode != 0:
-        return None
+        return None, "无法确认项目所在的 Git 工作树"
     prefix = os.fsdecode(prefix_result.stdout).rstrip("\r\n")
     tree_path = f"{prefix}{relative_path}"
 
     head_result = run_git("rev-parse", "--verify", "HEAD^{commit}")
     if head_result is None or head_result.returncode != 0:
-        return None
+        return None, "Git 仓库没有可读取的 HEAD 提交"
     head_revision = os.fsdecode(head_result.stdout).strip()
     if re.fullmatch(r"[0-9a-fA-F]{40,64}", head_revision) is None:
-        return None
+        return None, f"Git HEAD 提交编号格式无效：{head_revision!r}"
 
-    # 分别检查索引和工作区，不能让“索引已改、工作区又改回 HEAD”掩盖未提交差异。
+    pathspec = f":(top,literal){tree_path}"
+    tree_entry = run_git(
+        "ls-tree",
+        "-z",
+        "--full-tree",
+        head_revision,
+        "--",
+        pathspec,
+    )
+    if tree_entry is None or tree_entry.returncode != 0:
+        return None, f"无法读取 Git HEAD 中的路径记录：{relative_path}"
+    records = tree_entry.stdout.rstrip(b"\0").split(b"\0")
+    if len(records) != 1 or b"\t" not in records[0]:
+        return None, f"Git HEAD 不包含唯一的普通文件路径：{relative_path}"
+    metadata, recorded_path = records[0].split(b"\t", 1)
+    metadata_parts = metadata.split()
+    if (
+        len(metadata_parts) != 3
+        or metadata_parts[1] != b"blob"
+        or os.fsdecode(recorded_path) != tree_path
+    ):
+        return None, f"Git HEAD 路径记录无法唯一对应当前项目文件：{relative_path}"
+    git_mode = os.fsdecode(metadata_parts[0])
+    if git_mode not in {"100644", "100755"}:
+        kind = "符号链接" if git_mode == "120000" else "非普通文件"
+        return None, (
+            f"Git HEAD 文件模式={git_mode}（{kind}）；"
+            "只接受 100644 或 100755 的普通文件，不能把链接目标文字当作文件原文"
+        )
+    mode = 0o644 if git_mode == "100644" else 0o755
+    blob = run_git("cat-file", "blob", os.fsdecode(metadata_parts[2]))
+    if blob is None or blob.returncode != 0:
+        return None, f"无法读取 Git HEAD 文件对象：{relative_path}"
+    head_content_hash = _sha256_bytes(blob.stdout)
+    head_fact = f"Git HEAD SHA-256={head_content_hash}，文件模式={git_mode}"
+
+    if expected_content_hash is not None:
+        expected_fact = f"首次清单 SHA-256={expected_content_hash}"
+        if head_content_hash != expected_content_hash:
+            return None, f"{expected_fact}；{head_fact}；两个哈希不一致"
+        return (blob.stdout, mode), f"{expected_fact}；{head_fact}；两个哈希完全一致"
+
+    # 清洁工作区只能证明“当前内容等于 HEAD”；首次清单已经记录过哈希时，
+    # 上面的哈希比较才负责证明“HEAD 内容等于实施前内容”。
     staged = run_git(
         "diff",
         "--cached",
@@ -788,25 +1143,29 @@ def _clean_git_head_baseline(
     )
     if (
         staged is None
-        or staged.returncode != 0
         or unstaged is None
-        or unstaged.returncode != 0
     ):
-        return None
-
-    blob = run_git("cat-file", "blob", f"{head_revision}:{tree_path}")
-    if blob is None or blob.returncode != 0:
-        return None
+        return None, f"{head_fact}；无法检查索引或工作区是否有未提交差异"
+    if staged.returncode == 1:
+        return None, f"{head_fact}；Git 索引相对 HEAD 有未提交差异"
+    if staged.returncode != 0:
+        return None, f"{head_fact}；无法检查 Git 索引差异，退出码={staged.returncode}"
+    if unstaged.returncode == 1:
+        return None, f"{head_fact}；Git 工作区相对索引有未提交差异"
+    if unstaged.returncode != 0:
+        return None, f"{head_fact}；无法检查 Git 工作区差异，退出码={unstaged.returncode}"
     full_path = os.path.join(project_root, relative_path)
     try:
         with open(full_path, "rb") as stream:
             current = stream.read()
-            mode = os.fstat(stream.fileno()).st_mode & 0o777
-    except OSError:
-        return None
+    except OSError as exc:
+        return None, f"{head_fact}；当前工作区文件无法读取：{exc}"
     if current != blob.stdout:
-        return None
-    return blob.stdout, mode
+        return None, (
+            f"{head_fact}；当前工作区 SHA-256={_sha256_bytes(current)}；"
+            "当前字节与 HEAD 不一致"
+        )
+    return (blob.stdout, mode), f"{head_fact}；索引和工作区均与 HEAD 完全一致"
 
 
 def prepare_impl(
@@ -840,10 +1199,17 @@ def prepare_impl(
     if os.path.isfile(manifest_full_path):
         # 再次准备：允许已登记路径按计划变化；首次原内容始终保留，不被覆盖
         manifest, raw = _read_manifest(project_root, manifest_path)
+        if (
+            not wf_state.rollback.manifest_hash
+            or _sha256_bytes(raw) != wf_state.rollback.manifest_hash
+        ):
+            raise ValueError("实施前回退清单哈希与 state.json 不一致，不能补充副本")
+        if manifest.get("version") != MANIFEST_VERSION:
+            raise ValueError("实施前回退清单版本不受支持")
         if manifest.get("workflow_id") != wf_state.workflow_id:
             raise ValueError("现有回退清单不属于当前工作流，不能覆盖")
         _validate_backup_entries(project_root, manifest)
-        initial_inventory = manifest.get("initial_inventory", {})
+        initial_inventory = _validated_initial_inventory(project_root, manifest)
         entries = manifest.setdefault("entries", {})
         raw_registered_paths = manifest.get("core_registered_paths")
         if isinstance(raw_registered_paths, list) and all(
@@ -861,24 +1227,62 @@ def prepare_impl(
         for path in paths:
             if path in entries:
                 continue
+            baseline_detail = ""
             if path in initially_sampled_paths:
-                unchanged = current_inventory.get(path) == initial_inventory.get(path)
+                current_hash = current_inventory.get(path)
+                original_hash = initial_inventory.get(path)
+                unchanged = current_hash == original_hash
+                if not unchanged and isinstance(original_hash, str):
+                    baseline, baseline_detail = _trusted_git_head_baseline(
+                        project_root,
+                        path,
+                        expected_content_hash=original_hash,
+                    )
+                    if baseline is not None:
+                        trusted_git_baselines[path] = baseline
+                        unchanged = True
+                elif not unchanged:
+                    baseline_detail = (
+                        "首次清单记录该路径当时不存在；"
+                        f"当前工作区 SHA-256={current_hash or '不存在'}"
+                    )
             else:
                 # 首次清单没有看过该路径，不能凭当前工作区倒推原内容。只有 Git
                 # 能同时证明它受 HEAD 跟踪、没有未提交差异且当前字节等于 HEAD，
                 # 才能用 HEAD 字节补齐首次副本。
-                baseline = _clean_git_head_baseline(project_root, path)
+                baseline, baseline_detail = _trusted_git_head_baseline(project_root, path)
                 unchanged = baseline is not None
                 if baseline is not None:
                     trusted_git_baselines[path] = baseline
             if not unchanged:
                 raise ValueError(
-                    f"计划新增的路径已经被修改，没有可信的实施前原内容：{path}；"
-                    "只有受 Git HEAD 跟踪、没有未提交差异且当前字节与 HEAD 完全一致时"
-                    "才能补首次副本；否则先恢复可信原内容，或返回计划重新讨论"
+                    f"当前计划新增的路径没有可信的实施前原内容：{path}；"
+                    f"核对结果：{baseline_detail}；"
+                    "不能把当前修改后内容当作基线。恢复可信原内容，或返回计划重新讨论"
                 )
     else:
         # 第一次准备：代码必须仍等于讨论确认时的基线，不能把修改后的内容当成原内容
+        complete_baseline = wf_state.meta.get(IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY)
+        if isinstance(complete_baseline, dict):
+            differences = (
+                verification_mod.compare_complete_implementation_file_snapshot(
+                    project_root,
+                    complete_baseline,
+                    scope="all",
+                )
+            )
+            changed_before_prepare = {
+                path
+                for category, difference_paths in differences.items()
+                if category != "not_checked"
+                for path in difference_paths
+            }
+            if changed_before_prepare:
+                raise ValueError(
+                    "代码已经在回退基线保存前发生变化，不能把修改后的内容当成原内容；"
+                    "相对进入 impl 时完整实施范围的逐文件差异："
+                    f"{verification_mod.format_registered_differences(differences)}"
+                )
         current_code_hash = verification_mod.compute_non_test_code_snapshot_hash(project_root)
         if current_code_hash != stage_state.code_baseline_hash:
             raise ValueError("代码已经在回退基线保存前发生变化，不能把修改后的内容当成原内容")
@@ -897,6 +1301,8 @@ def prepare_impl(
             "entries": {},
             "prepares": [],
         }
+        if isinstance(complete_baseline, dict):
+            manifest[IMPL_COMPLETE_INVENTORY_MANIFEST_KEY] = complete_baseline
 
     entries = manifest.setdefault("entries", {})
     for path in paths:
@@ -1072,32 +1478,49 @@ def changed_paths_since_prepare(project_root: str, manifest: dict) -> list[str]:
     prepares = manifest.get("prepares", [])
     if not prepares:
         raise ValueError("实施前回退清单没有准备记录")
-    raw_before = manifest.get("initial_inventory") or prepares[0].get("inventory_before", {})
-    before = {
-        path: content_hash
-        for path, content_hash in raw_before.items()
-        if verification_mod.is_implementation_related_path(path)
-    }
-    raw_registered_paths = manifest.get("core_registered_paths")
-    if isinstance(raw_registered_paths, list) and all(
-        isinstance(path, str) for path in raw_registered_paths
-    ):
-        registered_paths = sorted(set(raw_registered_paths))
-    else:
-        # 旧清单只比较它在准备时真正采样或保存过的文件。后来扩大的登记规则
-        # 没有旧值可比，不能把未采样且未修改的文件倒推成“新增”。
-        registered_paths = sorted(
-            set(raw_before) | set(manifest.get("entries", {}))
+    complete_before = manifest.get(IMPL_COMPLETE_INVENTORY_MANIFEST_KEY)
+    if isinstance(complete_before, dict):
+        differences = verification_mod.compare_complete_implementation_file_snapshot(
+            project_root,
+            complete_before,
+            scope="all",
         )
-    current = verification_mod.compute_project_file_hashes(
-        project_root,
-        registered_paths=registered_paths,
-    )
-    changed = {
-        path
-        for path in set(before) | set(current)
-        if before.get(path) != current.get(path)
-    }
+        changed = {
+            path
+            for category, difference_paths in differences.items()
+            if category != "not_checked"
+            for path in difference_paths
+        }
+    else:
+        raw_before = manifest.get("initial_inventory") or prepares[0].get(
+            "inventory_before",
+            {},
+        )
+        before = {
+            path: content_hash
+            for path, content_hash in raw_before.items()
+            if verification_mod.is_implementation_related_path(path)
+        }
+        raw_registered_paths = manifest.get("core_registered_paths")
+        if isinstance(raw_registered_paths, list) and all(
+            isinstance(path, str) for path in raw_registered_paths
+        ):
+            registered_paths = sorted(set(raw_registered_paths))
+        else:
+            # 旧清单只比较它在准备时真正采样或保存过的文件。后来扩大的登记规则
+            # 没有旧值可比，不能把未采样且未修改的文件倒推成“新增”。
+            registered_paths = sorted(
+                set(raw_before) | set(manifest.get("entries", {}))
+            )
+        current = verification_mod.compute_project_file_hashes(
+            project_root,
+            registered_paths=registered_paths,
+        )
+        changed = {
+            path
+            for path in set(before) | set(current)
+            if before.get(path) != current.get(path)
+        }
 
     # 项目清单只扫描代码、脚本和配置；计划明确列出的其它资源文件仍逐项
     # 与第一次副本比较，避免文档型产品或二进制资源的计划内修改被漏掉。
@@ -1122,7 +1545,11 @@ def _implementation_change_sets(
 ) -> tuple[list[str], list[str]]:
     """区分本轮实施变化和测试阶段登记但未再变化的非实施文件。"""
     changed = changed_paths_since_prepare(project_root, manifest)
-    current = verification_mod.compute_project_file_hashes(project_root)
+    current = (
+        verification_mod.compute_complete_implementation_file_hashes(project_root)
+        if isinstance(manifest.get(IMPL_COMPLETE_INVENTORY_MANIFEST_KEY), dict)
+        else verification_mod.compute_project_file_hashes(project_root)
+    )
     accepted_tests = _accepted_test_code_inventory(manifest)
     prepares = manifest.get("prepares")
     latest_prepare = prepares[-1] if isinstance(prepares, list) and prepares else {}
@@ -1150,43 +1577,205 @@ def implementation_changed_paths_since_prepare(
     return implementation_changes
 
 
-def validate_implementation_changes(
+def _implementation_change_validation(
     project_root: str,
     wf_state: state_mod.WorkflowState,
-) -> tuple[bool, str]:
-    """要求实施前计划、基线后真实差异和实施后记录三方完全一致。"""
-    valid, detail, manifest = validate_prepared(project_root, wf_state)
-    if not valid or manifest is None:
-        return False, detail
-    errors: list[str] = []
-    try:
-        implementation_changes, unchanged_accepted_tests = _implementation_change_sets(
-            project_root,
-            manifest,
-        )
-    except ValueError as exc:
-        return False, f"无法计算基线后的真实文件差异：{exc}"
-    planned = set(wf_state.rollback.planned_paths)
-    changes, record_errors = _recorded_code_changes(project_root, wf_state.topics)
-    recorded = {change.path for change in changes}
-    errors.extend(record_errors)
-    actual = set(implementation_changes)
-
-    categories = (
-        ("计划列出但实际未修改", sorted(planned - actual)),
-        ("实际修改但不在实施计划", sorted(actual - planned)),
-        ("实际修改但实施后记录未列出", sorted(actual - recorded)),
-        ("实施后记录列出但没有真实差异", sorted(recorded - actual)),
+) -> _ImplementationChangeValidation:
+    """在同一处核对计划、实际差异和实施记录，不把事实压成文字清单。"""
+    report = diagnostics_mod.ValidationReport(
+        stage="impl",
+        gate="实施代码变化和三方核对",
     )
-    errors.extend(f"{label}：{paths}" for label, paths in categories if paths)
-    if errors:
-        return False, "\n".join(
-            f"{index}. {error}" for index, error in enumerate(dict.fromkeys(errors), 1)
+    planned_changes, plan_diagnostics = _planned_code_changes(
+        project_root,
+        wf_state.topics,
+    )
+    recorded_changes, record_diagnostics = _recorded_code_changes_with_diagnostics(
+        project_root,
+        wf_state.topics,
+    )
+    report.extend(plan_diagnostics)
+    report.extend(record_diagnostics)
+    plan_file_set_blocked = any(
+        item.check_id
+        in {
+            "impl.implementation_plan.document_missing",
+            "impl.implementation_plan.table_invalid",
+            "impl.implementation_plan.path_invalid",
+        }
+        for item in plan_diagnostics
+    )
+    record_file_set_blocked = any(
+        item.check_id
+        in {
+            "impl.implementation_record.document_missing",
+            "impl.implementation_record.table_invalid",
+            "impl.implementation_record.path_invalid",
+        }
+        for item in record_diagnostics
+    )
+
+    baseline_ok, baseline_detail, manifest = validate_prepared(
+        project_root,
+        wf_state,
+        require_current_plan=False,
+    )
+    baseline_check_id = "impl.implementation_baseline.invalid"
+    if not baseline_ok or manifest is None:
+        report.add_error(
+            check_id=baseline_check_id,
+            location=wf_state.rollback.manifest_path or "state.json 的 rollback（实施回退状态）",
+            expected="实施前回退清单、文件副本和 state.json 中的清单哈希一致",
+            actual=f"实施前回退依据不可用：{baseline_detail}",
+            evidence=baseline_detail,
+            impact="无法安全计算基线后的真实文件差异，三方文件集合不能核对",
+            next_action="先按回退依据错误修正或重新准备实施前基线，再核对实施变化",
+        )
+
+    current_plan_ok = False
+    current_plan_check_id = "impl.implementation_plan.prepare_mismatch"
+    if baseline_ok and manifest is not None and not plan_file_set_blocked:
+        current_plan_ok, current_plan_detail, _ = validate_prepared(project_root, wf_state)
+        if not current_plan_ok:
+            report.add_error(
+                check_id=current_plan_check_id,
+                location=wf_state.rollback.manifest_path or "state.json 的 rollback（实施回退状态）",
+                expected="当前代码修改计划与实施前回退清单中已确认的计划完全一致",
+                actual=f"当前实施计划不能与保存的实施前基线对应：{current_plan_detail}",
+                evidence=current_plan_detail,
+                impact="不能用当前计划解释基线后的真实改动",
+                next_action="先重新确认实施前计划并按门禁要求准备可信的实施前基线",
+            )
+
+    implementation_changes: list[str] | None = None
+    unchanged_accepted_tests: list[str] = []
+    diff_check_id = "impl.implementation_diff.unavailable"
+    if baseline_ok and manifest is not None:
+        try:
+            implementation_changes, unchanged_accepted_tests = _implementation_change_sets(
+                project_root,
+                manifest,
+            )
+        except ValueError as exc:
+            report.add_error(
+                check_id=diff_check_id,
+                location=wf_state.rollback.manifest_path or "实施前回退清单",
+                expected="能从保存的实施前清单计算每个登记文件的当前差异",
+                actual=f"无法计算基线后的真实文件差异：{exc}",
+                evidence=str(exc),
+                impact="不能确认哪些文件在实施前基线后真正改变",
+                next_action="修正回退清单或受管文件状态，使真实差异可以重新计算",
+            )
+
+    dependency_ids = tuple(
+        item.check_id for item in report.diagnostics if item.kind == "error"
+    )
+    ready_for_relation = (
+        baseline_ok
+        and manifest is not None
+        and current_plan_ok
+        and implementation_changes is not None
+        and not plan_file_set_blocked
+        and not record_file_set_blocked
+    )
+    if not ready_for_relation:
+        reasons: list[str] = []
+        if not baseline_ok or manifest is None:
+            reasons.append("实施前回退依据不可用")
+        if plan_file_set_blocked:
+            reasons.append("代码修改计划存在无法解析的条目")
+        elif not current_plan_ok:
+            reasons.append("当前代码修改计划与实施前清单不一致")
+        if implementation_changes is None:
+            reasons.append("真实文件差异无法计算")
+        if record_file_set_blocked:
+            reasons.append("实施后记录存在无法解析或不完整的条目")
+        report.add_not_checked(
+            check_id="impl.implementation_relation.not_checked",
+            location="实施计划、基线后真实差异和实施后记录（三方文件集合）",
+            expected="三个文件集合均可读取且前置基线可信后逐文件比较",
+            actual=f"未检查：{'；'.join(reasons)}",
+            evidence=(
+                "计划可读取文件="
+                f"{sorted({change.path for change in planned_changes})}；"
+                "实际差异文件="
+                f"{implementation_changes if implementation_changes is not None else '未取得'}；"
+                "实施记录可读取文件="
+                f"{sorted({change.path for change in recorded_changes})}"
+            ),
+            impact="不能可靠判断计划、实际差异和实施记录是否一一对应",
+            next_action="先处理本报告列出的前置错误；前置事实完整后门禁会自动逐文件比较三方集合",
+            depends_on=dependency_ids or ("impl.implementation_relation.prerequisite",),
+        )
+        return _ImplementationChangeValidation(
+            report=report,
+            detail="实施代码变化和计划范围尚未完成三方核对",
+        )
+
+    actual = set(implementation_changes)
+    planned_by_path = {change.path: change for change in planned_changes}
+    recorded_by_path = {change.path: change for change in recorded_changes}
+    planned = set(planned_by_path)
+    recorded = set(recorded_by_path)
+
+    for path in sorted(planned - actual):
+        change = planned_by_path[path]
+        report.add_error(
+            check_id="impl.implementation_relation.planned_but_unchanged",
+            location=f"{change.document_path}:{change.line}，“文件”列",
+            expected="计划列出的文件在实施前基线后有真实修改，或从计划中删除该文件",
+            actual=f"计划列出但实际未修改：计划包含 {path!r}，但基线后没有检测到该文件变化",
+            evidence=(
+                f"计划列出但实际未修改：{path!r}；计划位置={change.document_path}:{change.line}；"
+                f"基线后真实差异文件={sorted(actual)}"
+            ),
+            impact="实施计划声称会修改该文件，但当前工作区没有可验证的对应实现",
+            next_action="确实需要该改动时修改该文件；不再需要时从代码修改计划中删除这一行并重新确认计划",
+        )
+    for path in sorted(actual - planned):
+        report.add_error(
+            check_id="impl.implementation_relation.actual_outside_plan",
+            location=f"{path}（实施前基线后的真实文件差异）",
+            expected="每个基线后真实修改文件都已在确认后的代码修改计划中列出",
+            actual=f"实际修改但不在实施计划：检测到 {path!r} 已修改，但当前代码修改计划没有该文件",
+            evidence=(
+                f"实际修改但不在实施计划：{path!r}；基线后真实差异文件={sorted(actual)}；"
+                f"确认后的计划文件={sorted(planned)}"
+            ),
+            impact="该修改没有可信的实施前计划和回退依据，不能作为本轮实施结果确认",
+            next_action="恢复该文件到实施前内容，或回到实施前计划确认流程后按工作流重新准备可信基线再实施",
+        )
+    for path in sorted(actual - recorded):
+        report.add_error(
+            check_id="impl.implementation_relation.actual_unrecorded",
+            location=f"{path}（实施前基线后的真实文件差异）",
+            expected="每个基线后真实修改文件在实施后记录中都有一条对应行",
+            actual=f"实际修改但实施后记录未列出：检测到 {path!r} 已修改，但实施后记录没有列出该文件",
+            evidence=(
+                f"实际修改但实施后记录未列出：{path!r}；基线后真实差异文件={sorted(actual)}；"
+                f"实施后记录文件={sorted(recorded)}"
+            ),
+            impact="后续测试和验收无法知道该文件改了什么、对应哪个验收条件",
+            next_action="在实施后记录的“3.4.1 实际代码修改”表中增加该文件的真实位置、逻辑、可观察变化和 AC 编号",
+        )
+    for path in sorted(recorded - actual):
+        change = recorded_by_path[path]
+        report.add_error(
+            check_id="impl.implementation_relation.recorded_without_change",
+            location=f"{change.document_path}:{change.line}，“文件”列",
+            expected="实施后记录列出的文件在实施前基线后有对应真实变化",
+            actual=f"实施后记录列出但没有真实差异：实施记录列出 {path!r}，但基线后没有检测到该文件变化",
+            evidence=(
+                f"实施后记录列出但没有真实差异：{path!r}；记录位置={change.document_path}:{change.line}；"
+                f"基线后真实差异文件={sorted(actual)}"
+            ),
+            impact="实施记录包含无法由当前工作区证实的改动，不能作为验收依据",
+            next_action="确实修改了该文件时检查是否恢复了改动；未修改时从实施后记录删除或更正这一行",
         )
 
     record_facts = [
         f"{change.document_path}:{change.line} {change.path} @ {change.location}"
-        for change in changes
+        for change in recorded_changes
     ]
     detail = (
         "实施前计划、基线后真实差异和实施后记录三方文件集合完全一致："
@@ -1197,7 +1786,30 @@ def validate_implementation_changes(
             "；测试代码阶段登记且未再变化的非实施计划文件已保留："
             f"{unchanged_accepted_tests}"
         )
-    return True, detail
+    return _ImplementationChangeValidation(report=report, detail=detail)
+
+
+def validate_implementation_changes_report(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> diagnostics_mod.ValidationReport:
+    """返回三方核对的原始结构化事实，供门禁命令直接渲染。"""
+    return _implementation_change_validation(project_root, wf_state).report
+
+
+def validate_implementation_changes(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> tuple[bool, str]:
+    """兼容旧调用方的文字接口；新门禁应使用结构化报告。"""
+    validation = _implementation_change_validation(project_root, wf_state)
+    if validation.report.passed:
+        return True, validation.detail
+    detail = "\n".join(
+        f"{index}. {diagnostic.evidence}"
+        for index, diagnostic in enumerate(validation.report.sorted_diagnostics, 1)
+    )
+    return False, detail
 
 
 def validate_existing_implementation_paths(
@@ -1245,13 +1857,11 @@ def restore(project_root: str, wf_state: state_mod.WorkflowState) -> list[str]:
     if not valid or manifest is None:
         raise ValueError(detail)
 
-    initial_inventory = manifest.get("initial_inventory", {})
-    current_inventory = verification_mod.compute_project_file_hashes(project_root)
     allowed = set(manifest.get("entries", {}))
     unexpected = sorted(
         path
-        for path in set(initial_inventory) | set(current_inventory)
-        if initial_inventory.get(path) != current_inventory.get(path) and path not in allowed
+        for path in changed_paths_since_prepare(project_root, manifest)
+        if path not in allowed
     )
     if unexpected:
         raise ValueError(
@@ -1262,7 +1872,11 @@ def restore(project_root: str, wf_state: state_mod.WorkflowState) -> list[str]:
     restored: list[str] = []
     try:
         for relative_path, entry in manifest.get("entries", {}).items():
-            _normalized_relative_path(project_root, relative_path)
+            _normalized_relative_path(
+                project_root,
+                relative_path,
+                purpose="回退清单文件记录",
+            )
             full_path = os.path.join(project_root, relative_path)
             if entry.get("original_exists"):
                 backup_path = _safe_backup_path(

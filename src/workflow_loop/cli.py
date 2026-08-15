@@ -58,6 +58,7 @@ CLEAN_DETECT_DIRS = ["spec", "acceptance", "qa", "impl", "bug"]
 # from_scratch 清场时需要一起删除的项目根文件
 CLEAN_DETECT_FILES = [artifact_paths_mod.TRACEABILITY_DOC]
 PENDING_SPIKE_ASSETS_META_KEY = "pending_spike_assets"
+IMPL_CODE_BASELINE_NOTICE_PENDING_KEY = "impl_code_baseline_notice_pending"
 DEFAULT_SPIKE_RERUN_TIMEOUT_SECONDS = 600
 
 STAGE_LABELS = {
@@ -487,15 +488,32 @@ def clear_completed_material_recovery(project_root: str, wf_state) -> bool:
     return True
 
 
+def _freeze_impl_code_baseline(project_root: str, wf_state, stage_state) -> str:
+    """同时冻结登记产品快照和不受计划范围收窄的完整实施快照。"""
+    snapshot = verification_mod.compute_registered_file_snapshot(
+        project_root,
+        scope="product",
+    )
+    complete_snapshot = verification_mod.compute_complete_implementation_file_snapshot(
+        project_root,
+        scope="all",
+    )
+    code_hash = compute_non_test_code_snapshot_hash(project_root)
+    stage_state.code_baseline_hash = code_hash
+    wf_state.meta[rollback_mod.IMPL_CODE_BASELINE_SNAPSHOT_KEY] = snapshot
+    wf_state.meta[rollback_mod.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY] = complete_snapshot
+    return code_hash
+
+
 def ensure_impl_recovery_baseline(project_root: str, wf_state) -> bool:
-    """进入或恢复到 impl 时立即记录代码，供计划确认前后比较。"""
+    """进入或恢复到 impl 时首次冻结产品代码基线和逐文件快照。"""
     if wf_state.current_stage != "impl":
         return False
     stage_state = wf_state.stages.get("impl")
     if stage_state is None or stage_state.code_baseline_hash is not None:
         return False
     recovering = bool(verification_mod.recovery_summary(wf_state))
-    stage_state.code_baseline_hash = compute_non_test_code_snapshot_hash(project_root)
+    _freeze_impl_code_baseline(project_root, wf_state, stage_state)
     journal_mod.append_entry(
         project_root,
         "恢复流程实施代码基线" if recovering else "实施代码入场基线",
@@ -503,13 +521,45 @@ def ensure_impl_recovery_baseline(project_root: str, wf_state) -> bool:
         workflow_id=wf_state.workflow_id,
         stage="impl",
         code_snapshot_hash=stage_state.code_baseline_hash,
+        code_snapshot_scope="registered_product_and_complete_implementation",
         reason=(
             "恢复流程开始时记录现有代码，后续由用户决定复用还是修改"
             if recovering
             else "进入代码实施时记录现有代码，后续用于证明计划确认前没有修改代码"
         ),
     )
+    # 基线通常在上游第三道门推进到 impl 时写入。首次实际执行
+    # workflow discuss 时再展示它，避免 AI 只知道当前哈希却不知道其边界。
+    wf_state.meta[IMPL_CODE_BASELINE_NOTICE_PENDING_KEY] = {
+        "code_snapshot_hash": stage_state.code_baseline_hash,
+        "code_snapshot_scope": "product",
+        "recovering": recovering,
+    }
     return True
+
+
+def _take_impl_code_baseline_notice(wf_state) -> str | None:
+    """只在首次成功加载 impl 材料时消费一次已冻结基线的说明。"""
+    if wf_state.current_stage != "impl":
+        return None
+    pending = wf_state.meta.pop(IMPL_CODE_BASELINE_NOTICE_PENDING_KEY, None)
+    if not isinstance(pending, dict):
+        return None
+    snapshot_hash = pending.get("code_snapshot_hash")
+    snapshot_scope = pending.get("code_snapshot_scope")
+    if not isinstance(snapshot_hash, str) or not snapshot_hash:
+        return None
+    scope_text = "登记产品文件" if snapshot_scope == "product" else "登记文件"
+    entry_text = "恢复进入" if pending.get("recovering") else "进入"
+    return (
+        "【实施前代码基线】\n"
+        f"已在{entry_text} impl（代码实施）时冻结：{snapshot_hash}。\n"
+        "code_baseline_hash（实施前产品代码整体快照）和"
+        f"{scope_text}的逐文件快照来自同一次边界；另已冻结完整实施范围的逐文件快照，"
+        "用于发现计划外源码、测试、脚本和配置变化；这些基线都不是 Git 提交。\n"
+        "workflow discuss 和 git commit 不会重写它；只有用户明确确认后执行 "
+        "`workflow gate impl --rebaseline` 才会建立新的实施前基线。"
+    )
 
 
 # 从当前工作目录向上查找 .workflow_loop/ 目录，定位项目根
@@ -1553,6 +1603,7 @@ def cmd_discuss(args) -> None:
             )
     if ensure_impl_recovery_baseline(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
+    impl_baseline_notice = _take_impl_code_baseline_notice(wf_state)
     state_mod.save_state(project_root, wf_state)
 
     # 打印材料清单（不倾倒正文）
@@ -1560,6 +1611,8 @@ def cmd_discuss(args) -> None:
     if verification_mod.recovery_summary(wf_state):
         print("\n【为什么重新进入当前阶段】")
         print_recovery_details(wf_state)
+    if impl_baseline_notice:
+        print(f"\n{impl_baseline_notice}")
     print("\n【角色】")
     if checklist.role_title or checklist.role_description:
         print(f"{checklist.role_title}：{checklist.role_description}")
@@ -1985,6 +2038,68 @@ def apply_stage_completion_updates(
     return updates
 
 
+def _stage_failure_diagnostics(
+    *,
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    stage_name: str,
+    stage: StageStrategy,
+    details: object,
+    command: str,
+    gate_name: str = "阶段产出校验",
+    excluded_prefixes: tuple[str, ...] = (),
+) -> list[diagnostics_mod.Diagnostic]:
+    """用底层结构化事实替换它已经覆盖的旧文字错误。"""
+    legacy_diagnostics = _diagnostics_from_failure_details(
+        stage_name=stage_name,
+        gate_name=gate_name,
+        details=details,
+        command=command,
+        excluded_prefixes=excluded_prefixes,
+    )
+    report_builder = getattr(stage, "code_validation_report", None)
+    if not callable(report_builder):
+        return legacy_diagnostics
+
+    structured_report = report_builder(project_root, wf_state)
+    if structured_report is None:
+        return legacy_diagnostics
+    if not isinstance(structured_report, diagnostics_mod.ValidationReport):
+        return legacy_diagnostics + [
+            diagnostics_mod.Diagnostic(
+                kind="error",
+                check_id=f"{stage_name}.structured_report.invalid_type",
+                location=f"{stage_name} 的 code_validation_report（结构化代码校验报告）返回值",
+                expected="返回 ValidationReport（结构化诊断报告）或 None",
+                actual=f"返回了 {type(structured_report).__name__}",
+                evidence=repr(structured_report),
+                impact=f"{stage_label(stage_name)}的底层诊断不能可靠透传",
+                next_action="修正阶段校验器的结构化报告返回类型",
+            )
+        ]
+
+    covered_prefixes_getter = getattr(
+        stage,
+        "legacy_diagnostic_prefixes_covered_by_report",
+        None,
+    )
+    covered_prefixes = (
+        tuple(covered_prefixes_getter())
+        if callable(covered_prefixes_getter)
+        else ()
+    )
+    if covered_prefixes:
+        legacy_diagnostics = [
+            diagnostic
+            for diagnostic in legacy_diagnostics
+            if not any(
+                diagnostic.actual.startswith(prefix)
+                for prefix in covered_prefixes
+            )
+        ]
+    return legacy_diagnostics + list(structured_report.diagnostics)
+
+
 def validate_stage_output(
     project_root: str,
     wf_state: state_mod.WorkflowState,
@@ -2021,8 +2136,11 @@ def validate_stage_output(
         stage_passed, stage_details = stage.code_validate(project_root)
         if not stage_passed:
             diagnostics.extend(
-                _diagnostics_from_failure_details(
+                _stage_failure_diagnostics(
+                    project_root=project_root,
+                    wf_state=wf_state,
                     stage_name=stage_name,
+                    stage=stage,
                     gate_name="阶段产出校验",
                     details=stage_details,
                     command=f"workflow gate {stage_name}",
@@ -2140,20 +2258,40 @@ def _failure_fragments(details: object) -> list[str]:
     """按校验器原有问题边界拆行，不按分号或句号破坏一条具体错误。"""
     fragments: list[str] = []
     current: list[str] = []
+    nested_number_prefix: str | None = None
     raw_lines = str(details or "").splitlines()
     has_bullet_boundaries = any(line.strip().startswith("-") for line in raw_lines)
     for raw_line in raw_lines:
         stripped = raw_line.strip()
         if not stripped or re.fullmatch(r".*(?:共|发现)\s*\d+\s*项.*", stripped):
             continue
+        numbered_item = bool(re.match(r"^\d+[.、]\s*", stripped))
+        # 历史阶段聚合器会把 ``- 检查名：1. 原因一\n2. 原因二`` 当成一条
+        # 外层文字。首条里已经明确了编号列表时，后续编号仍是独立问题，不能
+        # 因为外层使用 bullet 就被静默并入第一项。
         starts_issue = stripped.startswith("-") or (
-            not has_bullet_boundaries
-            and bool(re.match(r"^\d+[.、]\s*", stripped))
+            numbered_item
+            and (not has_bullet_boundaries or nested_number_prefix is not None)
         )
         if starts_issue:
             if current:
                 fragments.append("\n".join(current))
-            current = [re.sub(r"^(?:-|\d+[.、])\s*", "", stripped)]
+            if stripped.startswith("-"):
+                item = re.sub(r"^-\s*", "", stripped)
+                nested_match = re.match(
+                    r"^(?P<prefix>.*?[：:]\s*)(?P<number>\d+[.、]\s+).+$",
+                    item,
+                )
+                nested_number_prefix = (
+                    nested_match.group("prefix") if nested_match is not None else None
+                )
+            else:
+                item = (
+                    f"{nested_number_prefix}{stripped}"
+                    if nested_number_prefix is not None
+                    else re.sub(r"^\d+[.、]\s*", "", stripped)
+                )
+            current = [item]
         elif current:
             current.append(stripped)
         else:
@@ -2171,6 +2309,33 @@ def _diagnostics_from_failure_details(
     command: str,
     excluded_prefixes: tuple[str, ...] = (),
 ) -> list[diagnostics_mod.Diagnostic]:
+    # 新校验器已经知道每项检查的完整事实时，CLI 只能补最外层命令，不能把
+    # 它们转成字符串后再猜位置、依赖或修复动作。
+    structured_diagnostics: list[diagnostics_mod.Diagnostic] | None = None
+    if isinstance(details, diagnostics_mod.ValidationReport):
+        structured_diagnostics = list(details.diagnostics)
+    elif isinstance(details, diagnostics_mod.Diagnostic):
+        structured_diagnostics = [details]
+    elif isinstance(details, (list, tuple)) and all(
+        isinstance(item, diagnostics_mod.Diagnostic) for item in details
+    ):
+        structured_diagnostics = list(details)
+    if structured_diagnostics is not None:
+        if structured_diagnostics:
+            return structured_diagnostics
+        return [
+            diagnostics_mod.Diagnostic(
+                kind="error",
+                check_id=f"{stage_name}.{gate_name}.empty_structured_report",
+                location=f"{stage_name} 的{gate_name}返回值",
+                expected="失败的结构化报告至少包含一项可处理诊断",
+                actual="结构化报告没有诊断项",
+                evidence="调用方已进入失败输出路径，但没有提供 Diagnostic（诊断项）",
+                impact=f"{stage_label(stage_name)}不能确认，原因无法可靠定位",
+                next_action="补充失败检查的结构化诊断后重新执行本门禁",
+            )
+        ]
+
     diagnostics: list[diagnostics_mod.Diagnostic] = []
     for index, fragment in enumerate(_failure_fragments(details), start=1):
         if any(fragment.startswith(prefix) for prefix in excluded_prefixes):
@@ -2186,15 +2351,17 @@ def _diagnostics_from_failure_details(
             else f"{stage_name} 的{gate_name}第 {index} 项"
         )
         kind = "not_checked" if "未检查" in fragment else "error"
-        next_action = f"按本项位置修正后原样执行 `{command}`"
+        # 旧校验器只返回文字时，不能由 CLI 凭空补造精确的修复步骤。
+        # 仍把原文完整保留在“实际”和“证据”，并且不在每一项重复一条
+        # 可执行命令；报告末尾的 NextCommand 才是唯一命令入口。
+        next_action = "根据本项“实际”和“证据”修正相关输入，再执行报告末尾唯一的下一步命令"
         if (
             stage_name == "test_code"
             and "workflow gate test_code --accept-existing-test-code" in fragment
         ):
             next_action = (
-                "如果现有测试代码仍覆盖最新测试计划，原样执行 "
-                "`workflow gate test_code --accept-existing-test-code`；"
-                "否则先修改测试代码"
+                "确认现有测试代码是否仍覆盖最新测试计划；未覆盖时先修改测试代码，"
+                "然后执行报告末尾唯一的下一步命令"
             )
         kwargs = {
             "kind": kind,
@@ -2207,7 +2374,14 @@ def _diagnostics_from_failure_details(
             "next_action": next_action,
         }
         if kind == "not_checked":
-            kwargs["depends_on"] = f"{stage_name}.prerequisite"
+            dependencies = tuple(
+                item.check_id for item in diagnostics if item.kind == "error"
+            )
+            # 旧文字没有可机器读取的依赖编号时，宁可明确暴露该协议缺口，
+            # 也不能伪造一个看起来像真实检查的 stage.prerequisite。
+            kwargs["depends_on"] = dependencies or (
+                f"{stage_name}.{gate_name}.legacy_dependency_not_reported",
+            )
         diagnostics.append(diagnostics_mod.Diagnostic(**kwargs))
     return diagnostics
 
@@ -2216,9 +2390,16 @@ def _deduplicate_diagnostics(
     diagnostics: list[diagnostics_mod.Diagnostic],
 ) -> list[diagnostics_mod.Diagnostic]:
     unique: list[diagnostics_mod.Diagnostic] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[str] = set()
     for diagnostic in diagnostics:
-        key = (diagnostic.kind, diagnostic.location, diagnostic.actual)
+        # 相同位置和实际值也可能分别违反两个独立规则；只有全部可见事实都
+        # 一致时才可以去重，避免把可处理问题悄悄合并掉。
+        key = json.dumps(
+            diagnostic.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -2263,7 +2444,11 @@ def _format_combined_stage_diagnostics(
         diagnostics=unique_diagnostics,
         next_command=diagnostics_mod.NextCommand(
             command=command,
-            executor="AI 原样执行",
+            executor=(
+                "用户确认后由 AI 原样执行"
+                if confirms_existing_test_code
+                else "AI 原样执行"
+            ),
             side_effects=side_effects,
             success_condition=success_condition,
             next_stage=stage_label(stage_name),
@@ -2374,28 +2559,12 @@ def _format_failure_diagnostics(
     next_stage: str,
 ) -> str:
     """统一渲染一道门当前已经收集到的全部错误和未检查项。"""
-    fragments = _failure_fragments(details)
-    diagnostics: list[diagnostics_mod.Diagnostic] = []
-    for index, fragment in enumerate(fragments, start=1):
-        location_match = re.search(
-            r"(?:[A-Za-z0-9_.-]+/)+[^：；\s]+(?:\.\w+)?(?:[:：]第?\d+行?)?",
-            fragment,
-        )
-        location = location_match.group(0) if location_match else f"{stage_name} 阶段校验结果第 {index} 项"
-        kind = "not_checked" if "未检查" in fragment else "error"
-        kwargs = {
-            "kind": kind,
-            "check_id": f"{stage_name}.{gate_name}.{index:02d}",
-            "location": location,
-            "expected": "当前检查所需前置事实存在，且当前内容满足门禁规则",
-            "actual": fragment,
-            "evidence": fragment,
-            "impact": f"{stage_label(stage_name)}不能确认，后续阶段不会执行",
-            "next_action": f"按本项位置修正后原样执行 `{command}`",
-        }
-        if kind == "not_checked":
-            kwargs["depends_on"] = f"{stage_name}.prerequisite"
-        diagnostics.append(diagnostics_mod.Diagnostic(**kwargs))
+    diagnostics = _diagnostics_from_failure_details(
+        stage_name=stage_name,
+        gate_name=gate_name,
+        details=details,
+        command=command,
+    )
     report = diagnostics_mod.ValidationReport(
         stage=stage_name,
         gate=gate_name,
@@ -3193,6 +3362,21 @@ def _clear_topic_test_state(
     acceptance_records_mod.clear_topic_records(project_root, wf_state, topics)
 
 
+def _print_return_request_failure(
+    wf_state: state_mod.WorkflowState,
+    details: str,
+) -> None:
+    """把不会修改状态的退回参数错误也输出为统一门禁诊断。"""
+    _print_gate_failure(
+        stage_name=wf_state.current_stage,
+        gate_name="退回请求检查",
+        details=details,
+        command="workflow status",
+        side_effects="只读取当前工作流状态，不修改正式文档、代码或工作流状态",
+        success_condition="确认当前阶段、实际阶段路径和需要明确的退回参数",
+    )
+
+
 def cmd_return(args) -> None:
     """用户确认后把当前工作流退回指定阶段，并只清理直接受影响主题的当前状态。
 
@@ -3206,19 +3390,32 @@ def cmd_return(args) -> None:
     wf_state = _load_active_workflow_for_command(project_root)
     stage_indexes = _stage_index_map(wf_state)
     if args.to not in stage_indexes:
-        print(f"错误：目标阶段不在当前工作流的实际路径中: {args.to}")
-        print(f"本轮路径: {' → '.join(wf_state.stage_path)}")
+        _print_return_request_failure(
+            wf_state,
+            "\n".join(
+                (
+                    f"目标阶段不在当前工作流的实际路径中: {args.to}",
+                    f"本轮路径: {' → '.join(wf_state.stage_path)}",
+                )
+            ),
+        )
         return
     if wf_state.current_stage not in stage_indexes or stage_indexes[args.to] >= stage_indexes[wf_state.current_stage]:
-        print(f"错误：只能退回当前阶段之前的阶段，当前是 {stage_label(wf_state.current_stage)}")
+        _print_return_request_failure(
+            wf_state,
+            f"只能退回当前阶段之前的阶段，当前是 {stage_label(wf_state.current_stage)}",
+        )
         return
     if not args.reason.strip():
-        print("错误：必须说明为什么退回")
+        _print_return_request_failure(wf_state, "必须说明为什么退回")
         return
 
     # 直接受影响主题必须明确：已有主题时不允许含糊范围，也不自动扩大
     if args.topic and args.all_topics:
-        print("错误：--topic 和 --all-topics 互斥，只能选择一种方式说明受影响主题")
+        _print_return_request_failure(
+            wf_state,
+            "--topic 和 --all-topics 互斥，只能选择一种方式说明受影响主题",
+        )
         return
     if wf_state.topics:
         if args.all_topics:
@@ -3226,13 +3423,19 @@ def cmd_return(args) -> None:
         elif args.topic:
             affected_topics = list(dict.fromkeys(args.topic))
         else:
-            print("错误：当前工作流已有验收主题，必须明确写出直接受影响的主题：")
-            print("  逐个使用 --topic <主题名称>（可重复），或使用 --all-topics 表示全部主题")
-            print("  程序不会根据主题依赖自动扩大范围；只有确有影响证据的主题才应列出")
+            _print_return_request_failure(
+                wf_state,
+                "当前工作流已有验收主题，必须明确写出直接受影响的主题；"
+                "逐个使用 --topic <主题名称>（可重复），或使用 --all-topics 表示全部主题；"
+                "程序不会根据主题依赖自动扩大范围，只有确有影响证据的主题才应列出",
+            )
             return
         unknown = sorted(set(affected_topics) - set(wf_state.topics))
         if unknown:
-            print(f"错误：受影响主题不属于当前工作流: {unknown}")
+            _print_return_request_failure(
+                wf_state,
+                f"受影响主题不属于当前工作流: {unknown}",
+            )
             return
     else:
         # 主题尚未形成（早期阶段）：不伪造主题参数
@@ -3779,8 +3982,22 @@ def cmd_gate(args) -> None:
             return
 
         previous_hash = stage_state.code_baseline_hash
-        current_hash = compute_non_test_code_snapshot_hash(project_root)
-        stage_state.code_baseline_hash = current_hash
+        try:
+            current_hash = _freeze_impl_code_baseline(
+                project_root,
+                wf_state,
+                stage_state,
+            )
+        except (OSError, ValueError) as exc:
+            _print_gate_failure(
+                stage_name="impl",
+                gate_name="实施代码基线重设",
+                details=f"无法冻结实施前逐文件产品快照：{exc}",
+                command="workflow gate impl --rebaseline",
+                side_effects="只读取当前登记的产品文件并保存新的实施前哈希和逐文件快照",
+                success_condition="当前产品文件范围可读取，并同时保存整体哈希和逐文件快照",
+            )
+            return
         stage_state.existing_code_accepted_hash = None
         journal_mod.append_entry(
             project_root,
@@ -3791,10 +4008,15 @@ def cmd_gate(args) -> None:
             reason="用户确认当前代码为实施计划确认前的现状基线",
             previous_code_snapshot_hash=previous_hash,
             code_snapshot_hash=current_hash,
+            code_snapshot_scope="product",
         )
         state_mod.save_state(project_root, wf_state)
         print(f"═══ {stage_name} 实施前代码基线已重设 ═══")
         print(f"当前代码基线: {current_hash}")
+        print(
+            "已同时冻结登记产品文件的逐文件快照；code_baseline_hash 是工作区产品文件快照，"
+            "不是 Git 提交，workflow discuss 和 git commit 不会重写它。"
+        )
         print_next_step("确认实施前计划没有继续修改代码后，调 `workflow gate impl --discuss-done`")
         return
 
@@ -3823,7 +4045,18 @@ def cmd_gate(args) -> None:
             )
             return
         if not gate.discussion_complete:
-            valid, detail = stage.discussion_validate(project_root, wf_state)
+            try:
+                valid, detail = stage.discussion_validate(project_root, wf_state)
+            except (OSError, ValueError) as exc:
+                _print_gate_failure(
+                    stage_name=stage_name,
+                    gate_name="讨论完成校验",
+                    details=f"讨论前置校验无法完成：{exc}",
+                    command=f"workflow gate {stage_name} --discuss-done",
+                    side_effects="只核对讨论阶段必需事实并记录讨论完成状态",
+                    success_condition="全部独立讨论前置检查通过",
+                )
+                return
             if not valid:
                 _print_gate_failure(
                     stage_name=stage_name,
@@ -3903,16 +4136,18 @@ def cmd_gate(args) -> None:
                         project_root,
                         wf_state.topics,
                     )
-                    # 到这里实施计划已经明确了核心路径；此时才建立代码基线。
-                    # 进入 impl 时不扫描全项目，也不把依赖、构建产物和缓存算进去。
-                    stage_state.code_baseline_hash = compute_non_test_code_snapshot_hash(
-                        project_root
-                    )
+                    # 新流程在进入 impl 时已经冻结基线；只为旧状态补齐缺失基线，
+                    # 不能在计划确认时覆盖首次冻结的事实。
+                    if stage_state.code_baseline_hash is None:
+                        _freeze_impl_code_baseline(
+                            project_root,
+                            wf_state,
+                            stage_state,
+                        )
                 except (ValueError, OSError) as exc:
                     gate.discussion_complete = False
                     stage_state.discussion_material_hash = None
                     stage_state.plan_confirmed_hash = None
-                    stage_state.code_baseline_hash = None
                     _print_gate_failure(
                         stage_name="impl",
                         gate_name="讨论完成校验",
@@ -4003,6 +4238,29 @@ def cmd_gate(args) -> None:
             print_next_step(current_stage_next_instruction(wf_state))
             return
         print("可以开始当前阶段要求的产出或实际操作。")
+        if stage_name == "impl":
+            snapshot_available = isinstance(
+                wf_state.meta.get(rollback_mod.IMPL_CODE_BASELINE_SNAPSHOT_KEY),
+                dict,
+            )
+            complete_snapshot_available = isinstance(
+                wf_state.meta.get(rollback_mod.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY),
+                dict,
+            )
+            if snapshot_available and complete_snapshot_available:
+                snapshot_note = "已同时冻结登记产品文件和完整实施范围的逐文件快照。"
+            elif snapshot_available:
+                snapshot_note = (
+                    "当前旧状态只有登记产品文件快照，未登记实施文件未检查；"
+                    "首次显式重设基线会补齐完整实施范围快照。"
+                )
+            else:
+                snapshot_note = "当前是旧状态，尚无逐文件快照；首次显式重设基线会补齐它。"
+            print(
+                "实施前代码基线说明：code_baseline_hash 是进入 impl 时冻结的工作区产品文件快照，"
+                "不是 Git 提交；workflow discuss 和 git commit 不会重写它。"
+                + snapshot_note
+            )
         if recovery_instruction(wf_state):
             print_next_step(current_stage_next_instruction(wf_state))
         else:
@@ -4042,9 +4300,20 @@ def cmd_gate(args) -> None:
             state_mod.save_state(project_root, wf_state)
 
         # Verification Invalidation 检查：上游 hash 是否变化
-        invalidation_inspection = verification_mod.inspect_invalidation(
-            wf_state, project_root
-        )
+        try:
+            invalidation_inspection = verification_mod.inspect_invalidation(
+                wf_state, project_root
+            )
+        except (OSError, ValueError) as exc:
+            _print_gate_failure(
+                stage_name=stage_name,
+                gate_name="验证失效检查",
+                details=f"验证失效检查无法完成：{exc}",
+                command=f"workflow gate {stage_name}",
+                side_effects="只读比较当前责任输入、已确认绑定和逐文件快照",
+                success_condition="全部可比较绑定都有明确变化结论或明确未检查依赖",
+            )
+            return
         if invalidation_inspection.blocked and not invalidation_inspection.findings:
             print("═══ 验证失效范围无法自动确定 ═══")
             print(_format_invalidation_diagnostics(invalidation_inspection, wf_state))
@@ -4103,12 +4372,23 @@ def cmd_gate(args) -> None:
         # 跑 code_validate（第 2 道闸的核心）。
         if stage_name == "regression_test":
             print("现在真实执行一次项目全量测试入口；本次执行结果将作为最终回归事实。")
-        passed, details = validate_stage_output(
-            project_root,
-            wf_state,
-            stage_name,
-            stage,
-        )
+        try:
+            passed, details = validate_stage_output(
+                project_root,
+                wf_state,
+                stage_name,
+                stage,
+            )
+        except (OSError, ValueError) as exc:
+            _print_gate_failure(
+                stage_name=stage_name,
+                gate_name="代码校验",
+                details=f"阶段校验无法完成：{exc}",
+                command=f"workflow gate {stage_name}",
+                side_effects="只读校验当前阶段材料和状态，不自动修改业务代码",
+                success_condition="当前阶段的全部独立检查通过",
+            )
+            return
         # 检查产出文件是否存在（写 journal：产出文件检查）
         for artifact in stage_state.artifact_paths:
             full_path = os.path.join(project_root, artifact)
@@ -4266,10 +4546,28 @@ def cmd_gate(args) -> None:
         )
         sys.exit(1)
 
-    credential_valid, credential_detail = verification_mod.compare_validation_credential(
-        project_root,
-        wf_state,
-        stage_name,
+    try:
+        credential_report = verification_mod.compare_validation_credential_report(
+            project_root,
+            wf_state,
+            stage_name,
+        )
+    except (OSError, ValueError) as exc:
+        # 比较本身失败不能伪造“凭据已失效”，也不能清掉仍可能有效的第二道门事实。
+        _print_gate_failure(
+            stage_name=stage_name,
+            gate_name="用户确认前凭据比较",
+            details=f"无法比较第二道门校验凭据：{exc}",
+            command=f"workflow gate {stage_name} --confirmed",
+            side_effects="只比较当前责任输入与第二道门凭据；不推进阶段，也不清除已有凭据",
+            success_condition="当前责任输入和第二道门凭据均可读取，并可完成一致性比较",
+        )
+        return
+    credential_valid = credential_report.passed
+    credential_detail = (
+        "第二道门凭据有效"
+        if credential_valid
+        else diagnostics_mod.format_diagnostics(credential_report)
     )
     if not credential_valid:
         gate.code_validated = False
@@ -4292,7 +4590,7 @@ def cmd_gate(args) -> None:
         _print_gate_failure(
             stage_name=stage_name,
             gate_name="用户确认前凭据比较",
-            details=credential_detail,
+            details=credential_report,
             command=f"workflow gate {stage_name}",
             side_effects=(
                 "重新执行一次完整第二道门校验并生成新凭据；"

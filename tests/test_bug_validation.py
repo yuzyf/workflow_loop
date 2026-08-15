@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from workflow_loop.artifact_validation import validate_reproduce_documents
+from workflow_loop.topic import list_reproduce_topics
 
 
 TOPIC = "产品和代码设计及缺陷穿刺结论保持真实一致"
@@ -96,3 +97,36 @@ def test_reproduce_document_rejects_unconfirmed_root_cause(tmp_path):
 
     assert ok is False
     assert "6. 根因" in detail
+
+
+def test_reproduce_topic_on_the_next_line_is_not_misread_as_the_next_field(tmp_path):
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-05 缺陷主题空值不吞下一字段
+    验收条件：AC-03 格式错误报真实格式和改法
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate reproduce` 的缺陷记录校验
+    测试入口：`tests/test_bug_validation.py::test_reproduce_topic_on_the_next_line_is_not_misread_as_the_next_field`
+    代码入口：`src/workflow_loop/artifact_validation.py::validate_reproduce_documents`
+    准备数据：建立有效缺陷记录，再清空“验收主题”同行值并在下一行写入“别的字段”。
+    执行动作：执行缺陷记录校验并读取缺陷主题列表。
+    关键断言：输出定位“验收主题”字段并说明同行格式；下一字段不被误作主题，主题列表为空。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需同时证明格式诊断和空主题列表。
+    """
+    changed = _bug_document(tmp_path)
+    record = tmp_path / "bug" / "缺陷_上传失败.md"
+    record.write_text(
+        record.read_text(encoding="utf-8").replace(
+            "- 验收主题：上传失败后显示真实错误",
+            "- 验收主题：\n- 别的字段：不该被当成主题",
+        ),
+        encoding="utf-8",
+    )
+
+    ok, detail = validate_reproduce_documents(str(tmp_path), changed, "wf")
+
+    assert ok is False
+    assert "验收主题”字段" in detail
+    assert "值必须写在标签同一行，下一行内容不会被读取" in detail
+    assert list_reproduce_topics(str(tmp_path), "wf") == []

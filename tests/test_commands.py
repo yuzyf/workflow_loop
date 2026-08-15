@@ -218,6 +218,231 @@ def test_discuss_prints_ordered_material_paths_without_document_bodies(tmp_path)
     assert "按下列顺序用文件读取工具逐份读取全文" in out
 
 
+def test_discuss_announces_impl_baseline_frozen_before_first_material_read(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-06 首次实施讨论先说明基线已经冻结
+    验收条件：AC-04 实施基线差异说清冻结时机、变化文件和处理方法
+    测试方式：自动化测试
+    测试层级：命令测试
+    产品入口：`workflow discuss` 进入实施环节
+    测试入口：`tests/test_commands.py::test_discuss_announces_impl_baseline_frozen_before_first_material_read`
+    代码入口：`src/workflow_loop/cli.py::cmd_discuss`
+    准备数据：建立首次进入实施环节且已经保存登记快照和完整实施范围快照的工作流状态。
+    执行动作：执行实施环节讨论命令。
+    关键断言：在第一份材料被读取前只提示一次“实施前基线已冻结”，并说明基线不会被 `workflow discuss` 或 Git 提交重写；重复讨论不重复提示。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需保留提示顺序、含义和只展示一次的事实。
+    """
+    stage_state = cli_mod.state_mod.StageState(
+        status="in_progress",
+    )
+    workflow_state = WorkflowState(
+        workflow_id="impl-entry-baseline",
+        intent="product_change",
+        run_status="active",
+        current_stage="impl",
+        stage_path=["impl"],
+        stages={"impl": stage_state},
+    )
+
+    class ImplStrategy:
+        def name(self):
+            return "impl"
+
+        def instruction(self):
+            return "先核对实施计划"
+
+        def materials(self):
+            return []
+
+        def artifact_paths(self):
+            return []
+
+        def prompt_doc_path(self):
+            return None
+
+        def standard_doc_path(self):
+            return None
+
+        def additional_standard_doc_paths(self):
+            return []
+
+    checklist = SimpleNamespace(
+        fingerprint="impl-materials",
+        role_title="",
+        role_description="",
+        task_text="先核对实施计划",
+        materials=[],
+        placeholders=[],
+    )
+    saved_states: list[WorkflowState] = []
+
+    monkeypatch.setattr(cli_mod, "resolve_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        cli_mod.state_mod,
+        "load_state",
+        lambda _root: workflow_state,
+    )
+    monkeypatch.setattr(
+        cli_mod.state_mod,
+        "save_state",
+        lambda _root, state: saved_states.append(state),
+    )
+    monkeypatch.setattr(cli_mod, "refuse_if_pending_start_transaction", lambda _root: None)
+    monkeypatch.setattr(
+        cli_mod,
+        "_ensure_stage_path_current_for_command",
+        lambda _root, _state: None,
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "restore_recovery_context_from_journal",
+        lambda _root, _state: False,
+    )
+    monkeypatch.setattr(cli_mod, "clear_completed_material_recovery", lambda _root, _state: False)
+    monkeypatch.setattr(cli_mod, "_stage_role_doc", lambda _stage: None)
+    monkeypatch.setattr(
+        cli_mod,
+        "build_stage_path",
+        lambda _intent, _root: [ImplStrategy()],
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "get_stage_strategy",
+        lambda _name, _state, _instances: ImplStrategy(),
+    )
+    monkeypatch.setattr(
+        cli_mod.stage_materials_mod,
+        "build_checklist",
+        lambda *_args: checklist,
+    )
+    monkeypatch.setattr(
+        cli_mod.verification_mod,
+        "compute_registered_file_snapshot",
+        lambda _root, *, scope: {"scope": scope, "files": []},
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "compute_non_test_code_snapshot_hash",
+        lambda _root: "impl-entry-code-hash",
+    )
+    monkeypatch.setattr(cli_mod.journal_mod, "append_entry", lambda *_args, **_kwargs: None)
+
+    # 这一步模拟上游第三道门推进到 impl 时同步冻结的事实。
+    assert cli_mod.ensure_impl_recovery_baseline(str(tmp_path), workflow_state) is True
+    assert stage_state.code_baseline_hash == "impl-entry-code-hash"
+
+    cli_mod.cmd_discuss(SimpleNamespace())
+    first_output = capsys.readouterr().out
+
+    assert "【实施前代码基线】" in first_output
+    assert "impl-entry-code-hash" in first_output
+    assert "code_baseline_hash（实施前产品代码整体快照）" in first_output
+    assert "不是 Git 提交" in first_output
+    assert "workflow discuss 和 git commit 不会重写它" in first_output
+    assert cli_mod.IMPL_CODE_BASELINE_NOTICE_PENDING_KEY not in workflow_state.meta
+    assert saved_states
+
+    cli_mod.cmd_discuss(SimpleNamespace())
+    second_output = capsys.readouterr().out
+
+    assert "【实施前代码基线】" not in second_output
+
+
+def test_confirmed_gate_reports_unreadable_credential_comparison_without_clearing_it(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """第三道门无法读取凭据时，保留原凭据并给出可重试的确认命令。"""
+    stage_state = cli_mod.state_mod.StageState(
+        status="in_progress",
+        discussion_material_hash="materials",
+    )
+    stage_state.gate.discussion_complete = True
+    stage_state.gate.code_validated = True
+    original_credential = object()
+    stage_state.validation_credential = original_credential
+    workflow_state = WorkflowState(
+        workflow_id="credential-io-error",
+        intent="product_change",
+        run_status="active",
+        current_stage="spec",
+        stage_path=["spec"],
+        stages={"spec": stage_state},
+    )
+    saved_states: list[WorkflowState] = []
+    journal_entries: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(cli_mod, "resolve_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        cli_mod.state_mod,
+        "load_state",
+        lambda _root: workflow_state,
+    )
+    monkeypatch.setattr(
+        cli_mod.state_mod,
+        "save_state",
+        lambda _root, state: saved_states.append(state),
+    )
+    monkeypatch.setattr(cli_mod, "refuse_if_pending_start_transaction", lambda _root: None)
+    monkeypatch.setattr(
+        cli_mod,
+        "_ensure_stage_path_current_for_command",
+        lambda _root, _state: None,
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "restore_recovery_context_from_journal",
+        lambda _root, _state: False,
+    )
+    monkeypatch.setattr(cli_mod, "clear_completed_material_recovery", lambda _root, _state: False)
+    monkeypatch.setattr(cli_mod, "build_stage_path", lambda _intent, _root: [object()])
+    monkeypatch.setattr(
+        cli_mod,
+        "get_stage_strategy",
+        lambda _name, _state, _instances: object(),
+    )
+    monkeypatch.setattr(cli_mod, "compute_stage_material_hash", lambda _root, _stage: "materials")
+    monkeypatch.setattr(
+        cli_mod.verification_mod,
+        "compare_validation_credential_report",
+        lambda *_args: (_ for _ in ()).throw(OSError("凭据关联文件不可读取")),
+    )
+    monkeypatch.setattr(
+        cli_mod.journal_mod,
+        "append_entry",
+        lambda *args, **kwargs: journal_entries.append((args, kwargs)),
+    )
+
+    cli_mod.cmd_gate(
+        SimpleNamespace(
+            stage="spec",
+            rebaseline=False,
+            prepare_code=False,
+            accept_existing_code=False,
+            accept_existing_test_code=False,
+            skip=False,
+            discuss_done=False,
+            confirmed=True,
+        )
+    )
+    output = capsys.readouterr().out
+
+    assert "用户确认前凭据比较失败" in output
+    assert "无法比较第二道门校验凭据：凭据关联文件不可读取" in output
+    assert output.count("下一步命令: workflow gate spec --confirmed") == 1
+    assert "Traceback" not in output
+    assert stage_state.gate.code_validated is True
+    assert stage_state.validation_credential is original_credential
+    assert saved_states == []
+    assert journal_entries == []
+
+
 def test_three_gates_advance_in_the_required_order(tmp_path):
     """Workflow-Test
     主题：用户提出需求后工作流正确开始或继续并逐环节确认
@@ -296,8 +521,26 @@ def test_return_requires_explicit_directly_affected_topic_scope(tmp_path):
 
     assert code == 0, err
     assert "必须明确写出直接受影响的主题" in out
+    assert "门禁: 退回请求检查" in out
+    assert out.count("下一步命令: workflow status") == 1
     assert after.current_stage == before.current_stage
     assert after.recovery.return_target is None
+
+
+def test_return_invalid_target_reports_structured_reason_and_one_safe_next_command(tmp_path):
+    """退回目标不在真实路径时，AI 能看到原因并先读取当前路径。"""
+    _state_at_impl(tmp_path)
+
+    code, out, err = _run(
+        ["return", "--to", "not-a-stage", "--topic", "安装", "--reason", "原因"],
+        tmp_path,
+    )
+
+    assert code == 0, err
+    assert "目标阶段不在当前工作流的实际路径中: not-a-stage" in out
+    assert "本轮路径:" in out
+    assert "门禁: 退回请求检查" in out
+    assert out.count("下一步命令: workflow status") == 1
 
 
 def test_return_accepts_only_real_earlier_stage(tmp_path):
@@ -994,6 +1237,122 @@ def test_gate_reports_link_and_stage_errors_without_running_regression(
     assert "下一步命令: workflow repair-links" in detail
 
 
+def test_gate_splits_nested_legacy_numbered_errors_into_independent_diagnostics(
+    tmp_path,
+    monkeypatch,
+):
+    """旧阶段把编号错误包进外层条目时，顶层仍须逐项报告。"""
+
+    class LegacyImplStage:
+        def code_validate(self, _project_root):
+            return (
+                False,
+                "- 实施代码变化和计划范围：1. impl/上传文件_实施记录.md:87，文件列："
+                "代码修改计划包含无法定位的文件路径：'暂无'\n"
+                "2. 实际修改但实施后记录未列出：['src/upload.py']",
+            )
+
+    monkeypatch.setattr(
+        cli_mod.markdown_links_mod,
+        "validate_managed_markdown_links",
+        lambda _project_root, **_kwargs: (True, "链接完整"),
+    )
+    workflow_state = WorkflowState(
+        workflow_id="nested-legacy-details",
+        intent="product_change",
+        run_status="active",
+    )
+
+    passed, detail = cli_mod.validate_stage_output(
+        str(tmp_path),
+        workflow_state,
+        "impl",
+        LegacyImplStage(),
+    )
+
+    assert passed is False
+    assert "错误 2 项，未检查 0 项" in detail
+    assert "代码修改计划包含无法定位的文件路径：'暂无'" in detail
+    assert "实际修改但实施后记录未列出：['src/upload.py']" in detail
+
+
+def test_impl_gate_replaces_covered_legacy_text_with_structured_file_facts(
+    tmp_path,
+    monkeypatch,
+):
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-02 上层汇总不覆盖底层逐文件事实
+    验收条件：AC-02 每项诊断保留真实事实并能直接修改
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate impl` 的阶段产物校验
+    测试入口：`tests/test_commands.py::test_impl_gate_replaces_covered_legacy_text_with_structured_file_facts`
+    代码入口：`src/workflow_loop/cli.py::validate_stage_output`
+    准备数据：建立同时返回两个逐文件结构化错误、对应旧路径列表文字和一个未被结构化报告覆盖的基线错误的实施阶段替身。
+    执行动作：调用实施阶段产物校验，合并结构化诊断、仍有效的旧错误和当前门禁动作。
+    关键断言：两个文件分别保留检查项、位置、预期、实际、证据、影响和改法；已覆盖的旧路径列表被去除；未覆盖的基线错误仍保留。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需证明逐文件事实和未覆盖错误同时存在。
+    """
+
+    class StructuredImplStage:
+        def code_validate(self, _project_root):
+            return (
+                False,
+                "- 实施代码变化和计划范围：实际修改但实施后记录未列出："
+                "['src/a.py', 'src/b.py']\n"
+                "- 实施代码基线：缺少进入 impl 时的代码基线",
+            )
+
+        def code_validation_report(self, _project_root, _workflow_state):
+            report = cli_mod.diagnostics_mod.ValidationReport(
+                stage="impl",
+                gate="实施代码变化和三方核对",
+            )
+            for path in ("src/a.py", "src/b.py"):
+                report.add_error(
+                    check_id="impl.implementation_relation.actual_unrecorded",
+                    location=f"{path}（实施前基线后的真实文件差异）",
+                    expected="每个真实修改文件都有一条实施后记录",
+                    actual=f"实际修改但实施后记录未列出：{path}",
+                    evidence=f"真实差异文件={path}；实施记录文件=[]",
+                    impact="后续测试无法知道该文件改了什么",
+                    next_action="为该文件补充真实实施记录",
+                )
+            return report
+
+        @staticmethod
+        def legacy_diagnostic_prefixes_covered_by_report():
+            return ("实施代码变化和计划范围：",)
+
+    monkeypatch.setattr(
+        cli_mod.markdown_links_mod,
+        "validate_managed_markdown_links",
+        lambda _project_root, **_kwargs: (True, "链接完整"),
+    )
+    workflow_state = WorkflowState(
+        workflow_id="structured-impl-report",
+        intent="product_change",
+        run_status="active",
+    )
+
+    passed, detail = cli_mod.validate_stage_output(
+        str(tmp_path),
+        workflow_state,
+        "impl",
+        StructuredImplStage(),
+    )
+
+    assert passed is False
+    assert "错误 3 项，未检查 0 项" in detail
+    assert detail.count("impl.implementation_relation.actual_unrecorded") == 2
+    assert "位置: src/a.py（实施前基线后的真实文件差异）" in detail
+    assert "位置: src/b.py（实施前基线后的真实文件差异）" in detail
+    assert "['src/a.py', 'src/b.py']" not in detail
+    assert "实施代码基线：缺少进入 impl 时的代码基线" in detail
+    assert detail.count("下一步命令: workflow gate impl") == 1
+
+
 def test_test_code_unchanged_failure_reports_exact_existing_code_command(
     tmp_path,
     monkeypatch,
@@ -1031,9 +1390,15 @@ def test_test_code_unchanged_failure_reports_exact_existing_code_command(
     )
     assert "自动动作: 记录用户确认复用当前测试代码" in detail
     assert (
-        "下一动作: 如果现有测试代码仍覆盖最新测试计划，原样执行 "
-        "`workflow gate test_code --accept-existing-test-code`；否则先修改测试代码"
+        "下一动作: 确认现有测试代码是否仍覆盖最新测试计划；未覆盖时先修改测试代码，"
+        "然后执行报告末尾唯一的下一步命令"
         in detail
+    )
+    assert (
+        detail.count(
+            "下一步命令: workflow gate test_code --accept-existing-test-code"
+        )
+        == 1
     )
     assert "请按上述每项“下一动作”处理" in detail
 

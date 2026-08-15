@@ -86,6 +86,33 @@ def _field(content: str, label: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def _missing_fixed_field_reason(
+    content: str,
+    label: str,
+    *,
+    next_field_means_misplaced_value: bool = False,
+) -> str:
+    """说明固定字段缺值的真实格式原因，不把换行误说成普通空值。"""
+    field_line = re.search(
+        rf"^-[ \t]*{re.escape(label)}：[ \t]*(?P<value>[^\r\n]*)$",
+        content,
+        re.MULTILINE,
+    )
+    if field_line is None:
+        return "缺少具体内容；原因：缺少标签"
+    if field_line.group("value").strip():
+        return "缺少具体内容"
+
+    following = content[field_line.end() :].splitlines()
+    next_content = next((line.strip() for line in following if line.strip()), "")
+    if next_content and (
+        next_field_means_misplaced_value
+        or not re.match(r"^-[ \t]*[^：]+：", next_content)
+    ):
+        return "值必须写在标签同一行，下一行内容不会被读取"
+    return "标签同一行没有值，缺少具体内容"
+
+
 def _argv_text(argv: list[str]) -> str:
     """把参数数组编码成可读且可精确比对的单行 JSON。"""
     return json.dumps(argv, ensure_ascii=False, separators=(",", ":"))
@@ -1444,7 +1471,15 @@ def validate_reproduce_documents(
             failures.append(f"{filename} 必须写“根因状态：已确认”")
         topic = _field(content, "验收主题")
         if not _is_safe_topic_name(topic):
-            failures.append(f"{filename} 必须写清唯一验收主题")
+            reason = _missing_fixed_field_reason(
+                content,
+                "验收主题",
+                next_field_means_misplaced_value=True,
+            )
+            if topic is None:
+                failures.append(f"{filename}“验收主题”字段：{reason}")
+            else:
+                failures.append(f"{filename} 必须写清唯一验收主题")
         else:
             topics.append(topic or "")
 
@@ -1573,7 +1608,10 @@ def validate_acceptance_plan_documents(
             for label in required_fields:
                 value = _field(criterion_content, label)
                 if value is None or not value.strip():
-                    issues.append(f"{rel_path} {criterion_id}“{label}”字段：缺少具体内容")
+                    issues.append(
+                        f"{rel_path} {criterion_id}“{label}”字段："
+                        f"{_missing_fixed_field_reason(criterion_content, label)}"
+                    )
                     continue
                 normalized = re.sub(r"[\s`*_.。,，:：;；!?！？()（）\[\]{}]", "", value or "").lower()
                 if normalized in placeholder_values or not _has_real_text(value):

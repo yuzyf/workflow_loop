@@ -16,7 +16,11 @@ from workflow_loop.stages.stages import (
     TestExecutionStage,
     QaStage,
 )
-from workflow_loop.verification import compute_non_test_code_snapshot_hash
+from workflow_loop.verification import (
+    compute_complete_implementation_file_snapshot,
+    compute_non_test_code_snapshot_hash,
+    compute_registered_file_snapshot,
+)
 
 
 DESIGN_TOPIC = "产品和代码设计及缺陷穿刺结论保持真实一致"
@@ -352,6 +356,75 @@ def test_acceptance_plan_rejects_each_missing_or_placeholder_outcome_field(
         assert expected in detail
 
 
+def test_acceptance_plan_reports_bad_index_path_instead_of_hiding_the_topic(tmp_path):
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-03 验收索引错路径显示实际值和正确写法
+    验收条件：AC-03 格式错误报真实格式和改法
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate acceptance_plan` 的验收计划校验
+    测试入口：`tests/test_stages.py::test_acceptance_plan_reports_bad_index_path_instead_of_hiding_the_topic`
+    代码入口：`src/workflow_loop/stages/stages.py::AcceptancePlanStage.code_validate`
+    准备数据：建立有效验收主题，再把待生成结果路径从 `./上传文件_验收结果.md` 改成 `acceptance/上传文件_验收结果.md`。
+    执行动作：执行验收计划代码校验。
+    关键断言：输出同时显示错误实际路径和以 `./` 开头的期望路径；不会改写成没有新增主题；依赖索引的文档校验明确标为未检查。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需包含实际路径、期望路径和未检查原因。
+    """
+    state = _acceptance_fixture(tmp_path)
+    state.topics = []
+    save_state(str(tmp_path), state)
+    index_path = tmp_path / "acceptance" / "索引.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8").replace(
+            "`./上传文件_验收结果.md`（待生成）",
+            "`acceptance/上传文件_验收结果.md`（待生成）",
+        ),
+        encoding="utf-8",
+    )
+
+    ok, detail = AcceptancePlanStage().code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "应指向 ./上传文件_验收结果.md" in detail
+    assert "实际是 acceptance/上传文件_验收结果.md" in detail
+    assert "没有找到本次新增的验收主题" not in detail
+    assert "验收计划文档校验：未检查：验收主题索引无法解析" in detail
+
+
+def test_acceptance_plan_explains_when_a_fixed_field_value_is_on_the_next_line(tmp_path):
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-04 固定字段换行指出同行规则
+    验收条件：AC-03 格式错误报真实格式和改法
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate acceptance_plan` 的验收计划校验
+    测试入口：`tests/test_stages.py::test_acceptance_plan_explains_when_a_fixed_field_value_is_on_the_next_line`
+    代码入口：`src/workflow_loop/stages/stages.py::AcceptancePlanStage.code_validate`
+    准备数据：建立有效验收计划，再把 AC-01 的“开始前状态”值移到标签下一行。
+    执行动作：执行验收计划代码校验。
+    关键断言：输出定位具体文件、验收条件和字段，说明值必须与标签写在同一行且下一行不会被读取；不再笼统报告缺少内容。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需包含字段位置和同行格式改法。
+    """
+    _acceptance_fixture(tmp_path)
+    plan = tmp_path / "acceptance" / "上传文件_验收计划.md"
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            "- 开始前状态：用户已进入上传界面且目标文件存在。",
+            "- 开始前状态：\n  用户已进入上传界面且目标文件存在。",
+        ),
+        encoding="utf-8",
+    )
+
+    ok, detail = AcceptancePlanStage().code_validate(str(tmp_path))
+
+    assert ok is False
+    assert "AC-01“开始前状态”字段" in detail
+    assert "值必须写在标签同一行，下一行内容不会被读取" in detail
+    assert "AC-01“开始前状态”字段：缺少具体内容" not in detail
+
+
 def test_impl_discussion_requires_every_topic_plan_and_no_unresolved_question(tmp_path):
     """Workflow-Test
     主题：验收测试和实施计划按同一主题完整追踪
@@ -397,6 +470,61 @@ def test_impl_discussion_accepts_legacy_plan_structure_for_legacy_path(tmp_path)
     ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
 
     assert ok is True, detail
+
+
+def test_impl_discussion_lists_changed_baseline_files_and_rebaseline_boundary(tmp_path):
+    """实施前代码变化必须按文件说明，而不是只报整体哈希变化。"""
+    state = _impl_fixture(tmp_path)
+    state.meta["impl_code_baseline_snapshot"] = compute_registered_file_snapshot(
+        str(tmp_path),
+        scope="product",
+    )
+    _write(
+        tmp_path / "src" / "upload.py",
+        "def upload():\n    return 'changed before plan confirmation'\n",
+    )
+
+    ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
+
+    assert ok is False
+    assert "新增=['src/upload.py']" in detail
+    assert "code_baseline_hash 是进入 impl 时冻结的工作区产品文件快照" in detail
+    assert "不是 Git 提交" in detail
+    assert "workflow discuss 和 git commit 不会重写它" in detail
+    assert "workflow gate impl --rebaseline" in detail
+
+
+def test_impl_discussion_detects_unregistered_file_change_from_complete_baseline(
+    tmp_path,
+):
+    """Workflow-Test
+    主题：所有阶段门禁失败时一次指出全部真实原因和改法
+    测试项：TC-07 完整实施快照发现未登记文件变化
+    验收条件：AC-04 实施基线差异说清冻结时机、变化文件和处理方法
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate impl --discuss-done` 的实施讨论校验
+    测试入口：`tests/test_stages.py::test_impl_discussion_detects_unregistered_file_change_from_complete_baseline`
+    代码入口：`src/workflow_loop/stages/stages.py::ImplStage.discussion_validate`
+    准备数据：建立登记集合未包含 `src/hidden.py`、完整实施快照包含该文件的实施状态，随后修改该文件且保持登记哈希不变。
+    执行动作：执行实施讨论校验。
+    关键断言：输出明确列出 `src/hidden.py` 为修改文件，说明来自完整实施范围快照，并给出处理遗留修改或经确认重设基线的动作；登记哈希相同不能绕过检查。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需包含变化类型、文件路径和重设基线命令。
+    """
+    state = _impl_fixture(tmp_path)
+    hidden = tmp_path / "src" / "hidden.py"
+    _write(hidden, "def hidden():\n    return 'before'\n")
+    state.meta["impl_complete_baseline_snapshot"] = (
+        compute_complete_implementation_file_snapshot(str(tmp_path), scope="all")
+    )
+    hidden.write_text("def hidden():\n    return 'after'\n", encoding="utf-8")
+
+    ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
+
+    assert ok is False
+    assert "完整实施范围文件变化" in detail
+    assert "修改=['src/hidden.py']" in detail
+    assert "workflow gate impl --rebaseline" in detail
 
 
 def test_impl_gate_prefers_real_changes_over_existing_code_marker(tmp_path, monkeypatch):
