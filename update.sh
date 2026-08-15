@@ -3,7 +3,7 @@
 set -euo pipefail
 
 PRODUCT_NAME="workflow-loop"
-SCRIPT_VERSION="0.3.2"
+SCRIPT_VERSION="0.3.3"
 UV_VERSION="0.11.33"
 UV_BASE_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"
 SHA_DARWIN_ARM64="d75e3d2bfc203d17388edaabd3aa37958edbcbfc36219e3ee0d31bb080b4baa2"
