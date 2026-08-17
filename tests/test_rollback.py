@@ -79,6 +79,36 @@ def _append_impl_record(root: Path, paths: list[str]) -> None:
     )
 
 
+def _append_impl_record_rows(
+    root: Path,
+    rows: list[tuple[str, str]],
+    *,
+    location_header: str = "类、函数或配置项",
+) -> None:
+    """写入指定的实施后位置，供行号范围核对场景复用。"""
+
+    document = root / "impl" / "上传文件_实施记录.md"
+    records = "\n".join(
+        f"| {path} | {location} | 将该位置更新为实施后的真实内容 | "
+        "读取文件可观察到该位置的当前输出 | AC-01 |"
+        for path, location in rows
+    )
+    document.write_text(
+        document.read_text(encoding="utf-8")
+        + f"""
+
+## 3. 实施后记录
+
+### 3.1 实际代码修改
+
+| 文件 | {location_header} | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 对应验收条件 |
+| --- | --- | --- | --- | --- |
+{records}
+""",
+        encoding="utf-8",
+    )
+
+
 def _impl_state(root: Path, paths: list[str]) -> WorkflowState:
     project_mod.create_project(str(root))
     _impl_document(root, paths)
@@ -805,7 +835,7 @@ def test_implementation_record_reports_every_invalid_row_fact_at_once(tmp_path):
     """Workflow-Test
     主题：所有阶段门禁失败时一次指出全部真实原因和改法
     测试项：TC-08 实施记录一行的全部真实错误一次说清
-    验收条件：AC-05 代码位置泛称指出文件内可定位名称规则
+    验收条件：AC-05 代码位置泛称指出最终文件行号范围规则
     测试方式：自动化测试
     测试层级：模块测试
     产品入口：`workflow gate impl` 的实施记录与真实代码核对
@@ -813,8 +843,8 @@ def test_implementation_record_reports_every_invalid_row_fact_at_once(tmp_path):
     代码入口：`src/workflow_loop/rollback.py::validate_implementation_changes_report`
     准备数据：建立真实修改文件 `src/app.py`，实施后记录同一行写入位置泛称“组件”、逻辑占位值、输出占位值和不存在的 AC-99。
     执行动作：执行实施变化三方核对。
-    关键断言：同一次输出定位实施记录文件和错误行，显示目标代码文件与“组件”原值，说明必须改为文件内真实函数名、类名或配置项；同一行其它独立错误也全部出现。
-    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需包含记录位置、原值、真实名称规则、两个占位错误和 AC 错误。
+    关键断言：同一次输出定位实施记录文件和错误行，显示目标代码文件与“组件”原值，说明必须改为最终文件行号范围；同一行其它独立错误也全部出现。
+    预期证据：结构化报告需精确匹配该测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0；断言需包含记录位置、原值、行号范围规则、两个占位错误和 AC 错误。
     """
     app = tmp_path / "src" / "app.py"
     _write(app, "# 组件不是代码符号\ndef run():\n    return 'before'\n")
@@ -842,33 +872,286 @@ def test_implementation_record_reports_every_invalid_row_fact_at_once(tmp_path):
     assert valid is False
     assert "impl/上传文件_实施记录.md" in detail
     assert "记录位置='组件'" in detail
-    assert "代码位置无法在当前文件中定位" in detail
-    assert "必须填写目标文件内可定位的真实函数名、类名或配置项" in detail
-    assert "“组件”等泛称无效" in detail
+    assert "使用占位内容：'组件'" in detail
     assert "实际修改的代码逻辑使用占位内容" in detail
     assert "数据、状态或输出的实际变化使用占位内容" in detail
     assert "AC-99" in detail
     assert "验收计划中不存在" in detail
 
 
-def test_code_location_requires_a_real_declaration_not_a_comment(tmp_path):
-    """位置列中的真实函数名可以通过，注释里的同名泛称不能通过。"""
+def test_line_ranges_cover_tsx_css_and_destructuring_without_declaration_regex(tmp_path):
+    """行号范围直接覆盖 TSX、CSS 和解构差异，不依赖声明语法。"""
+    sidebar = tmp_path / "src" / "Sidebar.tsx"
+    styles = tmp_path / "src" / "docs.css"
+    search = tmp_path / "src" / "search.ts"
+    _write(
+        sidebar,
+        "export default function Sidebar() {\n"
+        "  return <aside />;\n"
+        "}\n",
+    )
+    _write(
+        styles,
+        ":root {\n"
+        "  --primary: #111;\n"
+        "}\n"
+        "\n"
+        ".docs-layout {\n"
+        "  color: var(--primary);\n"
+        "}\n",
+    )
+    _write(search, "export const refresh = () => false;\n")
+    paths = ["src/Sidebar.tsx", "src/docs.css", "src/search.ts"]
+    state = _impl_state(tmp_path, paths)
+    rollback.prepare_impl(str(tmp_path), state)
+
+    _write(
+        sidebar,
+        "export default function Sidebar() {\n"
+        "  const [documents, setDocuments] = useDocuments();\n"
+        "  return <aside>{documents.length}</aside>;\n"
+        "}\n",
+    )
+    _write(
+        styles,
+        ":root {\n"
+        "  --primary: #111;\n"
+        "  --gray-50: #f5f5f5;\n"
+        "}\n"
+        "\n"
+        ".docs-layout {\n"
+        "  display: grid;\n"
+        "  color: var(--primary);\n"
+        "}\n",
+    )
+    _write(
+        search,
+        "const [documents, setDocuments] = useDocuments();\n"
+        "export const refresh = () => documents.length > 0;\n",
+    )
+    _append_impl_record_rows(
+        tmp_path,
+        [
+            ("src/Sidebar.tsx", "`L2-L3`"),
+            ("src/docs.css", "`L3-L7`"),
+            ("src/search.ts", "`L1-L2`"),
+        ],
+    )
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is True, detail
+
+
+def test_legacy_location_name_does_not_need_declaration_regex(tmp_path):
+    """兼容期内，旧的具体符号名称不再因 default export 等语法失败。"""
+    sidebar = tmp_path / "src" / "Sidebar.tsx"
+    _write(
+        sidebar,
+        "export default function Sidebar() {\n"
+        "  return <aside />;\n"
+        "}\n",
+    )
+    state = _impl_state(tmp_path, ["src/Sidebar.tsx"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(
+        sidebar,
+        "export default function Sidebar() {\n"
+        "  return <aside aria-label=\"navigation\" />;\n"
+        "}\n",
+    )
+    _append_impl_record_rows(tmp_path, [("src/Sidebar.tsx", "Sidebar")])
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is True, detail
+
+
+def test_new_location_header_requires_and_accepts_a_final_line_range(tmp_path):
+    """新模板使用公开行号格式，不再把代码符号名称交给正则猜测。"""
     app = tmp_path / "src" / "app.py"
-    _write(app, "# component is only a comment\ndef run():\n    return True\n")
+    _write(app, "def run():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(app, "def run():\n    return 'after'\n")
+    _append_impl_record_rows(
+        tmp_path,
+        [("src/app.py", "`L2-L2`")],
+        location_header="代码位置（最终文件）",
+    )
 
-    assert rollback._location_exists(str(tmp_path), "src/app.py", "run") is True
-    assert rollback._location_exists(str(tmp_path), "src/app.py", "component") is False
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is True, detail
 
 
-def test_document_location_requires_an_exact_markdown_heading(tmp_path):
-    """模板和规范文件可用真实标题定位，普通段落里的同词不能通过。"""
-    document = tmp_path / "docs" / "rules.md"
-    _write(document, "# 工作规范\n\n## 门禁失败信息\n\n诊断只是普通段落文字。\n")
+def test_new_location_header_rejects_a_name_without_a_line_range(tmp_path):
+    """旧名称仅为兼容保留；新表头必须给出可验证的最终行号范围。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "def run():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(app, "def run():\n    return 'after'\n")
+    _append_impl_record_rows(
+        tmp_path,
+        [("src/app.py", "run")],
+        location_header="代码位置（最终文件）",
+    )
 
-    assert rollback._location_exists(
-        str(tmp_path), "docs/rules.md", "门禁失败信息"
-    ) is True
-    assert rollback._location_exists(str(tmp_path), "docs/rules.md", "诊断") is False
+    report = rollback.validate_implementation_changes_report(str(tmp_path), state)
+
+    errors = [
+        item
+        for item in report.errors
+        if item.check_id == "impl.implementation_record.location_range_required"
+    ]
+    assert len(errors) == 1
+    assert "代码位置（最终文件）" in errors[0].location
+    assert "L12-L34" in errors[0].next_action
+
+
+def test_new_line_ranges_must_cover_every_changed_hunk(tmp_path):
+    """一条有效范围不能掩盖同文件中另一处未记录的真实改动。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "first = 1\nkeep_one = True\nsecond = 2\nkeep_two = True\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(app, "first = 10\nkeep_one = True\nsecond = 20\nkeep_two = True\n")
+    _append_impl_record_rows(
+        tmp_path,
+        [("src/app.py", "`L1-L1`")],
+        location_header="代码位置（最终文件）",
+    )
+
+    report = rollback.validate_implementation_changes_report(str(tmp_path), state)
+
+    errors = [
+        item
+        for item in report.errors
+        if item.check_id == "impl.implementation_record.location_range_coverage_missing"
+    ]
+    assert len(errors) == 1
+    assert "最终 L3-L3" in errors[0].actual
+
+
+def test_one_new_line_range_can_cover_multiple_changed_hunks(tmp_path):
+    """同一文件一行记录覆盖多个相邻或分散改动时可以使用更大的行范围。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "first = 1\nkeep_one = True\nsecond = 2\nkeep_two = True\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(app, "first = 10\nkeep_one = True\nsecond = 20\nkeep_two = True\n")
+    _append_impl_record_rows(
+        tmp_path,
+        [("src/app.py", "`L1-L3`")],
+        location_header="代码位置（最终文件）",
+    )
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is True, detail
+
+
+@pytest.mark.parametrize(
+    ("location", "check_id"),
+    [
+        ("`L2`", "impl.implementation_record.location_range_invalid"),
+        ("`L3-L1`", "impl.implementation_record.location_range_invalid"),
+        ("`L99-L100`", "impl.implementation_record.location_range_out_of_bounds"),
+    ],
+)
+def test_line_range_reports_malformed_and_out_of_bounds_values(
+    tmp_path,
+    location,
+    check_id,
+):
+    """格式错误和越界范围直接给出可填写的行号格式。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "def run():\n    return 'before'\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(app, "def run():\n    return 'after'\n")
+    _append_impl_record_rows(tmp_path, [("src/app.py", location)])
+
+    report = rollback.validate_implementation_changes_report(str(tmp_path), state)
+
+    errors = [item for item in report.errors if item.check_id == check_id]
+    assert len(errors) == 1
+    assert "impl/上传文件_实施记录.md:" in errors[0].location
+    assert location in errors[0].actual or location in errors[0].evidence
+
+
+def test_line_range_must_intersect_a_real_final_file_change(tmp_path):
+    """合法但未修改的最终行不能冒充本轮代码位置。"""
+    app = tmp_path / "src" / "app.py"
+    _write(
+        app,
+        "def run():\n"
+        "    return 'before'\n"
+        "\n"
+        "UNTOUCHED = True\n",
+    )
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(
+        app,
+        "def run():\n"
+        "    return 'after'\n"
+        "\n"
+        "UNTOUCHED = True\n",
+    )
+    _append_impl_record_rows(tmp_path, [("src/app.py", "`L4-L4`")])
+
+    report = rollback.validate_implementation_changes_report(str(tmp_path), state)
+
+    errors = [
+        item
+        for item in report.errors
+        if item.check_id == "impl.implementation_record.location_range_unchanged"
+    ]
+    assert len(errors) == 1
+    assert "最终文件真实差异范围=L2-L2" in errors[0].evidence
+
+
+def test_line_ranges_support_new_files_and_whole_file_deletion(tmp_path):
+    """新增文件使用最终行号，整文件删除保留专用明确标记。"""
+    removed = tmp_path / "src" / "removed.py"
+    _write(removed, "def obsolete():\n    return True\n")
+    paths = ["src/new.ts", "src/removed.py"]
+    state = _impl_state(tmp_path, paths)
+    rollback.prepare_impl(str(tmp_path), state)
+
+    _write(
+        tmp_path / "src" / "new.ts",
+        "export const name = 'new';\n"
+        "export const enabled = true;\n",
+    )
+    removed.unlink()
+    _append_impl_record_rows(
+        tmp_path,
+        [
+            ("src/new.ts", "`L1-L2`"),
+            ("src/removed.py", "删除整个文件"),
+        ],
+    )
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is True, detail
+
+
+def test_baseline_line_range_supports_partial_line_deletion(tmp_path):
+    """最终文件不存在的旧行可按实施前副本的行号记录。"""
+    app = tmp_path / "src" / "app.py"
+    _write(app, "first\nremoved\nlast\n")
+    state = _impl_state(tmp_path, ["src/app.py"])
+    rollback.prepare_impl(str(tmp_path), state)
+    _write(app, "first\nlast\n")
+    _append_impl_record_rows(tmp_path, [("src/app.py", "`基线 L2-L2`")])
+
+    valid, detail = rollback.validate_implementation_changes(str(tmp_path), state)
+
+    assert valid is True, detail
 
 
 def test_tampered_backup_blocks_restore_before_project_change(tmp_path):

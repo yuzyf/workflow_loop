@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -54,6 +55,8 @@ class RecordedCodeChange:
     document_path: str
     line: int
     path: str
+    location_column: str
+    requires_line_range: bool
     location: str
     logic: str
     observable_change: str
@@ -78,6 +81,15 @@ class _ImplementationChangeValidation:
     detail: str
 
 
+@dataclass(frozen=True)
+class _RecordedLineRange:
+    """实施记录中声明的代码行范围及其相对的文件版本。"""
+
+    basis: str
+    start: int
+    end: int
+
+
 _RECORD_PLACEHOLDERS = {
     "",
     "-",
@@ -98,6 +110,30 @@ _RECORD_PLACEHOLDERS = {
 IMPL_CODE_BASELINE_SNAPSHOT_KEY = "impl_code_baseline_snapshot"
 IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY = "impl_complete_baseline_snapshot"
 IMPL_COMPLETE_INVENTORY_MANIFEST_KEY = "implementation_inventory_before"
+_FINAL_LINE_RANGE_PATTERN = re.compile(
+    r"^L(?P<start>[1-9][0-9]*)[ \t]*-[ \t]*L(?P<end>[1-9][0-9]*)$"
+)
+_FILE_DELETION_LOCATIONS = {"文件删除", "删除整个文件", "deleted", "filedeleted"}
+_LOCATION_GENERIC_TERMS = {
+    "组件",
+    "页面",
+    "模块",
+    "函数",
+    "类",
+    "配置项",
+    "相关组件",
+    "相关页面",
+    "相关模块",
+    "相关函数",
+    "相关类",
+    "相关配置项",
+    "component",
+    "page",
+    "module",
+    "function",
+    "class",
+    "configuration",
+}
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -395,58 +431,168 @@ def _is_record_placeholder(value: str) -> bool:
     )
 
 
-def _location_candidates(location: str) -> list[str]:
-    quoted = re.findall(r"`([^`]+)`", location)
-    values = quoted or [location]
-    candidates: list[str] = []
-    for value in values:
-        whole_value = value.strip().strip("`* ")
-        if whole_value:
-            candidates.append(whole_value)
-        for part in re.split(r"<br\s*/?>|[、，,；;]", value):
-            part = part.strip().strip("`* ")
-            if not part:
-                continue
-            candidates.append(part)
-            without_call = re.sub(r"\(\)$", "", part)
-            candidates.append(without_call)
-            for token in re.split(r"::|(?<=\])\.|\.(?=[A-Za-z_])", without_call):
-                token = token.strip()
-                if token:
-                    candidates.append(token)
-            candidates.extend(re.findall(r"[A-Za-z_][A-Za-z0-9_-]{2,}", part))
-    return list(dict.fromkeys(candidate for candidate in candidates if len(candidate) >= 2))
+def _normalized_location_value(value: str) -> str:
+    return re.sub(r"[\s`*_。，；;：:]+", "", value).casefold()
 
 
-def _location_exists(project_root: str, path: str, location: str) -> bool:
-    full_path = os.path.join(project_root, path)
-    if not os.path.exists(full_path):
-        normalized = re.sub(r"[\s`*_。，；;：:]+", "", location).casefold()
-        return normalized in {"文件删除", "删除整个文件", "deleted", "filedeleted"}
-    if os.path.islink(full_path) or not os.path.isfile(full_path):
-        return False
+def _is_location_placeholder(value: str) -> bool:
+    """位置列仍拒绝泛称；具体旧名称不再需要匹配某种语言声明。"""
+
+    if _is_record_placeholder(value):
+        return True
+    normalized = _normalized_location_value(value)
+    if normalized in _LOCATION_GENERIC_TERMS:
+        return True
+    return bool(
+        re.search(
+            r"(?i)(?:^|[\s`*_，,；;：:])(?:"
+            + "|".join(re.escape(term) for term in _LOCATION_GENERIC_TERMS)
+            + r")(?:$|[\s`*_，,；;：:])",
+            value,
+        )
+    )
+
+
+def _unwrapped_location_value(value: str) -> str:
+    """移除一层 Markdown 行内代码标记，保留普通旧位置文本。"""
+
+    normalized = value.strip()
+    if len(normalized) >= 2 and normalized.startswith("`") and normalized.endswith("`"):
+        return normalized[1:-1].strip()
+    return normalized
+
+
+def _parse_recorded_line_range(location: str) -> _RecordedLineRange | None:
+    """解析新位置格式；None 表示仍在兼容期内的旧名称记录。"""
+
+    value = _unwrapped_location_value(location)
+    basis = "final"
+    if value.startswith("基线"):
+        basis = "baseline"
+        value = _unwrapped_location_value(value.removeprefix("基线").strip())
+
+    match = _FINAL_LINE_RANGE_PATTERN.fullmatch(value)
+    if match is not None:
+        start = int(match.group("start"))
+        end = int(match.group("end"))
+        if start > end:
+            raise ValueError(f"起始行 L{start} 不能大于结束行 L{end}")
+        return _RecordedLineRange(basis=basis, start=start, end=end)
+
+    # 只有看起来已经在填写行号的人才报告格式错误，旧的具体名称继续兼容。
+    if basis == "baseline" or re.match(r"^[Ll][ \t]*[0-9]", value):
+        raise ValueError("行号范围必须写成 L起始-L结束，例如 L12-L34")
+    return None
+
+
+def _is_file_deletion_location(location: str) -> bool:
+    return _normalized_location_value(location) in _FILE_DELETION_LOCATIONS
+
+
+def _line_count(content: str) -> int:
+    return len(content.splitlines(keepends=True))
+
+
+def _changed_line_hunks(
+    before: str,
+    after: str,
+) -> list[tuple[tuple[int, int] | None, tuple[int, int] | None]]:
+    """返回每个差异块在实施前和最终文件中的 1 起始行号范围。"""
+
+    hunks: list[tuple[tuple[int, int] | None, tuple[int, int] | None]] = []
+    matcher = difflib.SequenceMatcher(
+        a=before.splitlines(keepends=True),
+        b=after.splitlines(keepends=True),
+        autojunk=False,
+    )
+    for tag, before_start, before_end, after_start, after_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        before_range = (
+            (before_start + 1, before_end)
+            if before_start != before_end
+            else None
+        )
+        after_range = (
+            (after_start + 1, after_end) if after_start != after_end else None
+        )
+        hunks.append((before_range, after_range))
+    return hunks
+
+
+def _changed_line_ranges(before: str, after: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """返回实施前和最终文件中分别发生改变的 1 起始行号范围。"""
+
+    hunks = _changed_line_hunks(before, after)
+    return (
+        [before_range for before_range, _after_range in hunks if before_range],
+        [after_range for _before_range, after_range in hunks if after_range],
+    )
+
+
+def _line_range_intersects(
+    line_range: _RecordedLineRange,
+    changed_ranges: list[tuple[int, int]],
+) -> bool:
+    return any(
+        line_range.start <= changed_end and changed_start <= line_range.end
+        for changed_start, changed_end in changed_ranges
+    )
+
+
+def _format_line_ranges(ranges: list[tuple[int, int]]) -> str:
+    return "、".join(f"L{start}-L{end}" for start, end in ranges) or "无"
+
+
+def _manifest_entry_for_recorded_path(manifest: dict, path: str) -> dict:
+    entries = manifest.get("entries")
+    entry = entries.get(path) if isinstance(entries, dict) else None
+    if not isinstance(entry, dict):
+        raise ValueError(f"实施前回退清单没有 {path!r} 的文件副本")
+    return entry
+
+
+def _read_utf8_file(path: str, *, description: str) -> str:
     try:
-        with open(full_path, "r", encoding="utf-8") as stream:
-            content = stream.read()
-    except (OSError, UnicodeDecodeError):
-        return False
-    for candidate in _location_candidates(location):
-        escaped = re.escape(candidate)
-        declaration_patterns = [
-            rf"^[ \t]*(?:async[ \t]+)?def[ \t]+{escaped}\b",
-            rf"^[ \t]*class[ \t]+{escaped}\b",
-            rf"^[ \t]*(?:export[ \t]+)?(?:async[ \t]+)?function[ \t]+{escaped}\b",
-            rf"^[ \t]*(?:const|let|var)[ \t]+{escaped}\b[ \t]*(?:=|:)",
-            rf"^[ \t]*(?:public|private|protected|static)[ \t]+{escaped}\b[ \t]*(?:=|:|\()",
-            rf"^[ \t]*[\"']?{escaped}[\"']?[ \t]*(?:=|:)",
-        ]
-        if path.lower().endswith(".md"):
-            declaration_patterns.append(
-                rf"^[ \t]*#{{1,6}}[ \t]+{escaped}[ \t]*$"
-            )
-        if any(re.search(pattern, content, re.MULTILINE) for pattern in declaration_patterns):
-            return True
-    return False
+        with open(path, "rb") as stream:
+            raw = stream.read()
+    except OSError as exc:
+        raise ValueError(f"无法读取{description}：{exc}") from exc
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{description}不是 UTF-8 文本，不能使用行号范围定位") from exc
+
+
+def _recorded_path_texts(
+    project_root: str,
+    manifest: dict,
+    path: str,
+) -> tuple[dict, str | None, str | None]:
+    """读取清单中的实施前副本和当前最终文本；None 表示该版本不存在。"""
+
+    entry = _manifest_entry_for_recorded_path(manifest, path)
+    original_exists = entry.get("original_exists")
+    if not isinstance(original_exists, bool):
+        raise ValueError(f"实施前回退清单没有明确 {path!r} 的原文件状态")
+
+    before: str | None = None
+    if original_exists:
+        workflow_id = _validated_workflow_id(manifest.get("workflow_id", ""))
+        manifest_dir = os.path.dirname(_manifest_full_path(project_root, workflow_id))
+        backup_path = _safe_backup_path(
+            manifest_dir,
+            entry.get("backup_path"),
+            path,
+        )
+        before = _read_utf8_file(backup_path, description=f"{path} 的实施前副本")
+
+    full_path = os.path.join(project_root, path)
+    if not os.path.lexists(full_path):
+        return entry, before, None
+    if os.path.islink(full_path) or not os.path.isfile(full_path):
+        raise ValueError(f"当前文件不是普通文件：{path}")
+    return entry, before, _read_utf8_file(full_path, description=f"当前文件 {path}")
 
 
 def _acceptance_ids(project_root: str, topic: str) -> tuple[set[str], str | None]:
@@ -481,7 +627,6 @@ def _recorded_code_changes_with_diagnostics(
     diagnostics: list[diagnostics_mod.Diagnostic] = []
     required_headers = (
         "文件",
-        "类、函数或配置项",
         "实际修改的代码逻辑",
         "数据、状态或输出的实际变化",
     )
@@ -547,7 +692,34 @@ def _recorded_code_changes_with_diagnostics(
             )
         for local_line, row in rows:
             line = section_start_line + local_line - 1
-            location = row["类、函数或配置项"].strip()
+            prefix = f"{relative_path}:{line}"
+            if "代码位置（最终文件）" in row:
+                location_column = "代码位置（最终文件）"
+                requires_line_range = True
+            elif "类、函数或配置项" in row:
+                location_column = "类、函数或配置项"
+                requires_line_range = False
+            else:
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.location_column_missing",
+                        location=f"{prefix}，实际代码修改表",
+                        expected=(
+                            "表头包含新列“代码位置（最终文件）”，"
+                            "或兼容旧列“类、函数或配置项”"
+                        ),
+                        actual="实际代码修改表缺少代码位置列",
+                        evidence=(
+                            f"{prefix}，实际代码修改表的列={sorted(row)}；"
+                            "没有可读取的代码位置列"
+                        ),
+                        impact="无法将该行实施记录对应到真实文件中的改动范围",
+                        next_action="新增“代码位置（最终文件）”列，并填写 L起始-L结束，例如 L12-L34",
+                    )
+                )
+                continue
+            location = row[location_column].strip()
             logic = row["实际修改的代码逻辑"].strip()
             observable = row["数据、状态或输出的实际变化"].strip()
             acceptance = (
@@ -555,7 +727,6 @@ def _recorded_code_changes_with_diagnostics(
                 or row.get("对应验收条件和测试项")
                 or ""
             ).strip()
-            prefix = f"{relative_path}:{line}"
             try:
                 path = _normalized_relative_path(
                     project_root,
@@ -578,39 +749,28 @@ def _recorded_code_changes_with_diagnostics(
                 )
                 continue
 
-            if _is_record_placeholder(location):
+            if _is_location_placeholder(location):
                 evidence = (
-                    f"{prefix}，“类、函数或配置项”列使用占位内容：{location!r}"
+                    f"{prefix}，“{location_column}”列使用占位内容：{location!r}；"
+                    f"文件={path!r}，记录位置={location!r}；"
+                    "填写最终文件行号范围，例如 L12-L34；不能使用“组件”等泛称"
                 )
                 diagnostics.append(
                     diagnostics_mod.Diagnostic(
                         kind="error",
                         check_id="impl.implementation_record.location_placeholder",
-                        location=f"{prefix}，“类、函数或配置项”列",
-                        expected="填写目标文件内可定位的真实函数名、类名或配置项",
+                        location=f"{prefix}，“{location_column}”列",
+                        expected=(
+                            "填写最终文件行号范围（例如 L12-L34），或保留具体的旧代码名称；"
+                            "不能使用“组件”等泛称"
+                        ),
                         actual=f"位置值为占位内容 {location!r}",
                         evidence=evidence,
                         impact="无法确认这条记录描述了文件中的哪一处实际改动",
-                        next_action="填写当前文件中真实存在的函数名、类名或配置项名称",
-                    )
-                )
-            elif not _location_exists(project_root, path, location):
-                evidence = (
-                    f"{prefix}，“类、函数或配置项”列：代码位置无法在当前文件中定位；"
-                    f"文件={path!r}，记录位置={location!r}。"
-                    "该列必须填写目标文件内可定位的真实函数名、类名或配置项；"
-                    "“组件”等泛称无效。"
-                )
-                diagnostics.append(
-                    diagnostics_mod.Diagnostic(
-                        kind="error",
-                        check_id="impl.implementation_record.location_not_found",
-                        location=f"{prefix}，“类、函数或配置项”列",
-                        expected="填写当前文件中真实存在的函数名、类名或配置项",
-                        actual=f"文件 {path!r} 中找不到记录位置 {location!r}",
-                        evidence=evidence,
-                        impact="无法证明实施记录对应当前代码中的真实修改位置",
-                        next_action="把该列改为当前文件内真实可定位的函数名、类名或配置项；不要使用“组件”等泛称",
+                        next_action=(
+                            "把该列改为最终文件行号范围，例如 L12-L34；"
+                            "旧记录中的具体代码名称可以保留，不必为了门禁改成别的名称"
+                        ),
                     )
                 )
             if _is_record_placeholder(logic):
@@ -711,6 +871,8 @@ def _recorded_code_changes_with_diagnostics(
                     document_path=relative_path,
                     line=line,
                     path=path,
+                    location_column=location_column,
+                    requires_line_range=requires_line_range,
                     location=location,
                     logic=logic,
                     observable_change=observable,
@@ -718,6 +880,313 @@ def _recorded_code_changes_with_diagnostics(
                 )
             )
     return changes, diagnostics
+
+
+def _recorded_line_range_diagnostics(
+    project_root: str,
+    manifest: dict,
+    changes: list[RecordedCodeChange],
+) -> list[diagnostics_mod.Diagnostic]:
+    """核对新行号位置是否覆盖实施前副本与最终文件之间的真实差异。"""
+
+    diagnostics: list[diagnostics_mod.Diagnostic] = []
+    texts_by_path: dict[str, tuple[dict, str | None, str | None]] = {}
+    text_errors: dict[str, str] = {}
+    valid_line_ranges_by_path: dict[str, list[_RecordedLineRange]] = {}
+    valid_whole_file_deletions: set[str] = set()
+
+    def recorded_texts(path: str) -> tuple[dict, str | None, str | None] | None:
+        if path in texts_by_path:
+            return texts_by_path[path]
+        if path in text_errors:
+            return None
+        try:
+            texts_by_path[path] = _recorded_path_texts(project_root, manifest, path)
+        except ValueError as exc:
+            text_errors[path] = str(exc)
+            return None
+        return texts_by_path[path]
+
+    for change in changes:
+        prefix = f"{change.document_path}:{change.line}"
+        diagnostic_location = f"{prefix}，“{change.location_column}”列"
+        if _is_file_deletion_location(change.location):
+            texts = recorded_texts(change.path)
+            if texts is None:
+                detail = text_errors[change.path]
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.location_range_baseline_unavailable",
+                        location=diagnostic_location,
+                        expected="删除整个文件时能从实施前回退清单读取该文件的原始状态",
+                        actual=f"无法核对删除位置：{detail}",
+                        evidence=(
+                            f"{prefix}，记录位置={change.location!r}，文件={change.path!r}；"
+                            f"{detail}"
+                        ),
+                        impact="无法证明“删除整个文件”对应本轮可恢复的真实文件删除",
+                        next_action="恢复或重新准备该文件的实施前副本，再记录删除整个文件",
+                    )
+                )
+                continue
+            entry, _before, after = texts
+            if entry.get("original_exists") is True and after is None:
+                valid_whole_file_deletions.add(change.path)
+                continue
+            actual = (
+                "当前文件仍存在"
+                if after is not None
+                else "实施前该文件不存在，不能声称删除整个文件"
+            )
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_record.location_deletion_marker_invalid",
+                    location=diagnostic_location,
+                    expected="“删除整个文件”只能用于实施前存在且最终已删除的文件",
+                    actual=actual,
+                    evidence=(
+                        f"{prefix}，记录位置={change.location!r}，文件={change.path!r}；"
+                        f"实施前存在={entry.get('original_exists')!r}，最终文件存在={after is not None}"
+                    ),
+                    impact="删除记录没有对应到可验证的整文件删除",
+                    next_action=(
+                        "文件仍存在时改为最终文件行号范围，例如 L12-L34；"
+                        "只有整文件已删除时才填写“删除整个文件”"
+                    ),
+                )
+            )
+            continue
+
+        try:
+            line_range = _parse_recorded_line_range(change.location)
+        except ValueError as exc:
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_record.location_range_invalid",
+                    location=diagnostic_location,
+                    expected=(
+                        "使用最终文件行号范围 L起始-L结束，例如 L12-L34；"
+                        "删除的旧行使用“基线 L起始-L结束”"
+                    ),
+                    actual=f"位置值为 {change.location!r}，格式无效：{exc}",
+                    evidence=f"{prefix}，文件={change.path!r}，记录位置={change.location!r}；{exc}",
+                    impact="无法计算记录位置是否覆盖本轮真实改动",
+                    next_action=(
+                        "把该列改为 L12-L34；删除了最终文件中不存在的旧行时，"
+                        "改为“基线 L12-L34”"
+                    ),
+                )
+            )
+            continue
+        if line_range is None:
+            # 旧文档中的名称记录保留可读性，但不再由语言声明正则阻断。
+            if change.requires_line_range:
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.location_range_required",
+                        location=diagnostic_location,
+                        expected="新表头的代码位置使用最终文件行号范围，例如 L12-L34",
+                        actual=f"位置值为 {change.location!r}，不是行号范围",
+                        evidence=(
+                            f"{prefix}，文件={change.path!r}，记录位置={change.location!r}；"
+                            "当前表头要求使用最终文件行号范围"
+                        ),
+                        impact="新实施记录无法证明它描述了本轮真实改动的具体范围",
+                        next_action="把该列改为覆盖真实差异的 L起始-L结束，例如 L12-L34",
+                    )
+                )
+            continue
+
+        texts = recorded_texts(change.path)
+        if texts is None:
+            detail = text_errors[change.path]
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_record.location_range_baseline_unavailable",
+                    location=diagnostic_location,
+                    expected="目标文件有可读取的实施前副本，供行号范围与真实差异核对",
+                    actual=f"无法核对行号范围：{detail}",
+                    evidence=(
+                        f"{prefix}，文件={change.path!r}，记录位置={change.location!r}；"
+                        f"{detail}"
+                    ),
+                    impact="无法证明记录位置覆盖了本轮真实代码变化",
+                    next_action="重新准备该文件的实施前基线，或把实施记录改回已存在的计划文件",
+                )
+            )
+            continue
+
+        _entry, before, after = texts
+        if line_range.basis == "final":
+            if after is None:
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.location_range_final_missing",
+                        location=diagnostic_location,
+                        expected="最终文件存在时使用 L起始-L结束；整文件删除填写“删除整个文件”",
+                        actual=f"文件 {change.path!r} 在最终工作区不存在，不能使用最终行号范围",
+                        evidence=(
+                            f"{prefix}，文件={change.path!r}，记录位置={change.location!r}；"
+                            "最终文件不存在"
+                        ),
+                        impact="最终文件没有可定位的行号范围",
+                        next_action=(
+                            "整文件删除时填写“删除整个文件”；"
+                            "只删除部分旧行且文件仍存在时填写“基线 L起始-L结束”"
+                        ),
+                    )
+                )
+                continue
+            target_content = after
+            target_name = "最终文件"
+        else:
+            if before is None:
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.location_range_baseline_missing",
+                        location=diagnostic_location,
+                        expected="只有实施前存在的文件才能使用“基线 L起始-L结束”",
+                        actual=f"文件 {change.path!r} 是本轮新增文件，没有实施前行号",
+                        evidence=(
+                            f"{prefix}，文件={change.path!r}，记录位置={change.location!r}；"
+                            "实施前文件不存在"
+                        ),
+                        impact="新增文件不能用不存在的旧行号证明改动位置",
+                        next_action="为新增文件填写最终文件行号范围，例如 L1-L12",
+                    )
+                )
+                continue
+            target_content = before
+            target_name = "实施前副本"
+
+        line_count = _line_count(target_content)
+        if line_range.end > line_count:
+            diagnostics.append(
+                diagnostics_mod.Diagnostic(
+                    kind="error",
+                    check_id="impl.implementation_record.location_range_out_of_bounds",
+                    location=diagnostic_location,
+                    expected=(
+                        f"{target_name}共 {line_count} 行，位置范围必须在 L1-L{line_count} 内"
+                    ),
+                    actual=(
+                        f"记录位置为 {change.location!r}，结束行 L{line_range.end} "
+                        f"超过 {target_name}的 L{line_count}"
+                    ),
+                    evidence=(
+                        f"{prefix}，文件={change.path!r}，记录位置={change.location!r}；"
+                        f"{target_name}行数={line_count}"
+                    ),
+                    impact="记录位置不能指向目标文件中的真实行",
+                    next_action=f"把该列改为 {target_name}内的 L1-L{line_count} 范围",
+                )
+            )
+            continue
+
+        before_ranges, after_ranges = _changed_line_ranges(before or "", after or "")
+        changed_ranges = after_ranges if line_range.basis == "final" else before_ranges
+        if _line_range_intersects(line_range, changed_ranges):
+            valid_line_ranges_by_path.setdefault(change.path, []).append(line_range)
+            continue
+        diagnostics.append(
+            diagnostics_mod.Diagnostic(
+                kind="error",
+                check_id="impl.implementation_record.location_range_unchanged",
+                location=diagnostic_location,
+                expected=(
+                    f"记录范围必须与{target_name}中的本轮真实差异相交；"
+                    f"当前真实差异范围={_format_line_ranges(changed_ranges)}"
+                ),
+                actual=(
+                    f"记录位置 {change.location!r} 在{target_name}内有效，"
+                    "但没有覆盖本轮真实变化"
+                ),
+                evidence=(
+                    f"{prefix}，文件={change.path!r}，记录位置={change.location!r}；"
+                    f"{target_name}真实差异范围={_format_line_ranges(changed_ranges)}"
+                ),
+                impact="实施记录可以指向文件中的旧内容，不能证明它描述了本轮改动",
+                next_action=(
+                    f"把该列改为与真实差异相交的范围："
+                    f"{_format_line_ranges(changed_ranges)}"
+                ),
+            )
+        )
+
+    changes_by_path: dict[str, list[RecordedCodeChange]] = {}
+    for change in changes:
+        changes_by_path.setdefault(change.path, []).append(change)
+    for path, path_changes in changes_by_path.items():
+        # 旧表头只是兼容读取，不倒灌新的“每个差异块都要覆盖”要求。
+        if not all(change.requires_line_range for change in path_changes):
+            continue
+        if path in valid_whole_file_deletions:
+            continue
+        recorded_ranges = valid_line_ranges_by_path.get(path, [])
+        if len(recorded_ranges) != len(path_changes):
+            continue
+        texts = recorded_texts(path)
+        if texts is None:
+            continue
+        _entry, before, after = texts
+        if before is None and after is None:
+            continue
+        uncovered_locations: list[str] = []
+        for before_range, after_range in _changed_line_hunks(before or "", after or ""):
+            covered = (
+                after_range is not None
+                and any(
+                    line_range.basis == "final"
+                    and _line_range_intersects(line_range, [after_range])
+                    for line_range in recorded_ranges
+                )
+            ) or (
+                before_range is not None
+                and any(
+                    line_range.basis == "baseline"
+                    and _line_range_intersects(line_range, [before_range])
+                    for line_range in recorded_ranges
+                )
+            )
+            if not covered:
+                labels: list[str] = []
+                if after_range is not None:
+                    labels.append(f"最终 {_format_line_ranges([after_range])}")
+                if before_range is not None:
+                    labels.append(f"基线 {_format_line_ranges([before_range])}")
+                uncovered_locations.append(" / ".join(labels))
+        if not uncovered_locations:
+            continue
+        diagnostics.append(
+            diagnostics_mod.Diagnostic(
+                kind="error",
+                check_id="impl.implementation_record.location_range_coverage_missing",
+                location=f"{path}（本轮真实差异）",
+                expected="新格式的实施记录覆盖该文件中的每个本轮真实差异块",
+                actual=(
+                    "以下差异块没有被任何代码位置范围覆盖："
+                    f"{uncovered_locations}"
+                ),
+                evidence=(
+                    f"文件={path!r}；记录范围="
+                    f"{[f'{line_range.basis}:{line_range.start}-{line_range.end}' for line_range in recorded_ranges]}；"
+                    f"未覆盖差异={uncovered_locations}"
+                ),
+                impact="同一文件中的部分真实改动没有实施记录，不能完整追溯到实际逻辑和验收条件",
+                next_action=(
+                    "在“3.4.1 实际代码修改”中为每个未覆盖差异增加一行，"
+                    "填写对应的最终 L起始-L结束 或基线 L起始-L结束"
+                ),
+            )
+        )
+    return diagnostics
 
 
 def _recorded_code_changes(
@@ -1666,6 +2135,13 @@ def _implementation_change_validation(
                 impact="不能确认哪些文件在实施前基线后真正改变",
                 next_action="修正回退清单或受管文件状态，使真实差异可以重新计算",
             )
+        report.extend(
+            _recorded_line_range_diagnostics(
+                project_root,
+                manifest,
+                recorded_changes,
+            )
+        )
 
     dependency_ids = tuple(
         item.check_id for item in report.diagnostics if item.kind == "error"

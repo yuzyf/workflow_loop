@@ -204,6 +204,47 @@ def _impl_fixture(root: Path) -> WorkflowState:
     return state
 
 
+def _add_impl_execution_record(
+    root: Path,
+    unfinished_content: str,
+    *,
+    unfinished_heading_level: int = 3,
+) -> None:
+    """给实施前计划补齐实施后记录，以便只验证 3.3 的门禁规则。"""
+    impl_path = root / "impl" / "上传文件_实施记录.md"
+    execution_record = f"""## 3. 实施后记录
+
+### 3.1 实施动作记录
+
+已按计划完成。
+
+### 3.2 实施中问题与处理
+
+暂无
+
+{'#' * unfinished_heading_level} 3.3 未完成内容
+
+{unfinished_content}
+
+### 3.4 代码结果
+
+#### 3.4.1 实际代码修改
+
+已记录。
+
+#### 3.4.2 开发检查记录
+
+已记录。
+"""
+    impl_path.write_text(
+        impl_path.read_text(encoding="utf-8").replace(
+            "\n## 4. 上下游文档",
+            f"\n{execution_record}\n## 4. 上下游文档",
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_spec_stage_accepts_linked_chinese_product_documents(tmp_path):
     """Workflow-Test
     主题：产品和代码设计及缺陷穿刺结论保持真实一致
@@ -450,6 +491,166 @@ def test_impl_discussion_requires_every_topic_plan_and_no_unresolved_question(tm
     ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
     assert ok is False
     assert "仍有未决问题" in detail
+
+
+@pytest.mark.parametrize(
+    "unfinished_content",
+    [
+        "暂无",
+        "无",
+        "全部完成",
+        "已全部完成",
+        "暂无。",
+        "无！",
+        "全部完成；",
+        "已全部完成。",
+    ],
+)
+def test_impl_execution_record_accepts_legacy_completed_unfinished_values(
+    tmp_path,
+    unfinished_content,
+):
+    """3.3 兼容旧的完成表述和常见末尾标点，不要求历史记录返工。"""
+    state = _impl_fixture(tmp_path)
+    _add_impl_execution_record(tmp_path, unfinished_content)
+
+    ok, detail, _ = ImplStage()._validate_topic_documents(
+        str(tmp_path),
+        state,
+        require_execution_record=True,
+    )
+
+    assert ok is True, detail
+
+
+def test_impl_execution_record_accepts_explicit_no_unfinished_status(tmp_path):
+    """新格式明确写状态为“无”时，实施后记录可以通过。"""
+    state = _impl_fixture(tmp_path)
+    _add_impl_execution_record(tmp_path, "状态：无")
+
+    ok, detail, _ = ImplStage()._validate_topic_documents(
+        str(tmp_path),
+        state,
+        require_execution_record=True,
+    )
+
+    assert ok is True, detail
+
+
+def test_impl_execution_record_missing_unfinished_section_explains_format_and_next_step(
+    tmp_path,
+):
+    """缺少 3.3 时，诊断要说明实际情况、唯一格式和下一步。"""
+    state = _impl_fixture(tmp_path)
+
+    ok, detail, _ = ImplStage()._validate_topic_documents(
+        str(tmp_path),
+        state,
+        require_execution_record=True,
+    )
+
+    assert ok is False
+    assert "缺少“3.3 未完成内容”；实际值为“未找到该章节”" in detail
+    assert "格式必须为“### 3.3 未完成内容”下的首个非空行“状态：无”或“状态：有”" in detail
+    assert "下一步：" in detail
+
+
+@pytest.mark.parametrize(
+    ("unfinished_content", "expected_detail"),
+    [
+        ("状态：有", "状态实际值为“有”"),
+        ("状态：无\n\n- 上传重试尚未完成", "后续实际内容为“- 上传重试尚未完成”"),
+        ("状态：全部完成", "状态实际值为“全部完成”"),
+        ("上传重试尚未完成", "实际值为“上传重试尚未完成”"),
+    ],
+)
+def test_impl_execution_record_blocks_status_or_real_unfinished_content(
+    tmp_path,
+    unfinished_content,
+    expected_detail,
+):
+    """状态为“有”、状态矛盾或真实未完成事项都必须阻断实施门禁。"""
+    state = _impl_fixture(tmp_path)
+    _add_impl_execution_record(tmp_path, unfinished_content)
+
+    ok, detail, _ = ImplStage()._validate_topic_documents(
+        str(tmp_path),
+        state,
+        require_execution_record=True,
+    )
+
+    assert ok is False
+    assert expected_detail in detail
+    assert "格式必须为首个非空行“状态：无”或“状态：有”" in detail
+    assert "下一步：" in detail
+
+
+def test_impl_execution_record_checks_second_level_unfinished_heading(tmp_path):
+    """二级 3.3 标题也必须解析正文，不能借标题级别绕过未完成事项检查。"""
+    state = _impl_fixture(tmp_path)
+    _add_impl_execution_record(
+        tmp_path,
+        "状态：有",
+        unfinished_heading_level=2,
+    )
+
+    ok, detail, _ = ImplStage()._validate_topic_documents(
+        str(tmp_path),
+        state,
+        require_execution_record=True,
+    )
+
+    assert ok is False
+    assert "第 2 级“3.3 未完成内容”章节" in detail
+    assert "状态实际值为“有”" in detail
+
+
+def test_impl_execution_record_checks_every_supported_unfinished_heading(tmp_path):
+    """同时出现二级和三级 3.3 时，任一段写未完成事项都会阻断。"""
+    state = _impl_fixture(tmp_path)
+    _add_impl_execution_record(tmp_path, "状态：无")
+    impl_path = tmp_path / "impl" / "上传文件_实施记录.md"
+    impl_path.write_text(
+        impl_path.read_text(encoding="utf-8").replace(
+            "### 3.4 代码结果",
+            "## 3.3 未完成内容\n\n状态：有\n\n### 3.4 代码结果",
+        ),
+        encoding="utf-8",
+    )
+
+    ok, detail, _ = ImplStage()._validate_topic_documents(
+        str(tmp_path),
+        state,
+        require_execution_record=True,
+    )
+
+    assert ok is False
+    assert "第 2 级“3.3 未完成内容”章节" in detail
+    assert "状态实际值为“有”" in detail
+
+
+def test_impl_execution_record_keeps_unresolved_question_rule_separate(tmp_path):
+    """3.3 的兼容完成语句不能放宽 2.4 的未决问题规则。"""
+    state = _impl_fixture(tmp_path)
+    _add_impl_execution_record(tmp_path, "状态：无")
+    impl_path = tmp_path / "impl" / "上传文件_实施记录.md"
+    impl_path.write_text(
+        impl_path.read_text(encoding="utf-8").replace(
+            "### 2.4 未决问题\n\n暂无",
+            "### 2.4 未决问题\n\n全部完成。",
+        ),
+        encoding="utf-8",
+    )
+
+    ok, detail, _ = ImplStage()._validate_topic_documents(
+        str(tmp_path),
+        state,
+        require_execution_record=True,
+    )
+
+    assert ok is False
+    assert "仍有未决问题" in detail
+    assert "状态实际值" not in detail
 
 
 def test_impl_discussion_accepts_legacy_plan_structure_for_legacy_path(tmp_path):

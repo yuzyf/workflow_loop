@@ -531,7 +531,7 @@ class ImplStage(StageStrategy):
             unresolved = self._subsection_text(topic_content, "2.4 未决问题")
             if unresolved is None:
                 errors.append(f"{topic_rel} 缺少“2.4 未决问题”")
-            elif self._has_unresolved_content(unresolved):
+            elif self._has_unresolved_question_content(unresolved):
                 errors.append(f"{topic_rel} 仍有未决问题，不能进入代码实施")
             if require_execution_record:
                 if "## 3. 实施后记录" not in topic_content:
@@ -548,11 +548,23 @@ class ImplStage(StageStrategy):
                             errors.append(
                                 f"{topic_rel} 缺少“{heading.lstrip('#').strip()}”"
                             )
-                if "### 3.3 未完成内容" not in topic_content and "## 3.3 未完成内容" not in topic_content:
-                    errors.append(f"{topic_rel} 缺少“3.3 未完成内容”")
-                unfinished = self._subsection_text(topic_content, "3.3 未完成内容")
-                if unfinished is not None and self._has_unresolved_content(unfinished):
-                    errors.append(f"{topic_rel} 仍有未完成内容，不能通过实施门禁")
+                unfinished_sections = self._subsection_texts(
+                    topic_content,
+                    "3.3 未完成内容",
+                    heading_levels=(2, 3),
+                )
+                if not unfinished_sections:
+                    errors.append(
+                        f"{topic_rel} 缺少“3.3 未完成内容”；实际值为“未找到该章节”。"
+                        "格式必须为“### 3.3 未完成内容”下的首个非空行“状态：无”或“状态：有”；"
+                        "下一步：没有未完成事项时写“状态：无”，有事项时写“状态：有”并先处理后再执行实施门禁"
+                    )
+                for heading_level, unfinished in unfinished_sections:
+                    diagnostic = self._unfinished_content_diagnostic(unfinished)
+                    if diagnostic is not None:
+                        errors.append(
+                            f"{topic_rel} 的第 {heading_level} 级“3.3 未完成内容”章节：{diagnostic}"
+                        )
             if "测试结果：通过" in topic_content or "测试结果：失败" in topic_content:
                 errors.append(f"{topic_rel} 不能提前填写正式测试结果")
 
@@ -561,19 +573,130 @@ class ImplStage(StageStrategy):
         valid, detail = _validation_result(errors, "")
         return (valid, detail, topics)
 
-    @staticmethod
-    def _subsection_text(content: str, heading: str) -> str | None:
-        match = re.search(
-            rf"^###\s+{re.escape(heading)}\s*$\n(.*?)(?=^###\s+|^##\s+|\Z)",
-            content,
-            re.MULTILINE | re.DOTALL,
+    @classmethod
+    def _subsection_texts(
+        cls,
+        content: str,
+        heading: str,
+        *,
+        heading_levels: tuple[int, ...] = (3,),
+    ) -> list[tuple[int, str]]:
+        """返回指定 Markdown 标题的正文；下一个任意标题都结束当前正文。"""
+        markdown_headings = list(
+            re.finditer(
+                r"^(?P<marker>#{1,6})[ \t]+(?P<title>[^\r\n]*)(?:\r?\n|\Z)",
+                content,
+                re.MULTILINE,
+            )
         )
-        return match.group(1).strip() if match else None
+        sections: list[tuple[int, str]] = []
+        for index, match in enumerate(markdown_headings):
+            level = len(match.group("marker"))
+            title = re.sub(
+                r"[ \t]+#+[ \t]*$", "", match.group("title")
+            ).strip()
+            if level not in heading_levels or title != heading:
+                continue
+            body_end = (
+                markdown_headings[index + 1].start()
+                if index + 1 < len(markdown_headings)
+                else len(content)
+            )
+            sections.append((level, content[match.end() : body_end].strip()))
+        return sections
+
+    @classmethod
+    def _subsection_text(
+        cls,
+        content: str,
+        heading: str,
+        *,
+        heading_levels: tuple[int, ...] = (3,),
+    ) -> str | None:
+        sections = cls._subsection_texts(
+            content,
+            heading,
+            heading_levels=heading_levels,
+        )
+        return sections[0][1] if sections else None
 
     @staticmethod
-    def _has_unresolved_content(content: str) -> bool:
+    def _has_unresolved_question_content(content: str) -> bool:
+        """2.4 只表示未决问题，保留原有的“暂无/无”规则。"""
         normalized = re.sub(r"[\s`*_-]", "", content)
         return normalized not in {"暂无", "无"}
+
+    @staticmethod
+    def _normalized_legacy_completion_value(content: str) -> str:
+        """兼容旧实施记录常见的完成表述和末尾标点。"""
+        return re.sub(
+            r"[\s`*_\-—–·•,，、.。．!！?？;；:：()（）\[\]{}<>《》\"'“”‘’]",
+            "",
+            content,
+        )
+
+    @classmethod
+    def _is_legacy_completed_content(cls, content: str) -> bool:
+        return cls._normalized_legacy_completion_value(content) in {
+            "暂无",
+            "无",
+            "全部完成",
+            "已全部完成",
+        }
+
+    @staticmethod
+    def _diagnostic_value(content: str) -> str:
+        value = re.sub(r"\s+", " ", content).strip()
+        return value if len(value) <= 80 else f"{value[:77]}..."
+
+    @classmethod
+    def _unfinished_content_diagnostic(cls, content: str) -> str | None:
+        """返回 3.3 的阻断原因；None 表示明确或兼容地声明了没有未完成事项。"""
+        if cls._is_legacy_completed_content(content):
+            return None
+
+        nonempty_lines = [line.strip() for line in content.splitlines() if line.strip()]
+        expected_format = "首个非空行“状态：无”或“状态：有”"
+        next_step = "没有未完成事项时写“状态：无”，有事项时写“状态：有”并先处理后再执行实施门禁"
+        if not nonempty_lines:
+            return (
+                f"实际值为空；格式必须为{expected_format}；下一步：{next_step}"
+            )
+
+        first_line = nonempty_lines[0]
+        status_match = re.fullmatch(
+            r"(?:[-*+]\s+)?状态[：:]\s*(?P<value>.*?)\s*",
+            first_line,
+        )
+        if status_match is None:
+            return (
+                f"实际值为“{cls._diagnostic_value(first_line)}”，未识别到状态；"
+                f"格式必须为{expected_format}；下一步：{next_step}"
+            )
+
+        raw_status = status_match.group("value").strip()
+        status = raw_status.rstrip("。．.!！?？；;，,、").strip()
+        if status not in {"无", "有"}:
+            actual = cls._diagnostic_value(raw_status) if raw_status else "空"
+            return (
+                f"状态实际值为“{actual}”，只允许“无”或“有”；"
+                f"格式必须为{expected_format}；下一步：{next_step}"
+            )
+        if status == "有":
+            return (
+                "状态实际值为“有”，表示仍有未完成事项，不能通过实施门禁；"
+                f"格式必须为{expected_format}；下一步：先完成事项并改为“状态：无”，再执行实施门禁"
+            )
+
+        remaining_content = "\n".join(nonempty_lines[1:])
+        if remaining_content and not cls._is_legacy_completed_content(remaining_content):
+            return (
+                "状态实际值为“无”，但后续实际内容为“"
+                f"{cls._diagnostic_value(nonempty_lines[1])}”；"
+                f"格式必须为{expected_format}，且“状态：无”后不能再写未完成事项；"
+                "下一步：删除已完成后的事项，或改为“状态：有”并先处理后再执行实施门禁"
+            )
+        return None
 
     def validate_implementation_records(
         self,

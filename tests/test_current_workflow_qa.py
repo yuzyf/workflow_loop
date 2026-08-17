@@ -398,7 +398,7 @@ def test_impl_ac04_plan_diff_result_and_baseline_must_match(tmp_path, monkeypatc
     代码入口：`src/workflow_loop/rollback.py::validate_implementation_changes`
     准备数据：建立完全一致样本，以及计划未改、计划外修改、修改未记录、记录无差异、假位置、占位内容、错误 AC 和损坏副本等缺陷样本
     执行动作：执行实施代码结果门禁并比较诊断和状态
-    关键断言：三组路径完全相等，记录位置和内容能由最终文件证明，回退副本完整，未完成内容为“暂无”时才通过
+    关键断言：三组路径完全相等，记录位置覆盖最终文件真实差异，回退副本完整，未完成内容状态为“无”时才通过
     预期证据：pytest JUnit XML、三组排序路径、完整错误清单和门禁前后状态哈希
     """
     _run(
