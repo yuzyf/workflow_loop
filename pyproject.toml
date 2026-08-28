@@ -1,6 +1,6 @@
 [project]
 name = "workflow-loop"
-version = "0.3.4"
+version = "0.3.5"
 description = "为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。"
 readme = "README.md"
 requires-python = ">=3.11"
