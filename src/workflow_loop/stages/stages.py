@@ -29,6 +29,7 @@ from ..state import load_state
 from ..test_mapping import (
     automated_test_items,
     automated_topics,
+    describe_actual_test_change_links,
     planned_test_source_paths,
     validate_workflow_test_markers,
 )
@@ -722,138 +723,24 @@ class ImplStage(StageStrategy):
         return (result, result_detail, topics)
 
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
-        # 第一道门确认的是全部实施前计划。
+        # 第一道门只确认实施计划已经说明预期结果，不检查文件白名单或代码基线。
         valid, detail, _ = self._validate_topic_documents(
             project_root,
             workflow_state,
             require_execution_record=False,
         )
         errors = [] if valid else [detail]
-        stage_state = workflow_state.stages.get(self.name())
-        if stage_state is None or stage_state.code_baseline_hash is None:
-            errors.append("缺少进入 impl 时的代码基线，不能确认计划前没有修改代码")
-            return _validation_result(errors, "全部验收主题的实施前计划已就绪，代码尚未修改")
-        complete_snapshot = workflow_state.meta.get(
-            rollback_mod.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY
+        return _validation_result(
+            errors,
+            "全部验收主题的实施前计划已就绪；计划是预期说明，不限制实际修改文件",
         )
-        complete_differences: dict[str, list[str]] | None = None
-        complete_changed_paths: list[str] = []
-        if isinstance(complete_snapshot, dict):
-            try:
-                complete_differences = (
-                    verification_mod.compare_complete_implementation_file_snapshot(
-                        project_root,
-                        complete_snapshot,
-                        scope="all",
-                    )
-                )
-            except (OSError, ValueError) as exc:
-                errors.append(
-                    "完整实施范围基线无法比较；"
-                    f"未检查未登记源码、测试、脚本和配置是否变化：{exc}"
-                )
-            else:
-                complete_changed_paths = sorted(
-                    {
-                        path
-                        for category, paths in complete_differences.items()
-                        if category != "not_checked"
-                        for path in paths
-                    }
-                )
-        current_hash = compute_non_test_code_snapshot_hash(project_root)
-        complete_scope_unchanged = (
-            complete_differences is not None and not complete_changed_paths
-        )
-        legacy_scope_only = not isinstance(complete_snapshot, dict)
-        if (
-            current_hash == stage_state.code_baseline_hash
-            and (complete_scope_unchanged or legacy_scope_only)
-        ):
-            return _validation_result(errors, "全部验收主题的实施前计划已就绪，代码尚未修改")
-        # 实施中重新确认计划：已经保存首次原内容且全部实际变化都在计划内时，
-        # 允许在代码已变化的情况下重新通过讨论门（不覆盖首次副本）。
-        prepared_ok, prepared_detail, manifest = rollback_mod.validate_prepared(
-            project_root,
-            workflow_state,
-            require_current_plan=False,
-        )
-        if prepared_ok and manifest is not None:
-            try:
-                changed = rollback_mod.changed_paths_since_prepare(project_root, manifest)
-            except ValueError as exc:
-                errors.append(str(exc))
-                changed = []
-            planned = set()
-            try:
-                planned = set(rollback_mod.planned_code_paths(project_root, workflow_state.topics))
-            except ValueError as exc:
-                errors.append(str(exc))
-            observed_changes = set(changed) | set(complete_changed_paths)
-            unexpected = sorted(
-                observed_changes - planned - set(manifest.get("entries", {}))
-            )
-            if unexpected:
-                errors.append(f"实施计划确认前存在计划外的代码变化，不能通过 impl 的第一道门: {unexpected}")
-            return _validation_result(
-                errors,
-                "实施计划重新确认：首次原内容已保存，当前变化均在计划内",
-            )
-        if complete_differences is not None and complete_changed_paths:
-            errors.append(
-                "实施计划确认前代码已经变化，不能通过 impl 的第一道门；"
-                "相对入场基线的完整实施范围文件变化："
-                f"{verification_mod.format_registered_differences(complete_differences)}"
-            )
-        else:
-            baseline_snapshot = workflow_state.meta.get(
-                rollback_mod.IMPL_CODE_BASELINE_SNAPSHOT_KEY
-            )
-        if (
-            not complete_changed_paths
-            and current_hash != stage_state.code_baseline_hash
-            and isinstance(baseline_snapshot, dict)
-        ):
-            try:
-                differences = verification_mod.compare_registered_file_snapshot(
-                    project_root,
-                    baseline_snapshot,
-                    scope="product",
-                )
-            except (OSError, ValueError) as exc:
-                errors.append(
-                    "实施代码基线：整体哈希已经变化，但逐文件差异未检查；"
-                    f"无法比较冻结快照：{exc}"
-                )
-            else:
-                errors.append(
-                    "实施计划确认前代码已经变化，不能通过 impl 的第一道门；"
-                    "相对冻结基线的登记文件变化："
-                    f"{verification_mod.format_registered_differences(differences)}"
-                )
-        elif (
-            not complete_changed_paths
-            and current_hash != stage_state.code_baseline_hash
-            and not isinstance(baseline_snapshot, dict)
-        ):
-            errors.append(
-                "实施计划确认前代码已经变化，不能通过 impl 的第一道门；"
-                "当前状态只有整体 code_baseline_hash，逐文件变化未检查"
-            )
-        errors.append(
-            "code_baseline_hash 是进入 impl 时冻结的工作区产品文件快照，不是 Git 提交；"
-            "workflow discuss 和 git commit 不会重写它。先恢复未确认的遗留修改；"
-            "如果用户明确确认当前代码应成为新的实施前现状，再由 AI 执行 "
-            "`workflow gate impl --rebaseline`。"
-        )
-        return _validation_result(errors, "实施计划重新确认完成")
 
     def code_validation_report(self, project_root: str, workflow_state=None):
         """返回实施三方核对的原始诊断，命令层不得再从文字反推事实。"""
         state = workflow_state or load_state(project_root)
         if state is None:
             return None
-        return rollback_mod.validate_implementation_changes_report(project_root, state)
+        return rollback_mod.validate_actual_implementation_changes_report(project_root, state)
 
     @staticmethod
     def legacy_diagnostic_prefixes_covered_by_report() -> tuple[str, ...]:
@@ -862,6 +749,7 @@ class ImplStage(StageStrategy):
             "实施代码变化和计划范围：",
             "回退依据：",
             "基线后真实文件差异：",
+            "实际改动与实施记录：",
         )
 
     # 门禁的代码侧校验（第 2 道闸）
@@ -872,87 +760,33 @@ class ImplStage(StageStrategy):
                 [
                     "工作流状态：找不到当前工作流状态",
                     "主题实施文档：未检查：无法确定当前工作流和主题",
-                    "实施代码基线：未检查：找不到当前工作流状态",
-                    "回退依据和真实差异：未检查：找不到当前工作流状态",
+                    "实际改动：未检查：无法取得当前工作流状态",
                     "需求交付追踪关系：未检查：无法确定当前工作流和主题",
                 ],
-                "实施文档、真实代码变化和需求交付追踪关系完整",
+                "实施文档、实际改动和需求交付追踪关系完整",
             )
         errors: list[str] = []
         valid, detail, topics = self.validate_implementation_records(project_root, state)
         if not valid:
             errors.append(detail)
 
-        stage_state = state.stages.get(self.name())
-        if stage_state is None or stage_state.code_baseline_hash is None:
-            errors.append("实施代码基线：缺少进入 impl 时的代码基线，不能确认实施代码变化")
-
-        implementation_detail = ""
-        rollback_ok, rollback_detail, manifest = rollback_mod.validate_prepared(
+        changes_ok, changes_detail = rollback_mod.validate_actual_implementation_changes(
             project_root,
             state,
         )
-        if not rollback_ok:
-            errors.append(f"回退依据：{rollback_detail}")
-            errors.append("实施代码变化和计划范围：未检查：回退依据未通过")
-        else:
-            try:
-                changed_paths = rollback_mod.implementation_changed_paths_since_prepare(
-                    project_root,
-                    manifest,
-                )
-            except ValueError as exc:
-                changed_paths = None
-                errors.append(f"基线后真实文件差异：{exc}")
-                errors.append("实施代码变化和计划范围：未检查：无法计算基线后真实文件差异")
-
-            if changed_paths is not None:
-                changes_ok, changes_detail = rollback_mod.validate_implementation_changes(
-                    project_root,
-                    state,
-                )
-                if changes_ok:
-                    implementation_detail = changes_detail
-                elif (
-                    not changed_paths
-                    and stage_state is not None
-                    and stage_state.existing_code_accepted_hash is not None
-                ):
-                    current_hash = compute_non_test_code_snapshot_hash(project_root)
-                    if current_hash != stage_state.existing_code_accepted_hash:
-                        errors.append(
-                            "既有代码确认快照：用户确认后核心代码又发生变化，不能继续使用既有代码例外"
-                        )
-                    existing_ok, existing_detail = rollback_mod.validate_existing_implementation_paths(
-                        project_root,
-                        state,
-                    )
-                    if not existing_ok:
-                        errors.append(f"既有实现的计划与记录：{existing_detail}")
-                    implementation_detail = existing_detail
-                else:
-                    errors.append(f"实施代码变化和计划范围：{changes_detail}")
-                    implementation_detail = ""
-                    if (
-                        changed_paths
-                        and stage_state is not None
-                        and stage_state.existing_code_accepted_hash is not None
-                    ):
-                        errors.append(
-                            "既有代码例外不适用：实施前基线后检测到真实修改，"
-                            f"必须按三方文件集合核对，变化路径：{changed_paths}"
-                        )
+        if not changes_ok:
+            errors.append(f"实际改动与实施记录：{changes_detail}")
 
         success_detail = f"{len(topics)} 个验收主题的实施计划和实施记录完整"
-        if rollback_ok and implementation_detail:
-            success_detail += f"；{implementation_detail}"
-
+        if changes_ok:
+            success_detail += f"；{changes_detail}"
         return _validation_result(errors, success_detail)
 
     def instruction(self) -> str:
         return (
-            "实施阶段：依据产品设计、代码设计、全部验收主题的验收计划和穿刺结论，先写完实施前计划；"
-            "用户确认后再修改真实代码，并在同一份 impl/<主题文件标识>_实施记录.md 中追加实施后记录"
+            "实施阶段：依据产品设计、代码设计、全部验收主题的验收计划和穿刺结论，先写实施前计划；"
+            "计划确认后直接修改真实代码，发现额外文件时记录理由、验收关联和测试证据，"
+            "最后在同一份 impl/<主题文件标识>_实施记录.md 中追加实际结果"
         )
 
 
@@ -1011,12 +845,6 @@ class TestCodeStage(StageStrategy):
         errors: list[str] = []
         state_name = stage_name or self.name()
         stage_state = state.stages.get(state_name)
-        if stage_state is None or stage_state.test_code_baseline_hash is None:
-            errors.append(f"缺少进入 {state_name} 时的测试代码基线")
-        if stage_state is None or stage_state.non_test_code_baseline_hash is None:
-            errors.append(f"缺少进入 {state_name} 时的产品代码基线，请重新完成讨论门禁")
-        elif compute_non_test_code_snapshot_hash(project_root) != stage_state.non_test_code_baseline_hash:
-            errors.append(f"{state_name} 的测试代码步骤不能修改产品代码；产品代码变化应返回 impl")
         topics = current_workflow_topics(project_root)
         if not topics:
             errors.append("当前工作流还没有确认验收主题")
@@ -1028,21 +856,6 @@ class TestCodeStage(StageStrategy):
         except ValueError as exc:
             errors.append(str(exc))
             automated_items = []
-        current_test_code_hash = compute_test_code_snapshot_hash(project_root)
-        accepted_hash = stage_state.existing_test_code_accepted_hash if stage_state is not None else None
-        if accepted_hash is not None and current_test_code_hash != accepted_hash:
-            errors.append("既有测试代码确认后又发生变化，需要重新确认或重新修改测试代码")
-        if (
-            automated_items
-            and stage_state.test_code_baseline_hash is not None
-            and current_test_code_hash == stage_state.test_code_baseline_hash
-            and accepted_hash != current_test_code_hash
-            and not allow_unchanged
-        ):
-            errors.append(
-                "存在自动化测试项，但测试代码没有变化；如果当前测试代码已经覆盖最新测试计划，"
-                "请由用户执行 workflow gate test_code --accept-existing-test-code 明确确认",
-            )
         marker_ok, marker_detail = validate_workflow_test_markers(project_root, topics)
         if not marker_ok:
             errors.append(f"Workflow-Test 标识：{marker_detail}")
@@ -1054,10 +867,33 @@ class TestCodeStage(StageStrategy):
         if not state_ok:
             errors.append(f"需求交付追踪关系：{state_detail}")
         if not automated_items:
-            return _validation_result(errors, f"{len(topics)} 个验收主题都没有自动化测试项，无需新增测试代码")
+            detail = f"{len(topics)} 个验收主题都没有自动化测试项，无需新增测试代码"
+            changes, change_detail = verification_mod.list_actual_test_changes(project_root)
+            if changes is not None:
+                detail += f"；{change_detail}: {changes}"
+            else:
+                detail += f"；测试改动范围限制：{change_detail}（不阻塞测试门禁）"
+            return _validation_result(errors, detail)
+        changes, change_detail = verification_mod.list_actual_test_changes(project_root)
+        if changes is None:
+            change_summary = f"测试改动范围限制：{change_detail}（不阻塞测试门禁）"
+        else:
+            try:
+                change_links = describe_actual_test_change_links(
+                    project_root,
+                    topics,
+                    changes,
+                )
+            except ValueError as exc:
+                errors.append(f"实际测试改动关联：{exc}")
+                change_links = []
+            change_summary = (
+                f"实际测试改动：{changes}；"
+                f"测试项与验收条件关联：{change_links}"
+            )
         return _validation_result(
             errors,
-            f"测试代码已覆盖 {len(automated_items)} 个自动化测试项；{marker_detail}",
+            f"测试代码已覆盖 {len(automated_items)} 个自动化测试项；{marker_detail}；{change_summary}",
         )
 
     def validate_existing_test_code(self, project_root: str) -> tuple[bool, str]:
@@ -1112,10 +948,6 @@ class TestExecutionStage(StageStrategy):
         topics = current_workflow_topics(project_root)
         if not topics:
             errors.append("当前工作流还没有确认验收主题")
-        if state.verification.test_code_hash is None:
-            errors.append("缺少 test_code 确认后的测试代码哈希，不能执行正式测试")
-        elif compute_test_code_snapshot_hash(project_root) != state.verification.test_code_hash:
-            errors.append("test_code 确认后测试代码或测试配置发生变化，必须返回 test_code")
         if not topics:
             errors.append("自动化测试项和主题测试结果：未检查：没有验收主题")
             errors.append("需求交付追踪关系：未检查：没有验收主题")
@@ -1237,15 +1069,23 @@ class QaStage(StageStrategy):
             )
         else:
             errors.append("测试主题：未检查：没有验收主题")
+        changes, change_detail = verification_mod.list_actual_test_changes(project_root)
+        if changes is None:
+            change_summary = f"测试改动范围限制：{change_detail}（不阻塞测试门禁）"
+        else:
+            change_summary = f"实际测试改动：{changes}"
         return _validation_result(
             errors,
-            "qa（测试验证）内部计划、测试代码、任务登记和结果完整",
+            (
+                "qa（测试验证）内部计划、测试代码、任务登记和结果完整；"
+                f"测试代码核对：{code_detail}；{change_summary}"
+            ),
         )
 
     def instruction(self) -> str:
         return (
             "测试验证阶段：开始时一次确认全部主题的测试范围和通过标准；"
-            "随后连续完成测试计划检查、测试代码复用或修改、文件冻结、任务登记、正式执行和结果整理；"
+            "随后连续完成测试计划检查、测试代码复用或修改、任务登记、正式执行和结果整理；"
             "结束时只复核已有机器记录和人工待验收内容，不重新执行测试。"
         )
 

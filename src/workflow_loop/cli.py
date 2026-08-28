@@ -59,6 +59,7 @@ CLEAN_DETECT_DIRS = ["spec", "acceptance", "qa", "impl", "bug"]
 CLEAN_DETECT_FILES = [artifact_paths_mod.TRACEABILITY_DOC]
 PENDING_SPIKE_ASSETS_META_KEY = "pending_spike_assets"
 IMPL_CODE_BASELINE_NOTICE_PENDING_KEY = "impl_code_baseline_notice_pending"
+QA_ACTUAL_TEST_GATE_NOTICE_SHOWN_KEY = "qa_actual_test_gate_notice_shown"
 DEFAULT_SPIKE_RERUN_TIMEOUT_SECONDS = 600
 
 STAGE_LABELS = {
@@ -84,8 +85,9 @@ CURRENT_STAGE_ROLE_DOCS = {
     "impl": {
         "role": "代码实施执行者",
         "description": (
-            "根据已确认的产品设计、验收计划和穿刺结论，先确认代码计划并保存实施前内容，"
-            "再连续完成真实代码修改和代码结果记录。代码结果确认后进入 qa（测试验证）。"
+            "根据已确认的产品设计、验收计划和穿刺结论确认代码计划，"
+            "再连续完成真实代码修改和代码结果记录；额外文件按实际理由和证据登记。"
+            "代码结果确认后进入 qa（测试验证）。"
         ),
     },
     "qa": {
@@ -336,42 +338,11 @@ def current_stage_next_instruction(wf_state) -> str:
                 f"{prefix}生成或复核全部 `acceptance/<主题文件标识>_验收结果.md` 后，"
                 "调 `workflow gate topic_acceptance`"
             )
-        if stage_name == "impl" and recovery:
-            prepared, _, manifest = rollback_mod.validate_prepared(
-                resolve_project_root() or os.getcwd(),
-                wf_state,
-            )
-            if prepared and manifest is not None:
-                try:
-                    changed_paths = rollback_mod.implementation_changed_paths_since_prepare(
-                        resolve_project_root() or os.getcwd(),
-                        manifest,
-                    )
-                except ValueError:
-                    changed_paths = None
-                if changed_paths:
-                    return (
-                        f"{prefix}实施前基线后已检测到 {len(changed_paths)} 个真实修改，"
-                        "调 `workflow gate impl` 按实施计划、真实差异和实施记录做三方核对；"
-                        "不能使用 `--accept-existing-code`"
-                    )
-            if stage_state.existing_code_accepted_hash is not None:
-                return f"{prefix}既有实施代码已经确认，调 `workflow gate impl` 执行实施校验"
-            if prepared and manifest is not None and changed_paths == []:
-                return (
-                    f"{prefix}实施前基线后没有核心代码修改；如果实现确实在本轮前已经存在，"
-                    "调 `workflow gate impl --accept-existing-code`，否则先完成实际修改"
-                )
         if stage_name == "impl":
-            prepared, _, _ = rollback_mod.validate_prepared(
-                resolve_project_root() or os.getcwd(),
-                wf_state,
+            return (
+                f"{prefix}按已确认产品行为完成代码实施；发现额外文件可直接修改。"
+                "完成后记录每个实际文件、修改理由、验收条件和测试证据，再调 `workflow gate impl`"
             )
-            if not prepared:
-                return (
-                    f"{prefix}先调 `workflow gate impl --prepare-code` 保存实施计划所列文件的修改前内容；"
-                    "保存成功后再修改代码"
-                )
         if stage_name == "test_code" and recovery:
             if stage_state.existing_test_code_accepted_hash is not None:
                 return f"{prefix}既有测试代码已经确认，调 `workflow gate test_code` 执行测试代码校验"
@@ -549,16 +520,32 @@ def _take_impl_code_baseline_notice(wf_state) -> str | None:
     snapshot_scope = pending.get("code_snapshot_scope")
     if not isinstance(snapshot_hash, str) or not snapshot_hash:
         return None
-    scope_text = "登记产品文件" if snapshot_scope == "product" else "登记文件"
     entry_text = "恢复进入" if pending.get("recovering") else "进入"
     return (
-        "【实施前代码基线】\n"
-        f"已在{entry_text} impl（代码实施）时冻结：{snapshot_hash}。\n"
-        "code_baseline_hash（实施前产品代码整体快照）和"
-        f"{scope_text}的逐文件快照来自同一次边界；另已冻结完整实施范围的逐文件快照，"
-        "用于发现计划外源码、测试、脚本和配置变化；这些基线都不是 Git 提交。\n"
-        "workflow discuss 和 git commit 不会重写它；只有用户明确确认后执行 "
-        "`workflow gate impl --rebaseline` 才会建立新的实施前基线。"
+        "【代码门禁过程】\n"
+        f"已在{entry_text} impl（代码实施）时记录观察起点：{snapshot_hash}。\n"
+        "1. 代码计划是预期，不是允许修改的文件白名单。\n"
+        "2. 额外文件可以直接修改；完成已确认行为需要它们时，不重设基线或重新确认计划。\n"
+        "3. 代码结果逐文件记录实际逻辑、修改理由、验收条件和测试证据。\n"
+        "4. 第二道门读取实际改动并逐项检查证据；恢复保障单独说明，不决定门禁是否通过。\n"
+        "5. 只有发现未确认的产品行为或验收条件时才返回上游；只是改法或文件变化留在实施阶段。"
+    )
+
+
+def _take_qa_actual_test_gate_notice(wf_state, stage_state) -> str | None:
+    """QA 的完整测试改动过程在当前工作流中只展示一次。"""
+    if wf_state.current_stage != "qa" or stage_state.gate.discussion_complete:
+        return None
+    if wf_state.meta.get(QA_ACTUAL_TEST_GATE_NOTICE_SHOWN_KEY) is True:
+        return None
+    wf_state.meta[QA_ACTUAL_TEST_GATE_NOTICE_SHOWN_KEY] = True
+    return (
+        "【测试门禁过程】\n"
+        "1. 测试计划是预期，不是测试文件白名单。\n"
+        "2. 需要额外测试文件、夹具、辅助脚本或配置时可以直接加入，不重设测试基线。\n"
+        "3. 实际测试入口必须关联具体测试项和验收条件；文件路径可以与最初预测不同。\n"
+        "4. 正式执行生成机器证据；测试变化后只让有直接影响证据的测试项重新执行。\n"
+        "5. 只有测试范围、产品行为或验收条件发生未确认变化时才返回上游。"
     )
 
 
@@ -1604,6 +1591,7 @@ def cmd_discuss(args) -> None:
     if ensure_impl_recovery_baseline(project_root, wf_state):
         state_mod.save_state(project_root, wf_state)
     impl_baseline_notice = _take_impl_code_baseline_notice(wf_state)
+    qa_gate_notice = _take_qa_actual_test_gate_notice(wf_state, stage_state)
     state_mod.save_state(project_root, wf_state)
 
     # 打印材料清单（不倾倒正文）
@@ -1613,6 +1601,8 @@ def cmd_discuss(args) -> None:
         print_recovery_details(wf_state)
     if impl_baseline_notice:
         print(f"\n{impl_baseline_notice}")
+    elif qa_gate_notice:
+        print(f"\n{qa_gate_notice}")
     print("\n【角色】")
     if checklist.role_title or checklist.role_description:
         print(f"{checklist.role_title}：{checklist.role_description}")
@@ -3616,7 +3606,7 @@ def cmd_gate(args) -> None:
         print_next_step(current_stage_next_instruction(wf_state))
         sys.exit(1)
 
-    # --rebaseline 是实施阶段的显式基线确认，不得和其它门禁动作合用。
+    # 旧基线参数只为兼容历史调用；当前产品规则不再把它们作为门禁流程。
     if (
         args.rebaseline
         or args.prepare_code
@@ -3734,7 +3724,7 @@ def cmd_gate(args) -> None:
         if created_records:
             state_mod.save_state(project_root, wf_state)
 
-    # ── --prepare-code：保存实施计划所列文件的真实修改前内容 ──
+    # ── 兼容旧调用：--prepare-code 只保留为独立恢复备份动作，不再是代码门禁前置 ──
     if args.prepare_code:
         if stage_name != "impl":
             print("错误：--prepare-code 只适用于 impl stage")
@@ -3768,7 +3758,7 @@ def cmd_gate(args) -> None:
         print("═══ impl 实施前回退基线已保存 ═══")
         print(detail)
         print(f"计划修改文件: {paths}")
-        print_next_step("现在可以按实施计划修改代码；完成实施后记录后调 `workflow gate impl`")
+        print_next_step("现在可以继续修改代码；完成后记录每个实际文件、理由、验收条件和测试证据，再调 `workflow gate impl`")
         return
 
     try:
@@ -3842,68 +3832,25 @@ def cmd_gate(args) -> None:
             print("错误：必须先通过 `workflow gate impl --discuss-done`，才能确认已有代码")
             print_next_step("先完成实施计划讨论，再调 `workflow gate impl --discuss-done`")
             return
-        rollback_ok, rollback_detail, manifest = rollback_mod.validate_prepared(
-            project_root,
-            wf_state,
-        )
         errors: list[str] = []
-        changed_paths: list[str] | None = None
-        if not rollback_ok or manifest is None:
-            errors.append(f"回退依据：{rollback_detail}")
-        else:
-            try:
-                changed_paths = rollback_mod.implementation_changed_paths_since_prepare(
-                    project_root,
-                    manifest,
-                )
-            except ValueError as exc:
-                errors.append(f"基线后真实文件差异：{exc}")
-            if changed_paths:
-                errors.append(
-                    "既有代码例外不适用：实施前基线后已经检测到真实修改，"
-                    f"必须改用三方文件集合核对；变化路径：{changed_paths}"
-                )
-                changes_ok, changes_detail = rollback_mod.validate_implementation_changes(
-                    project_root,
-                    wf_state,
-                )
-                if not changes_ok:
-                    errors.append(f"实施计划、真实差异和实施记录：{changes_detail}")
-
         valid, detail, _ = stage.validate_implementation_records(project_root, wf_state)
         if not valid:
             errors.append(f"实施文档与追踪关系：{detail}")
-        if rollback_ok and changed_paths == []:
-            existing_ok, existing_detail = rollback_mod.validate_existing_implementation_paths(
-                project_root,
-                wf_state,
-            )
-            if not existing_ok:
-                errors.append(f"既有实现的计划与记录：{existing_detail}")
+        changes_ok, changes_detail = rollback_mod.validate_actual_implementation_changes(
+            project_root,
+            wf_state,
+        )
+        if not changes_ok:
+            errors.append(f"实际改动与实施记录：{changes_detail}")
 
         if errors:
-            next_command = (
-                "workflow gate impl --prepare-code"
-                if not rollback_ok
-                else "workflow gate impl"
-                if changed_paths
-                else "workflow gate impl --accept-existing-code"
-            )
             _print_gate_failure(
                 stage_name="impl",
                 gate_name="既有代码确认",
                 details="\n".join(f"- {error}" for error in errors),
-                command=next_command,
-                side_effects=(
-                    "只读核对实施计划、基线后真实差异和实施记录"
-                    if next_command == "workflow gate impl"
-                    else "核对既有实现所需事实；只有基线后零修改时才保存既有代码确认哈希"
-                ),
-                success_condition=(
-                    "实施计划、基线后真实差异和实施记录三方文件集合完全一致"
-                    if next_command == "workflow gate impl"
-                    else "回退依据完整、基线后零修改，且计划路径等于记录路径"
-                ),
+                command="workflow gate impl",
+                side_effects="只读核对实际改动与实施记录，不修改业务代码或恢复依据",
+                success_condition="实际改动都有理由、验收关联和测试证据，实施记录完整",
             )
             return
 
@@ -3967,57 +3914,10 @@ def cmd_gate(args) -> None:
         print_next_step("调 `workflow gate test_code` 做测试代码校验")
         return
 
-    # ── --rebaseline：用户确认当前代码作为新的实施前基线 ──
+    # ── --rebaseline：旧参数不再参与当前门禁 ──
     if args.rebaseline:
-        if stage_name != "impl":
-            print("错误：--rebaseline 只适用于 impl stage")
-            sys.exit(1)
-        if gate.discussion_complete:
-            print("错误：impl 的讨论已经完成，不能再重设实施前代码基线")
-            print_next_step("按当前 impl 门禁继续，或作废当前 Run 后重新启动工作流")
-            sys.exit(1)
-        if not _has_loaded_stage_materials(project_root, wf_state, stage):
-            print("错误：重设基线前必须先通过 workflow discuss 加载实施阶段的全部材料")
-            print_next_step("先调 `workflow discuss`，阅读实施计划模板、实施流程规范和代码开发规范")
-            return
-
-        previous_hash = stage_state.code_baseline_hash
-        try:
-            current_hash = _freeze_impl_code_baseline(
-                project_root,
-                wf_state,
-                stage_state,
-            )
-        except (OSError, ValueError) as exc:
-            _print_gate_failure(
-                stage_name="impl",
-                gate_name="实施代码基线重设",
-                details=f"无法冻结实施前逐文件产品快照：{exc}",
-                command="workflow gate impl --rebaseline",
-                side_effects="只读取当前登记的产品文件并保存新的实施前哈希和逐文件快照",
-                success_condition="当前产品文件范围可读取，并同时保存整体哈希和逐文件快照",
-            )
-            return
-        stage_state.existing_code_accepted_hash = None
-        journal_mod.append_entry(
-            project_root,
-            "实施代码基线重设",
-            "user",
-            workflow_id=wf_state.workflow_id,
-            stage=stage_name,
-            reason="用户确认当前代码为实施计划确认前的现状基线",
-            previous_code_snapshot_hash=previous_hash,
-            code_snapshot_hash=current_hash,
-            code_snapshot_scope="product",
-        )
-        state_mod.save_state(project_root, wf_state)
-        print(f"═══ {stage_name} 实施前代码基线已重设 ═══")
-        print(f"当前代码基线: {current_hash}")
-        print(
-            "已同时冻结登记产品文件的逐文件快照；code_baseline_hash 是工作区产品文件快照，"
-            "不是 Git 提交，workflow discuss 和 git commit 不会重写它。"
-        )
-        print_next_step("确认实施前计划没有继续修改代码后，调 `workflow gate impl --discuss-done`")
+        print("提示：`--rebaseline`（重设基线）已不再参与代码门禁；请按实际改动补充实施记录和测试证据")
+        print_next_step("补充实际改动记录后，调 `workflow gate impl`")
         return
 
     # ── 第 1 道闸：--discuss-done ──
@@ -4098,8 +3998,10 @@ def cmd_gate(args) -> None:
                     )
                     state_mod.save_state(project_root, wf_state)
                     print("═══ impl 实施计划已重新确认 ═══")
-                    print("计划确认哈希已更新；重新执行 `workflow gate impl --prepare-code` 补充新路径副本后继续实施")
-                    print_next_step("调 `workflow gate impl --prepare-code`（保留已保存的首次原内容，只为新路径补副本）")
+                    print("计划摘要已更新；实施中的额外文件不需要重设基线或重新确认")
+                    print_next_step(
+                        "继续按已确认产品行为修改代码；完成后记录实际文件、修改理由、验收条件和测试证据，再调 `workflow gate impl`"
+                    )
                     return
             elif stage_name == "qa":
                 current_scope_hash = verification_mod.compute_test_plan_hash(
@@ -4129,21 +4031,13 @@ def cmd_gate(args) -> None:
             # 标记讨论完毕
             gate.discussion_complete = True
             stage_state.discussion_material_hash = current_material_hash
-            # impl 记录用户确认的实施计划哈希；后续每次准备回退基线都必须匹配它
+            # impl 只记录计划说明摘要；它不限制实施中的实际文件集合。
             if stage_name == "impl":
                 try:
                     stage_state.plan_confirmed_hash = rollback_mod.compute_plan_hash(
                         project_root,
                         wf_state.topics,
                     )
-                    # 新流程在进入 impl 时已经冻结基线；只为旧状态补齐缺失基线，
-                    # 不能在计划确认时覆盖首次冻结的事实。
-                    if stage_state.code_baseline_hash is None:
-                        _freeze_impl_code_baseline(
-                            project_root,
-                            wf_state,
-                            stage_state,
-                        )
                 except (ValueError, OSError) as exc:
                     gate.discussion_complete = False
                     stage_state.discussion_material_hash = None
@@ -4151,10 +4045,10 @@ def cmd_gate(args) -> None:
                     _print_gate_failure(
                         stage_name="impl",
                         gate_name="讨论完成校验",
-                        details=f"无法按实施计划登记核心代码基线：{exc}",
+                        details=f"无法读取实施计划摘要：{exc}",
                         command="workflow gate impl --discuss-done",
-                        side_effects="只读取实施计划明确登记的核心路径并保存修改前哈希",
-                        success_condition="实施计划路径全部明确、有效且可建立逐文件基线",
+                        side_effects="只读取实施计划并保存计划摘要",
+                        success_condition="实施计划可以稳定读取并计算摘要",
                     )
                     return
                 stage_state.internal_step = "code_implementation"
@@ -4171,50 +4065,7 @@ def cmd_gate(args) -> None:
                                     if stage_name == "impl" else None,
                                     code_snapshot_hash=stage_state.code_baseline_hash
                                     if stage_name == "impl" else None)
-        # 讨论结束后、开始写文件前记录基线。重复调用不会覆盖原基线。
-        if stage_name in {"qa", "test_code"} and stage_state.test_code_baseline_hash is None:
-            stage_state.test_code_baseline_hash = verification_mod.compute_test_code_snapshot_hash(
-                project_root,
-            )
-            stage_state.non_test_code_baseline_hash = verification_mod.compute_non_test_code_snapshot_hash(
-                project_root,
-            )
-            journal_mod.append_entry(
-                project_root,
-                "测试代码基线",
-                "workflow.py",
-                stage=stage_name,
-                test_code_snapshot_hash=stage_state.test_code_baseline_hash,
-                non_test_code_snapshot_hash=stage_state.non_test_code_baseline_hash,
-            )
-            try:
-                rollback_test_paths = rollback_mod.prepare_test_code_baseline(
-                    project_root,
-                    wf_state,
-                )
-            except ValueError as exc:
-                gate.discussion_complete = False
-                stage_state.discussion_material_hash = None
-                stage_state.test_code_baseline_hash = None
-                stage_state.non_test_code_baseline_hash = None
-                state_mod.save_state(project_root, wf_state)
-                _print_gate_failure(
-                    stage_name=stage_name,
-                    gate_name="讨论完成校验",
-                    details=f"无法保存测试代码修改前内容：{exc}",
-                    command=f"workflow gate {stage_name} --discuss-done",
-                    side_effects="核对测试代码前置事实并保存登记测试文件的修改前内容",
-                    success_condition="全部登记测试文件都有可信的修改前基线",
-                )
-                return
-            journal_mod.append_entry(
-                project_root,
-                "测试代码回退基线",
-                "workflow.py",
-                workflow_id=wf_state.workflow_id,
-                saved_paths=rollback_test_paths,
-                manifest_hash=wf_state.rollback.manifest_hash,
-            )
+        # 测试验证不再建立测试代码/产品代码基线作为门禁前置。
         ensure_stage_artifact_baseline(project_root, wf_state, stage)
         # 保存 gate 和基线
         state_mod.save_state(project_root, wf_state)
@@ -4239,35 +4090,21 @@ def cmd_gate(args) -> None:
             return
         print("可以开始当前阶段要求的产出或实际操作。")
         if stage_name == "impl":
-            snapshot_available = isinstance(
-                wf_state.meta.get(rollback_mod.IMPL_CODE_BASELINE_SNAPSHOT_KEY),
-                dict,
-            )
-            complete_snapshot_available = isinstance(
-                wf_state.meta.get(rollback_mod.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY),
-                dict,
-            )
-            if snapshot_available and complete_snapshot_available:
-                snapshot_note = "已同时冻结登记产品文件和完整实施范围的逐文件快照。"
-            elif snapshot_available:
-                snapshot_note = (
-                    "当前旧状态只有登记产品文件快照，未登记实施文件未检查；"
-                    "首次显式重设基线会补齐完整实施范围快照。"
-                )
-            else:
-                snapshot_note = "当前是旧状态，尚无逐文件快照；首次显式重设基线会补齐它。"
             print(
-                "实施前代码基线说明：code_baseline_hash 是进入 impl 时冻结的工作区产品文件快照，"
-                "不是 Git 提交；workflow discuss 和 git commit 不会重写它。"
-                + snapshot_note
+                "【代码门禁过程】计划是预期，不是文件白名单；额外文件可以直接修改。"
+                "完成后门禁读取实际改动，检查每个文件的修改理由、验收条件和测试证据。"
+            )
+        elif stage_name == "qa":
+            print(
+                "【测试门禁过程】测试计划是预期，不是测试文件白名单；额外测试文件可以直接加入。"
+                "测试验证检查实际测试改动、测试项、验收条件和真实机器执行证据。"
             )
         if recovery_instruction(wf_state):
             print_next_step(current_stage_next_instruction(wf_state))
         else:
             if stage_name == "impl":
                 print_next_step(
-                    "实施前计划已经确认。先调 `workflow gate impl --prepare-code` 保存计划修改文件的原内容，"
-                    "保存成功后再修改代码"
+                    "按已确认产品行为修改代码；发现额外文件可直接修改。完成后记录每个实际文件、理由、验收条件和测试证据，再调 `workflow gate impl`"
                 )
             else:
                 print_next_step(
@@ -4344,29 +4181,17 @@ def cmd_gate(args) -> None:
             return
 
         if stage_name in {"qa", "test_code"}:
-            try:
-                changed_test_paths = rollback_mod.finalize_test_code_changes(
-                    project_root,
-                    wf_state,
-                )
-            except ValueError as exc:
-                _print_gate_failure(
-                    stage_name=stage_name,
-                    gate_name="回退记录校验",
-                    details=exc,
-                    command=f"workflow gate {stage_name}",
-                    side_effects="核对测试代码和回退记录，不执行正式测试",
-                    success_condition="测试代码全部变化都有可信的修改前记录",
-                )
-                return
-            state_mod.save_state(project_root, wf_state)
+            # 测试文件和辅助配置按实际改动检查，不要求先写入回退清单。
+            test_changes, test_change_detail = verification_mod.list_actual_test_changes(
+                project_root
+            )
             journal_mod.append_entry(
                 project_root,
-                "测试代码变化登记",
+                "测试实际改动读取",
                 "workflow.py",
                 workflow_id=wf_state.workflow_id,
-                changed_paths=changed_test_paths,
-                manifest_hash=wf_state.rollback.manifest_hash,
+                changed_paths=test_changes,
+                detail=test_change_detail,
             )
 
         # 跑 code_validate（第 2 道闸的核心）。
@@ -4693,33 +4518,7 @@ def cmd_gate(args) -> None:
             topics=topics,
         )
 
-    # 测试验证结果确认后，保存测试文件状态供退回和后续轮次复用。
-    if stage_name in {"qa", "test_code"}:
-        try:
-            accepted_test_paths = rollback_mod.accept_test_code_inventory(
-                project_root,
-                wf_state,
-            )
-        except ValueError as exc:
-            gate.user_confirmed = False
-            state_mod.save_state(project_root, wf_state)
-            _print_gate_failure(
-                stage_name=stage_name,
-                gate_name="确认状态保存",
-                details=exc,
-                command=f"workflow gate {stage_name} --confirmed",
-                side_effects="核对测试代码回退记录并在成功后推进到测试执行",
-                success_condition="已确认测试文件状态完整写入回退清单",
-            )
-            return
-        journal_mod.append_entry(
-            project_root,
-            "已确认测试文件状态",
-            "user",
-            workflow_id=wf_state.workflow_id,
-            paths=accepted_test_paths,
-            manifest_hash=wf_state.rollback.manifest_hash,
-        )
+    # 测试确认只绑定当前机器记录和实际测试改动，不再写回退基线门禁状态。
 
     # 阶段确认前先写入固定的追踪表和缺陷状态；更新失败时不推进阶段。
     try:
@@ -4858,6 +4657,12 @@ def cmd_gate(args) -> None:
         wf_state.meta.setdefault("registered_snapshots", {})["test_code"] = (
             verification_mod.compute_registered_file_snapshot(project_root, scope="test")
         )
+        try:
+            wf_state.meta.setdefault("registered_snapshots", {})["test_item_paths"] = (
+                test_mapping_mod.test_item_path_mapping(project_root, wf_state.topics)
+            )
+        except (OSError, ValueError):
+            wf_state.meta.setdefault("registered_snapshots", {})["test_item_paths"] = None
         wf_state.meta.setdefault("registered_snapshots", {})["test_entry_config"] = (
             copy.deepcopy(project_mod.load_project(project_root).test_entry)
         )
@@ -4915,6 +4720,12 @@ def cmd_gate(args) -> None:
         wf_state.meta.setdefault("registered_snapshots", {})["test_code"] = (
             verification_mod.compute_registered_file_snapshot(project_root, scope="test")
         )
+        try:
+            wf_state.meta.setdefault("registered_snapshots", {})["test_item_paths"] = (
+                test_mapping_mod.test_item_path_mapping(project_root, wf_state.topics)
+            )
+        except (OSError, ValueError):
+            wf_state.meta.setdefault("registered_snapshots", {})["test_item_paths"] = None
         wf_state.meta.setdefault("registered_snapshots", {})["test_entry_config"] = (
             copy.deepcopy(project_mod.load_project(project_root).test_entry)
         )

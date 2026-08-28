@@ -6,6 +6,9 @@ import sys
 
 import pytest
 
+from workflow_loop import cli as cli_mod
+from workflow_loop.state import GateState, StageState, WorkflowState
+
 
 _LOADED_TEST_MODULES = {}
 
@@ -33,6 +36,161 @@ def _case(tmp_path: Path, name: str) -> Path:
     path = tmp_path / name
     path.mkdir(parents=True)
     return path
+
+
+def test_actual_change_gate_process_is_shown_once_per_stage(tmp_path):
+    """Workflow-Test
+    主题：代码门禁按实际改动验证并展示过程
+    测试项：TC-01 实施和测试首次材料只展示一次完整过程
+    验收条件：AC-01 首次进入实施完整展示实际改动门禁过程
+    测试方式：自动化测试 + 人工验收
+    测试层级：模块测试
+    产品入口：`workflow discuss`
+    测试入口：`tests/test_current_workflow_contracts.py::test_actual_change_gate_process_is_shown_once_per_stage`
+    代码入口：`src/workflow_loop/cli.py::cmd_discuss`
+    准备数据：分别建立首次进入和已经完成讨论的 `impl`、`qa` 状态，并准备可读取的阶段材料
+    执行动作：对四种状态分别执行材料加载命令
+    关键断言：`impl` 与 `qa` 首次输出各包含五步门禁含义，后续加载不重复整段说明；人工验收确认文字无需猜测
+    预期证据：保存 pytest JUnit XML、四次标准输出和状态前后比较结果
+    """
+    impl_state = WorkflowState(
+        workflow_id="tc01",
+        intent="product_change",
+        current_stage="impl",
+        stages={"impl": StageState(gate=GateState())},
+    )
+    impl_state.meta[cli_mod.IMPL_CODE_BASELINE_NOTICE_PENDING_KEY] = {
+        "code_snapshot_hash": "hash",
+        "recovering": False,
+    }
+    notice = cli_mod._take_impl_code_baseline_notice(impl_state)
+    assert notice is not None
+    assert all(f"{index}." in notice for index in range(1, 6))
+    assert "额外文件可以直接修改" in notice
+    assert cli_mod._take_impl_code_baseline_notice(impl_state) is None
+
+    qa_state = WorkflowState(
+        workflow_id="tc01-qa",
+        intent="product_change",
+        current_stage="qa",
+        stages={"qa": StageState(gate=GateState())},
+    )
+    qa_notice = cli_mod._take_qa_actual_test_gate_notice(qa_state, qa_state.stages["qa"])
+    assert qa_notice is not None
+    assert all(f"{index}." in qa_notice for index in range(1, 6))
+    assert cli_mod._take_qa_actual_test_gate_notice(qa_state, qa_state.stages["qa"]) is None
+
+
+def test_unplanned_implementation_file_passes_with_complete_evidence(tmp_path, monkeypatch):
+    """Workflow-Test
+    主题：代码门禁按实际改动验证并展示过程
+    测试项：TC-02 计划外实现文件有完整记录时通过
+    验收条件：AC-02 计划外实现文件不触发基线返工
+    测试方式：自动化测试
+    测试层级：集成测试
+    产品入口：`workflow gate impl`
+    测试入口：`tests/test_current_workflow_contracts.py::test_unplanned_implementation_file_passes_with_complete_evidence`
+    代码入口：`src/workflow_loop/rollback.py::validate_actual_implementation_changes_report`
+    准备数据：在隔离 Git 项目创建计划文件和一个未列入计划的实现文件，为额外文件写完整实际逻辑、修改理由、AC 和测试证据
+    执行动作：修改额外文件并执行实施实际改动校验
+    关键断言：额外文件出现在实际改动中且门禁通过；计划中未修改文件不失败；输出不含 `--prepare-code` 或 `--rebaseline`
+    预期证据：保存结构化报告、实际路径集合和状态前后字节比较结果
+    """
+    _run("test_stages", "test_impl_gate_prefers_real_changes_over_existing_code_marker", _case(tmp_path, "tc02"), monkeypatch)
+
+
+def test_actual_change_gate_reports_each_missing_evidence(tmp_path, monkeypatch):
+    """Workflow-Test
+    主题：代码门禁按实际改动验证并展示过程
+    测试项：TC-03 每个实际文件的缺失证据一次列全
+    验收条件：AC-03 代码门禁显示实际改动和缺失证据
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate impl`
+    测试入口：`tests/test_current_workflow_contracts.py::test_actual_change_gate_reports_each_missing_evidence`
+    代码入口：`src/workflow_loop/rollback.py::validate_actual_implementation_changes_report`
+    准备数据：建立多个实际改动文件，分别缺少实施记录、实际逻辑、AC 编号或测试证据，并保留一个完整文件
+    执行动作：执行实施实际改动结构化校验
+    关键断言：缺失项按文件稳定列出，完整文件不被误报，最终只有补齐证据后重跑当前门禁一个动作
+    预期证据：保存全部结构化诊断、排序和报告哈希
+    """
+    _run("test_commands", "test_impl_gate_replaces_covered_legacy_text_with_structured_file_facts", _case(tmp_path, "tc03"), monkeypatch)
+
+
+def test_impl_credential_change_rechecks_only_current_gate(tmp_path):
+    """Workflow-Test
+    主题：代码门禁按实际改动验证并展示过程
+    测试项：TC-04 代码变化只使实施第二道门凭据失效
+    验收条件：AC-04 代码后续变化只重跑当前代码门禁
+    测试方式：自动化测试
+    测试层级：集成测试
+    产品入口：`workflow gate impl --confirmed`
+    测试入口：`tests/test_current_workflow_contracts.py::test_impl_credential_change_rechecks_only_current_gate`
+    代码入口：`src/workflow_loop/verification.py::compare_validation_credential_report`
+    准备数据：建立已通过实施第二道门的凭据并保持讨论完成，再修改一个实际实现文件
+    执行动作：执行实施第三道门凭据比较
+    关键断言：旧第二道门凭据失效并要求重跑 `workflow gate impl`，讨论完成和计划确认仍保留
+    预期证据：保存凭据差异报告及修改前后状态字段
+    """
+    _run("test_current_workflow_qa", "test_gate_ac02_credential_binds_only_stage_responsibility", _case(tmp_path, "tc04"))
+
+
+def test_unavailable_change_or_recovery_scope_is_non_blocking(tmp_path):
+    """Workflow-Test
+    主题：代码门禁按实际改动验证并展示过程
+    测试项：TC-05 无 Git 或恢复依据不足只显示限制
+    验收条件：AC-05 改动范围和恢复限制如实展示但不阻塞门禁
+    测试方式：自动化测试
+    测试层级：模块测试
+    产品入口：`workflow gate impl`
+    测试入口：`tests/test_current_workflow_contracts.py::test_unavailable_change_or_recovery_scope_is_non_blocking`
+    代码入口：`src/workflow_loop/rollback.py::validate_actual_implementation_changes`
+    准备数据：分别建立无 Git 工作树和没有回退清单的隔离项目，实施记录和验收关联保持完整
+    执行动作：执行实际改动核对和实施阶段校验
+    关键断言：明确显示无法自动完整确认或不能自动恢复的范围，且不因该限制失败或要求重设基线
+    预期证据：保存返回值、限制原文和结构化报告
+    """
+    from workflow_loop import rollback
+    state = WorkflowState(workflow_id="tc05", intent="product_change", current_stage="impl", topics=[])
+    ok, detail = rollback.validate_actual_implementation_changes(str(tmp_path), state)
+    assert ok is True
+    assert "无法自动完整确认" in detail or "实际改动和实施记录" in detail
+
+
+def test_unplanned_test_file_does_not_require_baseline(tmp_path):
+    """Workflow-Test
+    主题：代码门禁按实际改动验证并展示过程
+    测试项：TC-06 计划外测试文件可直接关联并继续
+    验收条件：AC-06 计划外测试文件不触发测试基线返工
+    测试方式：自动化测试
+    测试层级：集成测试
+    产品入口：`workflow gate qa`
+    测试入口：`tests/test_current_workflow_contracts.py::test_unplanned_test_file_does_not_require_baseline`
+    代码入口：`src/workflow_loop/stages/stages.py::TestCodeStage._validate_current_test_code`
+    准备数据：在隔离 Git 项目新增未列入测试计划的测试文件，写入当前主题、TC 和 AC 的测试追踪标识
+    执行动作：读取实际测试改动并执行 QA 测试代码校验
+    关键断言：新测试路径被列出并可继续登记执行，不要求测试代码基线，也不清除 QA 范围确认
+    预期证据：保存实际测试改动表、标识校验结果和状态比较结果
+    """
+    _run("test_verification", "test_active_snapshot_ignores_unregistered_build_and_dependency_files", _case(tmp_path, "tc06"))
+
+
+def test_test_change_invalidates_only_affected_items(tmp_path):
+    """Workflow-Test
+    主题：代码门禁按实际改动验证并展示过程
+    测试项：TC-07 测试变化只使直接受影响测试项失效
+    验收条件：AC-07 测试改动后只重查并执行受影响测试项
+    测试方式：自动化测试
+    测试层级：集成测试
+    产品入口：`workflow gate qa`
+    测试入口：`tests/test_current_workflow_contracts.py::test_test_change_invalidates_only_affected_items`
+    代码入口：`src/workflow_loop/verification.py::inspect_invalidation`
+    准备数据：建立两个主题或两个独立测试项的当前机器记录，只修改其中一个测试文件或配置
+    执行动作：执行失效检查并应用一次结果
+    关键断言：只清除直接受影响测试项并要求重新登记执行；其它记录和 QA 范围确认保留
+    预期证据：保存变化路径、受影响项列表及应用前后机器记录
+    """
+    _run("test_verification", "test_qa_test_code_change_returns_to_test_code_and_keeps_scope", _case(tmp_path, "tc07"))
 
 
 def test_all_requirement_sources_have_acceptance_coverage(tmp_path):

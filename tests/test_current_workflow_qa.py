@@ -366,9 +366,9 @@ def test_impl_ac03_existing_code_reuse_is_bound_and_tests_still_reset(
     """
     for index, function_name in enumerate(
         (
-            "test_accept_existing_code_refuses_post_baseline_changes",
-            "test_accept_existing_code_rejects_invalid_scope_without_state_change",
-            "test_accept_existing_code_preserves_original_baseline",
+                "test_accept_existing_code_accepts_actual_changes_with_complete_evidence",
+                "test_accept_existing_code_rejects_missing_actual_evidence_without_state_change",
+                "test_accept_existing_code_preserves_observation_snapshot",
         )
     ):
         with monkeypatch.context() as scoped:

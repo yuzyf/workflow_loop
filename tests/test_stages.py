@@ -674,7 +674,7 @@ def test_impl_discussion_accepts_legacy_plan_structure_for_legacy_path(tmp_path)
 
 
 def test_impl_discussion_lists_changed_baseline_files_and_rebaseline_boundary(tmp_path):
-    """实施前代码变化必须按文件说明，而不是只报整体哈希变化。"""
+    """实施计划确认前已有代码变化不再阻止实施。"""
     state = _impl_fixture(tmp_path)
     state.meta["impl_code_baseline_snapshot"] = compute_registered_file_snapshot(
         str(tmp_path),
@@ -687,12 +687,8 @@ def test_impl_discussion_lists_changed_baseline_files_and_rebaseline_boundary(tm
 
     ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
 
-    assert ok is False
-    assert "新增=['src/upload.py']" in detail
-    assert "code_baseline_hash 是进入 impl 时冻结的工作区产品文件快照" in detail
-    assert "不是 Git 提交" in detail
-    assert "workflow discuss 和 git commit 不会重写它" in detail
-    assert "workflow gate impl --rebaseline" in detail
+    assert ok is True, detail
+    assert "计划是预期说明" in detail
 
 
 def test_impl_discussion_detects_unregistered_file_change_from_complete_baseline(
@@ -722,14 +718,12 @@ def test_impl_discussion_detects_unregistered_file_change_from_complete_baseline
 
     ok, detail = ImplStage().discussion_validate(str(tmp_path), state)
 
-    assert ok is False
-    assert "完整实施范围文件变化" in detail
-    assert "修改=['src/hidden.py']" in detail
-    assert "workflow gate impl --rebaseline" in detail
+    assert ok is True, detail
+    assert "计划是预期说明" in detail
 
 
 def test_impl_gate_prefers_real_changes_over_existing_code_marker(tmp_path, monkeypatch):
-    """基线后已有真实修改时，既有代码标记不能绕过三方文件集合核对。"""
+    """实际改动记录完整时，既有代码标记不会阻塞当前代码门禁。"""
     create_project(str(tmp_path))
     state = WorkflowState(
         workflow_id="wf",
@@ -753,41 +747,24 @@ def test_impl_gate_prefers_real_changes_over_existing_code_marker(tmp_path, monk
         lambda _root, _state: (True, "实施文档完整", ["上传文件"]),
     )
     monkeypatch.setattr(
-        "workflow_loop.stages.stages.rollback_mod.validate_prepared",
-        lambda _root, _state: (True, "回退依据完整", {"prepares": [{}]}),
-    )
-    monkeypatch.setattr(
-        "workflow_loop.stages.stages.rollback_mod.implementation_changed_paths_since_prepare",
-        lambda _root, _manifest: ["src/upload.py"],
-    )
-    monkeypatch.setattr(
-        "workflow_loop.stages.stages.rollback_mod.validate_implementation_changes",
+        "workflow_loop.stages.stages.rollback_mod.validate_actual_implementation_changes",
         lambda _root, _state: (
             True,
-            "实施前计划、基线后真实差异和实施后记录三方文件集合完全一致：['src/upload.py']",
+            "实际改动和实施记录已核对：['src/upload.py']；计划外文件有理由、验收关联和测试证据",
         ),
-    )
-
-    def existing_code_must_not_be_used(*_args, **_kwargs):
-        raise AssertionError("有真实修改时不得进入既有代码例外")
-
-    monkeypatch.setattr(
-        "workflow_loop.stages.stages.rollback_mod.validate_existing_implementation_paths",
-        existing_code_must_not_be_used,
     )
 
     ok, detail = stage.code_validate(str(tmp_path))
 
     assert ok is True, detail
-    assert "三方文件集合完全一致" in detail
-    assert "既有实现例外" not in detail
+    assert "实际改动和实施记录已核对" in detail
 
 
 def test_impl_gate_reports_real_change_mismatch_even_with_existing_code_marker(
     tmp_path,
     monkeypatch,
 ):
-    """既有代码标记存在时，四类真实差异仍必须完整展示。"""
+    """既有代码标记存在时，实际文件缺少记录仍必须完整展示。"""
     create_project(str(tmp_path))
     state = WorkflowState(
         workflow_id="wf",
@@ -811,29 +788,20 @@ def test_impl_gate_reports_real_change_mismatch_even_with_existing_code_marker(
         lambda _root, _state: (True, "实施文档完整", ["上传文件"]),
     )
     monkeypatch.setattr(
-        "workflow_loop.stages.stages.rollback_mod.validate_prepared",
-        lambda _root, _state: (True, "回退依据完整", {"prepares": [{}]}),
-    )
-    monkeypatch.setattr(
-        "workflow_loop.stages.stages.rollback_mod.implementation_changed_paths_since_prepare",
-        lambda _root, _manifest: ["src/unplanned.py", "src/unrecorded.py"],
-    )
-    monkeypatch.setattr(
-        "workflow_loop.stages.stages.rollback_mod.validate_implementation_changes",
+        "workflow_loop.stages.stages.rollback_mod.validate_actual_implementation_changes",
         lambda _root, _state: (
             False,
-            "1. 实际修改但不在实施计划：['src/unplanned.py']\n"
-            "2. 实际修改但实施后记录未列出：['src/unrecorded.py']",
+            "1. 实际改动文件尚未在实施记录中说明：src/unrecorded.py；请补充修改理由、对应 AC 编号和测试证据\n"
+            "2. 实施记录列出但未检测到进入 impl 后的实际变化：src/stale.py；请修正记录或说明复用",
         ),
     )
 
     ok, detail = stage.code_validate(str(tmp_path))
 
     assert ok is False
-    assert "实际修改但不在实施计划" in detail
-    assert "实际修改但实施后记录未列出" in detail
-    assert "既有代码例外不适用" in detail
-    assert "src/unplanned.py" in detail and "src/unrecorded.py" in detail
+    assert "实际改动文件尚未在实施记录中说明" in detail
+    assert "实施记录列出但未检测到" in detail
+    assert "src/unrecorded.py" in detail and "src/stale.py" in detail
 
 
 def test_stage_artifact_entries_use_confirmed_chinese_formal_paths():

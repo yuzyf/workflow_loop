@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tomllib
 from dataclasses import asdict, dataclass
 
@@ -19,7 +20,12 @@ from .state import (
     load_state,
     now_iso,
 )
-from .test_mapping import automated_topics, planned_test_source_paths
+from .test_mapping import (
+    automated_test_items,
+    automated_topics,
+    planned_test_source_paths,
+    test_item_path_mapping,
+)
 from . import test_entry as test_entry_mod
 from .topic import candidate_topics, list_acceptance_index_topics, topic_paths
 from . import traceability as traceability_mod
@@ -231,11 +237,18 @@ def _credential_bound_state(
         bound.update(
             {
                 "plan_confirmed_hash": stage_state.plan_confirmed_hash,
-                "rollback_manifest_hash": state.rollback.manifest_hash,
-                "rollback_plan_hash": state.rollback.plan_hash,
                 "reuse_decision_hash": stage_state.reuse_decision_hash,
             }
         )
+        try:
+            from .rollback import actual_change_fingerprint
+
+            bound["actual_change_fingerprint"] = actual_change_fingerprint(
+                project_root,
+                state,
+            )
+        except (OSError, ValueError):
+            bound["actual_change_fingerprint"] = None
     elif stage_name in {"qa", "test_plan", "test_code", "test_execution"}:
         project = load_project(project_root)
         bound.update(
@@ -256,6 +269,13 @@ def _credential_bound_state(
                 "impl_hash": state.verification.impl_hash,
             }
         )
+        try:
+            test_paths, _test_detail = list_actual_test_changes(project_root)
+            bound["actual_test_change_fingerprint"] = (
+                _canonical_hash(test_paths) if test_paths is not None else None
+            )
+        except (OSError, ValueError):
+            bound["actual_test_change_fingerprint"] = None
     elif stage_name == "topic_acceptance":
         bound["acceptance_records_hash"] = _canonical_hash(
             {
@@ -593,6 +613,92 @@ def compute_test_related_file_hashes(project_root: str) -> dict[str, str]:
     }
 
 
+def _git_changed_paths(project_root: str) -> tuple[list[str] | None, str]:
+    """读取 Git 当前提交到工作区的路径差异，包含未跟踪文件。"""
+
+    environment = dict(os.environ)
+    for variable in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ):
+        environment.pop(variable, None)
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+
+    def run_git(*arguments: str) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(
+                ["git", *arguments],
+                cwd=project_root,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    root = run_git("rev-parse", "--show-toplevel")
+    if root is None or root.returncode != 0:
+        return None, "当前项目不是可读取的 Git 工作树"
+    diff = run_git("diff", "--name-only", "-z", "HEAD", "--")
+    untracked = run_git("ls-files", "--others", "--exclude-standard", "-z")
+    if (
+        diff is None
+        or untracked is None
+        or diff.returncode != 0
+        or untracked.returncode != 0
+    ):
+        return None, "无法读取 Git 当前提交、暂存区、工作区和未跟踪文件差异"
+    paths = sorted(
+        {
+            path.replace("\\", "/")
+            for output in (diff.stdout, untracked.stdout)
+            for path in output.split("\0")
+            if path
+        }
+    )
+    return paths, "已读取 Git 当前提交、暂存区、工作区和未跟踪文件差异"
+
+
+def list_actual_test_changes(project_root: str) -> tuple[list[str] | None, str]:
+    """读取 Git 当前可见的测试代码、夹具、辅助脚本和测试配置变化。
+
+    该清单用于 QA（测试验证）展示和定向重查，不是测试计划白名单。没有
+    可读取的 Git 工作树时返回 ``None``，调用方必须显示限制而不是猜测。
+    """
+
+    candidates, detail = _git_changed_paths(project_root)
+    if candidates is None:
+        return None, detail
+    selected: list[str] = []
+    project = load_project(project_root)
+    referenced_scripts = set()
+    if project is not None and isinstance(project.test_entry, dict):
+        referenced_scripts = set(test_entry_mod.referenced_project_scripts(project.test_entry))
+    for path in sorted(candidates):
+        normalized = path.strip().replace("\\", "/")
+        if not normalized or normalized.startswith(".workflow_loop/"):
+            continue
+        filename = os.path.basename(normalized)
+        suffix = os.path.splitext(filename)[1].lower()
+        if (
+            _is_test_path(normalized)
+            or _is_standalone_test_config(normalized, _project_test_entry(project_root)[1])
+            or normalized in referenced_scripts
+            or filename in CONFIG_NAMES
+            or suffix in CONFIG_SUFFIXES
+        ):
+            selected.append(normalized)
+    return selected, f"{detail}；已筛出实际测试改动"
+
+
 def registered_code_design_paths(project_root: str) -> list[str]:
     """读取代码架构表中明确写在“代码位置”列的文件，不扫描项目。"""
     full_path = os.path.join(project_root, artifact_paths_mod.CODE_DESIGN_DOC)
@@ -657,6 +763,15 @@ def _active_registered_paths(project_root: str) -> list[str] | None:
             ):
                 raise
     if state.topics:
+        from .rollback import recorded_code_paths
+
+        try:
+            registered.update(recorded_code_paths(project_root, state.topics))
+        except (FileNotFoundError, OSError, ValueError):
+            # 实施记录未生成或格式尚未完整时，由实施门禁报告具体问题；
+            # 这里不能因读取失败悄悄改用另一套全目录猜测。
+            pass
+    if state.topics:
         try:
             registered.update(planned_test_source_paths(project_root, state.topics))
         except (FileNotFoundError, OSError, ValueError):
@@ -665,6 +780,9 @@ def _active_registered_paths(project_root: str) -> list[str] | None:
     project = load_project(project_root)
     if project is not None and isinstance(project.test_entry, dict):
         registered.update(test_entry_mod.referenced_project_scripts(project.test_entry))
+    actual_test_paths, _actual_test_detail = list_actual_test_changes(project_root)
+    if actual_test_paths is not None:
+        registered.update(actual_test_paths)
     return snapshots_mod.normalize_registered_paths(project_root, registered)
 
 
@@ -1699,12 +1817,22 @@ def _invalidate_test_execution_outputs(
     project_root: str,
     state: WorkflowState,
     topics: list[str],
+    test_items: list[tuple[str, str]] | None = None,
 ) -> None:
     """上游内容变化时，清掉不能继续使用的主题测试状态和结果文件。"""
     stage_state = state.stages.get("qa") or state.stages.get("test_execution")
     if stage_state is not None:
-        for topic in topics:
-            stage_state.test_tasks.pop(topic, None)
+        if test_items is None:
+            for topic in topics:
+                stage_state.test_tasks.pop(topic, None)
+        else:
+            for topic, test_id in test_items:
+                topic_tasks = stage_state.test_tasks.get(topic)
+                if topic_tasks is None:
+                    continue
+                topic_tasks.pop(test_id, None)
+                if not topic_tasks:
+                    stage_state.test_tasks.pop(topic, None)
     for topic in topics:
         paths = topic_paths(project_root, topic)
         for kind in ("test_result", "acceptance_result"):
@@ -1722,6 +1850,7 @@ class InvalidationInspection:
     source_stage: str | None = None
     affected_stages: tuple[str, ...] = ()
     affected_topics: tuple[str, ...] = ()
+    affected_test_items: tuple[tuple[str, str], ...] = ()
     affected_description: str = ""
     reason: str = ""
     diagnostics: tuple[diagnostics_mod.Diagnostic, ...] = ()
@@ -1741,6 +1870,7 @@ class InvalidationFinding:
     expected_hash: str
     actual_hash: str | None
     affected_topics: tuple[str, ...]
+    affected_test_items: tuple[tuple[str, str], ...]
     reason: str
     diagnostics: tuple[diagnostics_mod.Diagnostic, ...]
     details: tuple[tuple[str, dict[str, list[str]]], ...] = ()
@@ -1912,11 +2042,31 @@ def _topic_owned_paths(
                 from .rollback import planned_code_paths
 
                 register(topic, [paths["impl_doc"]])
-                register(topic, planned_code_paths(project_root, [topic]))
+                try:
+                    register(topic, planned_code_paths(project_root, [topic]))
+                except (FileNotFoundError, OSError, ValueError):
+                    pass
+                try:
+                    from .rollback import recorded_code_paths
+
+                    register(topic, recorded_code_paths(project_root, [topic]))
+                except (FileNotFoundError, OSError, ValueError):
+                    pass
             elif source_stage == "test_plan":
                 register(topic, [paths["test_plan"]])
             elif source_stage == "test_code":
-                register(topic, planned_test_source_paths(project_root, [topic]))
+                try:
+                    register(topic, planned_test_source_paths(project_root, [topic]))
+                except (FileNotFoundError, OSError, ValueError):
+                    pass
+                try:
+                    from .test_mapping import collect_all_workflow_test_markers
+
+                    for marker in collect_all_workflow_test_markers(project_root):
+                        if marker.topic == topic:
+                            register(topic, [marker.path])
+                except (FileNotFoundError, OSError, ValueError):
+                    pass
             elif source_stage == "test_execution":
                 register(topic, [paths["test_result"]])
             elif source_stage == "topic_acceptance":
@@ -1967,6 +2117,85 @@ def _affected_topics_from_changes(
             return None
         affected.update(owners)
     return tuple(topic for topic in ordered_topics if topic in affected)
+
+
+def _normalized_test_item_mapping(
+    value: object,
+) -> dict[str, set[tuple[str, str]]] | None:
+    """读取 JSON 往返后的测试文件到测试项映射。"""
+
+    if not isinstance(value, dict):
+        return None
+    normalized: dict[str, set[tuple[str, str]]] = {}
+    for raw_path, raw_items in value.items():
+        if not isinstance(raw_path, str) or not isinstance(raw_items, (list, tuple)):
+            return None
+        items: set[tuple[str, str]] = set()
+        for raw_item in raw_items:
+            if (
+                not isinstance(raw_item, (list, tuple))
+                or len(raw_item) != 2
+                or not all(isinstance(part, str) and part for part in raw_item)
+            ):
+                return None
+            items.add((raw_item[0], raw_item[1]))
+        normalized[raw_path.replace(os.sep, "/")] = items
+    return normalized
+
+
+def _affected_test_items_from_changes(
+    project_root: str,
+    topics: list[str],
+    differences: dict[str, list[str]],
+    baseline_mapping: object,
+) -> tuple[tuple[str, str], ...] | None:
+    """把测试代码变化定位到 TC；无直接标识的路径按共享支持文件处理。"""
+
+    baseline = _normalized_test_item_mapping(baseline_mapping)
+    if baseline is None:
+        return None
+    try:
+        current = {
+            path: set(items)
+            for path, items in test_item_path_mapping(project_root, topics).items()
+        }
+        ordered_items = [
+            (item.topic, item.test_id)
+            for item in automated_test_items(project_root, topics)
+        ]
+    except (OSError, ValueError):
+        return None
+    changed_paths = _changed_paths(differences)
+    if not changed_paths:
+        return ()
+    affected: set[tuple[str, str]] = set()
+    all_items = set(ordered_items)
+    for path in changed_paths:
+        normalized = path.replace(os.sep, "/")
+        direct = baseline.get(normalized, set()) | current.get(normalized, set())
+        affected.update(direct or all_items)
+    return tuple(item for item in ordered_items if item in affected)
+
+
+def _test_item_change_diagnostics(
+    affected_items: tuple[tuple[str, str], ...],
+    differences: dict[str, list[str]],
+) -> list[diagnostics_mod.Diagnostic]:
+    changed_paths = sorted(_changed_paths(differences))
+    return [
+        diagnostics_mod.Diagnostic(
+            kind="error",
+            check_id=f"invalidation.test_code.test_item:{topic}:{test_id}",
+            location=f".workflow_loop/state.json#stages.qa.test_tasks.{topic}.{test_id}",
+            expected="测试项机器记录绑定的测试代码和配置未变化",
+            actual=f"{topic} / {test_id} 受到测试代码变化影响",
+            evidence=f"变化路径={changed_paths}",
+            impact="只使该测试项的旧机器记录失效，同主题其它测试项记录保留",
+            next_action=f"重新登记并执行 {topic} / {test_id}",
+            depends_on="invalidation.test_code.binding",
+        )
+        for topic, test_id in affected_items
+    ]
 
 
 def _dependent_not_checked(
@@ -2113,6 +2342,7 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
         reason: str,
         affected_topics: tuple[str, ...] | None,
         detail_differences: list[tuple[str, dict[str, list[str]]]],
+        affected_test_items: tuple[tuple[str, str], ...] = (),
         extra_diagnostics: list[diagnostics_mod.Diagnostic] | None = None,
         recovery_step: str = "",
         result_documents_only: bool = False,
@@ -2164,6 +2394,7 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
                 expected_hash=expected_hash,
                 actual_hash=actual_hash,
                 affected_topics=affected_topics,
+                affected_test_items=affected_test_items,
                 reason=reason,
                 diagnostics=tuple(diagnostics),
                 details=tuple(detail_differences),
@@ -2202,9 +2433,19 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
         current = compute_impl_hash(project_root, topics)
         if current != expected:
             try:
-                code_differences = compare_registered_file_snapshot(
-                    project_root, stored.get("impl"), scope="product"
-                )
+                impl_snapshot = stored.get("impl_actual") or stored.get("impl")
+                if isinstance(impl_snapshot, dict) and isinstance(
+                    impl_snapshot.get("files"), list
+                ):
+                    code_differences = compare_complete_implementation_file_snapshot(
+                        project_root,
+                        impl_snapshot,
+                        scope="product",
+                    )
+                else:
+                    code_differences = compare_registered_file_snapshot(
+                        project_root, impl_snapshot, scope="product"
+                    )
             except ValueError:
                 code_differences = {
                     "added": [], "modified": [], "deleted": [], "type_changed": [],
@@ -2263,9 +2504,19 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
         current = compute_test_code_snapshot_hash(project_root)
         if current != expected:
             try:
-                differences = compare_registered_file_snapshot(
-                    project_root, stored.get("test_code"), scope="test"
-                )
+                test_snapshot = stored.get("test_code_actual") or stored.get("test_code")
+                if isinstance(test_snapshot, dict) and isinstance(
+                    test_snapshot.get("files"), list
+                ):
+                    differences = compare_complete_implementation_file_snapshot(
+                        project_root,
+                        test_snapshot,
+                        scope="test",
+                    )
+                else:
+                    differences = compare_registered_file_snapshot(
+                        project_root, test_snapshot, scope="test"
+                    )
             except ValueError:
                 differences = {
                     "added": [], "modified": [], "deleted": [], "type_changed": [],
@@ -2274,12 +2525,36 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
             entry_known = "test_entry_config" in stored
             current_entry = _current_test_entry_config(project_root)
             entry_changed = entry_known and stored.get("test_entry_config") != current_entry
-            affected = (
-                tuple(topics)
-                if entry_changed
-                else _affected_topics_from_changes(
-                    project_root, topics, "test_code", differences
+            if entry_changed:
+                try:
+                    affected_items = tuple(
+                        (item.topic, item.test_id)
+                        for item in automated_test_items(project_root, topics)
+                    )
+                except (OSError, ValueError):
+                    affected_items = None
+            else:
+                affected_items = _affected_test_items_from_changes(
+                    project_root,
+                    topics,
+                    differences,
+                    stored.get("test_item_paths"),
                 )
+                if affected_items is None and "test_item_paths" not in stored:
+                    # 旧状态没有逐文件到 TC 的映射，只能保守影响当前主题全部自动化测试项。
+                    affected_items = tuple(
+                        (item.topic, item.test_id)
+                        for item in automated_test_items(project_root, topics)
+                    )
+            affected = (
+                tuple(
+                    topic
+                    for topic in topics
+                    if affected_items is not None
+                    and any(item_topic == topic for item_topic, _test_id in affected_items)
+                )
+                if affected_items is not None
+                else None
             )
             extra: list[diagnostics_mod.Diagnostic] = []
             parent = "invalidation.test_code.binding"
@@ -2299,8 +2574,11 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
                         depends_on=parent,
                     )
                 )
+            if affected_items is not None:
+                extra.extend(_test_item_change_diagnostics(affected_items, differences))
             if not entry_known:
                 affected = None
+                affected_items = None
                 extra.append(
                     diagnostics_mod.Diagnostic(
                         kind="not_checked",
@@ -2323,6 +2601,7 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
                     f"{format_registered_differences(differences)}"
                 ),
                 affected_topics=affected,
+                affected_test_items=affected_items or (),
                 detail_differences=[("测试代码", differences)],
                 extra_diagnostics=extra,
                 recovery_step="test_code",
@@ -2513,6 +2792,11 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
         topic for finding in findings for topic in finding.affected_topics
     }
     affected_topics = tuple(topic for topic in topics if topic in affected_topic_set)
+    affected_test_items = tuple(
+        item
+        for finding in findings
+        for item in finding.affected_test_items
+    )
     reasons = [finding.reason for finding in findings] + [
         reason for _source, reason, _diagnostics in blocked
     ]
@@ -2527,6 +2811,7 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
         source_stage=source_stage,
         affected_stages=affected_stages,
         affected_topics=affected_topics,
+        affected_test_items=tuple(dict.fromkeys(affected_test_items)),
         affected_description="；".join(descriptions),
         reason="；".join(reasons),
         diagnostics=tuple(all_diagnostics),
@@ -2672,7 +2957,15 @@ def apply_invalidation(
             )
 
         if source in {"acceptance_plan", "impl", "test_plan", "test_code"}:
-            _invalidate_test_execution_outputs(project_root, state, topics)
+            if source == "test_code" and finding.affected_test_items:
+                _invalidate_test_execution_outputs(
+                    project_root,
+                    state,
+                    topics,
+                    list(finding.affected_test_items),
+                )
+            else:
+                _invalidate_test_execution_outputs(project_root, state, topics)
             regression_invalidated = True
         elif source == "test_execution":
             qa_state = state.stages.get("qa") or state.stages.get("test_execution")

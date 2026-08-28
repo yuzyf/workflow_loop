@@ -60,7 +60,9 @@ class RecordedCodeChange:
     location: str
     logic: str
     observable_change: str
+    change_reason: str
     acceptance_conditions: str
+    test_evidence: str
 
 
 @dataclass(frozen=True)
@@ -652,6 +654,11 @@ def _recorded_code_changes_with_diagnostics(
             with open(full_path, "r", encoding="utf-8") as stream:
                 content = stream.read()
             section = _code_result_section(content)
+            current_result_structure = re.search(
+                r"^#{1,6}[ \t]+3\.4\.1[ \t]+实际代码修改[ \t]*$",
+                content,
+                re.MULTILINE,
+            ) is not None
             section_offset = content.find(section)
             section_start_line = content[:section_offset].count("\n") + 1
             rows = _table_rows(
@@ -722,11 +729,13 @@ def _recorded_code_changes_with_diagnostics(
             location = row[location_column].strip()
             logic = row["实际修改的代码逻辑"].strip()
             observable = row["数据、状态或输出的实际变化"].strip()
+            change_reason = row.get("修改理由", "").strip()
             acceptance = (
                 row.get("对应验收条件")
                 or row.get("对应验收条件和测试项")
                 or ""
             ).strip()
+            test_evidence = row.get("测试证据", "").strip()
             try:
                 path = _normalized_relative_path(
                     project_root,
@@ -807,6 +816,22 @@ def _recorded_code_changes_with_diagnostics(
                         next_action="写出可从代码、状态或输出观察到的实际变化",
                     )
                 )
+            if current_result_structure and _is_record_placeholder(change_reason):
+                evidence = (
+                    f"{prefix}，“修改理由”列缺少具体内容：{change_reason!r}"
+                )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.change_reason_missing",
+                        location=f"{prefix}，“修改理由”列",
+                        expected="说明该实际文件为什么属于本轮已确认产品行为",
+                        actual=f"修改理由为 {change_reason!r}，没有可核对的具体原因",
+                        evidence=evidence,
+                        impact="无法区分本轮必要修改、无关改动和未确认产品行为",
+                        next_action="填写该文件服务的已确认行为和必须修改它的具体原因",
+                    )
+                )
             referenced_ids = {
                 match.upper()
                 for match in re.findall(r"\bAC-\d+\b", acceptance, re.IGNORECASE)
@@ -864,6 +889,22 @@ def _recorded_code_changes_with_diagnostics(
                             next_action="把该列改为当前主题验收计划中实际存在的 AC 编号",
                         )
                     )
+            if current_result_structure and _is_record_placeholder(test_evidence):
+                evidence = (
+                    f"{prefix}，“测试证据”列缺少具体内容：{test_evidence!r}"
+                )
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.test_evidence_missing",
+                        location=f"{prefix}，“测试证据”列",
+                        expected="写明可复核的检查或测试命令、入口和实际结果",
+                        actual=f"测试证据为 {test_evidence!r}，没有可复核事实",
+                        evidence=evidence,
+                        impact="后续 QA 无法判断该文件的实现是否已有对应验证入口",
+                        next_action="填写该文件对应的具体测试命令、测试入口或结构化机器证据",
+                    )
+                )
 
             changes.append(
                 RecordedCodeChange(
@@ -876,7 +917,9 @@ def _recorded_code_changes_with_diagnostics(
                     location=location,
                     logic=logic,
                     observable_change=observable,
+                    change_reason=change_reason,
                     acceptance_conditions=acceptance,
+                    test_evidence=test_evidence,
                 )
             )
     return changes, diagnostics
@@ -1289,6 +1332,208 @@ def planned_code_paths(project_root: str, topics: list[str]) -> list[str]:
     if diagnostics:
         raise ValueError("\n".join(item.evidence for item in diagnostics))
     return sorted({change.path for change in changes})
+
+
+def list_actual_working_tree_changes(
+    project_root: str,
+) -> tuple[list[str] | None, str]:
+    """读取当前 Git 工作区可见的实际代码/测试改动。
+
+    这份清单只用于展示和证据核对，不表示允许修改的文件集合。没有 Git
+    或无法读取状态时返回 ``None``，调用方必须把限制显示给用户而不是猜测。
+    """
+
+    candidates, detail = verification_mod._git_changed_paths(project_root)
+    if candidates is None:
+        return None, detail
+    ignored_roots = {".workflow_loop", "spec", "acceptance", "qa", "impl", "bug"}
+    selected: list[str] = []
+    for path in sorted(candidates):
+        normalized = path.strip().replace("\\", "/")
+        if not normalized or normalized.split("/", 1)[0] in ignored_roots:
+            continue
+        if normalized.endswith(".md") and not normalized.startswith(
+            "src/workflow_loop/data/"
+        ):
+            continue
+        selected.append(normalized)
+    return selected, f"{detail}；已筛出实际代码和测试改动"
+
+
+def actual_implementation_paths_since_entry(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> tuple[list[str] | None, str]:
+    """返回进入 impl 后实际变化的代码、测试、脚本和配置路径。
+
+    有入场观察快照时用它定位新增、修改和删除；旧状态没有快照时退回 Git
+    工作区清单。差异只用于说明和记录，不把计划外路径判成错误。
+    """
+
+    baseline = wf_state.meta.get(IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY)
+    if isinstance(baseline, dict):
+        try:
+            differences = verification_mod.compare_complete_implementation_file_snapshot(
+                project_root,
+                baseline,
+                scope="all",
+            )
+        except (OSError, ValueError) as exc:
+            return None, f"无法比较进入 impl 时的实际代码观察快照：{exc}"
+        paths = sorted(
+            {
+                path
+                for category, changed in differences.items()
+                if category != "not_checked"
+                for path in changed
+            }
+        )
+        # 包内流程材料不是业务代码后缀，但它们同样是本轮实现的一部分；
+        # 用 Git 只补充这些可定位的材料变化，不把项目文档和运行产物混进来。
+        git_paths, git_detail = list_actual_working_tree_changes(project_root)
+        if git_paths is not None:
+            paths = sorted(set(paths) | set(git_paths))
+            return [
+                path for path in paths
+                if not verification_mod.is_test_related_path(project_root, path)
+            ], f"{git_detail}；已合并包内流程材料变化"
+        return [
+            path for path in paths
+            if not verification_mod.is_test_related_path(project_root, path)
+        ], "已按进入 impl 时的观察快照计算实际变化"
+    manifest = wf_state.meta.get(IMPL_COMPLETE_INVENTORY_MANIFEST_KEY)
+    if isinstance(manifest, dict):
+        try:
+            previous = verification_mod.compute_complete_implementation_file_hashes(project_root)
+        except (OSError, ValueError) as exc:
+            return None, f"无法读取当前实施范围文件：{exc}"
+        return [
+            path for path in sorted(previous)
+            if not verification_mod.is_test_related_path(project_root, path)
+        ], "已从实施回退清单取得当前实施范围文件"
+    return list_actual_working_tree_changes(project_root)
+
+
+def actual_change_fingerprint(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> str:
+    """为当前实际代码改动集合生成稳定指纹，供第三道门发现新增路径。"""
+
+    paths, detail = actual_implementation_paths_since_entry(project_root, wf_state)
+    if paths is None:
+        return f"unavailable:{detail}"
+    facts: list[dict[str, str | None]] = []
+    for path in paths:
+        full_path = os.path.join(project_root, path)
+        if os.path.isfile(full_path) and not os.path.islink(full_path):
+            facts.append({"path": path, "content_hash": _sha256_file(full_path)})
+        else:
+            facts.append({"path": path, "content_hash": None})
+    return _sha256_bytes(
+        json.dumps(facts, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+
+
+def validate_actual_implementation_changes(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> tuple[bool, str]:
+    """按实际改动核对实施记录，不把计划文件集合当作白名单。"""
+
+    report = validate_actual_implementation_changes_report(project_root, wf_state)
+    if report.passed:
+        actual_paths, actual_detail = actual_implementation_paths_since_entry(
+            project_root,
+            wf_state,
+        )
+        if actual_paths is None:
+            return True, (
+                "实施记录已核对；实际改动范围无法自动完整确认，"
+                f"{actual_detail}；该限制不会被伪装成代码门禁失败"
+            )
+        recorded_changes, _ = _recorded_code_changes_with_diagnostics(
+            project_root,
+            wf_state.topics,
+        )
+        facts = [
+            (
+                f"{change.path}：修改理由={change.change_reason or '历史记录未单列'}；"
+                f"验收条件={change.acceptance_conditions}；"
+                f"测试证据={change.test_evidence or '历史记录未单列'}"
+            )
+            for change in recorded_changes
+            if change.path in set(actual_paths)
+        ]
+        return True, (
+            "实际改动和实施记录已核对："
+            f"{sorted(actual_paths)}；逐文件证据：{' | '.join(facts)}；"
+            "计划外文件只要有理由、验收关联和测试证据即可保留"
+        )
+    return False, "\n".join(
+        f"{index}. {diagnostic.evidence}"
+        for index, diagnostic in enumerate(report.sorted_diagnostics, 1)
+    )
+
+
+def validate_actual_implementation_changes_report(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> diagnostics_mod.ValidationReport:
+    """返回实际代码改动门禁的结构化报告。
+
+    报告只要求实际变化能够在实施结果中解释。计划文件只是预期说明，
+    不再参与“文件集合必须完全相等”的失败判断。
+    """
+
+    report = diagnostics_mod.ValidationReport(
+        stage="impl",
+        gate="实际改动与实施记录核对",
+    )
+    recorded_changes, record_diagnostics = _recorded_code_changes_with_diagnostics(
+        project_root,
+        wf_state.topics,
+    )
+    report.extend(record_diagnostics)
+    recorded_paths = {change.path for change in recorded_changes}
+    actual_paths, actual_detail = actual_implementation_paths_since_entry(
+        project_root,
+        wf_state,
+    )
+    if actual_paths is None:
+        # “无法自动完整确认”是非阻塞限制，不能放进会让门禁失败的诊断项。
+        # 具体限制由 tuple 返回值和 CLI 成功详情展示。
+        return report
+
+    actual = set(actual_paths)
+    for path in sorted(actual - recorded_paths):
+        report.add_error(
+            check_id=f"impl.actual_changes.unrecorded:{path}",
+            location=path,
+            expected="每个实际改动文件在实施结果中有修改理由、对应 AC 编号和测试证据",
+            actual="检测到实际改动，但实施结果没有说明该文件",
+            evidence=(
+                f"实际改动路径={path!r}；实施记录路径={sorted(recorded_paths)}；"
+                "计划外文件本身不构成失败，缺少实际解释才构成失败"
+            ),
+            impact="后续测试和验收无法判断该文件为何属于本轮实现",
+            next_action="在实施结果中补充该文件的实际逻辑、修改理由、AC 编号和测试证据",
+        )
+    # 记录中出现了没有真实变化的文件时，只要求说明“复用”或修正文档。
+    for path in sorted(recorded_paths - actual):
+        change = next(item for item in recorded_changes if item.path == path)
+        report.add_error(
+            check_id=f"impl.actual_changes.recorded_without_change:{path}",
+            location=f"{change.document_path}:{change.line}",
+            expected="实施结果列出的文件有实际变化，或明确说明这是复用的既有实现",
+            actual="实施结果列出该文件，但没有从入场观察中检测到变化",
+            evidence=f"记录文件={change.path!r}；进入 impl 后实际变化={sorted(actual)}",
+            impact="实施记录可能把旧代码或无关文件冒充成本轮实现",
+            next_action="补充复用说明，或删除该条实际改动记录",
+        )
+    return report
 
 
 def recorded_code_paths(project_root: str, topics: list[str]) -> list[str]:

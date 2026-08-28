@@ -339,11 +339,10 @@ def test_discuss_announces_impl_baseline_frozen_before_first_material_read(
     cli_mod.cmd_discuss(SimpleNamespace())
     first_output = capsys.readouterr().out
 
-    assert "【实施前代码基线】" in first_output
+    assert "【代码门禁过程】" in first_output
     assert "impl-entry-code-hash" in first_output
-    assert "code_baseline_hash（实施前产品代码整体快照）" in first_output
-    assert "不是 Git 提交" in first_output
-    assert "workflow discuss 和 git commit 不会重写它" in first_output
+    assert "不是允许修改的文件白名单" in first_output
+    assert "额外文件可以直接修改" in first_output
     assert cli_mod.IMPL_CODE_BASELINE_NOTICE_PENDING_KEY not in workflow_state.meta
     assert saved_states
 
@@ -607,8 +606,7 @@ def _prepare_accept_existing_command(
     tmp_path,
     monkeypatch,
     *,
-    changed_paths: list[str],
-    existing_result: tuple[bool, str] = (True, "既有实现路径一致"),
+    actual_result: tuple[bool, str] = (True, "实际改动和实施记录已核对"),
 ):
     stage_state = cli_mod.state_mod.StageState(
         status="in_progress",
@@ -657,23 +655,8 @@ def _prepare_accept_existing_command(
     monkeypatch.setattr(cli_mod, "compute_stage_material_hash", lambda _root, _stage: "materials")
     monkeypatch.setattr(
         cli_mod.rollback_mod,
-        "validate_prepared",
-        lambda _root, _state: (True, "回退依据完整", {"prepares": [{}]}),
-    )
-    monkeypatch.setattr(
-        cli_mod.rollback_mod,
-        "implementation_changed_paths_since_prepare",
-        lambda _root, _manifest: changed_paths,
-    )
-    monkeypatch.setattr(
-        cli_mod.rollback_mod,
-        "validate_implementation_changes",
-        lambda _root, _state: (True, "三方文件集合完全一致"),
-    )
-    monkeypatch.setattr(
-        cli_mod.rollback_mod,
-        "validate_existing_implementation_paths",
-        lambda _root, _state: existing_result,
+        "validate_actual_implementation_changes",
+        lambda _root, _state: actual_result,
     )
     monkeypatch.setattr(
         cli_mod,
@@ -698,67 +681,63 @@ def _prepare_accept_existing_command(
     return workflow_state, stage_state, saved_states, journal_entries, args
 
 
-def test_accept_existing_code_refuses_post_baseline_changes(
+def test_accept_existing_code_accepts_actual_changes_with_complete_evidence(
     tmp_path,
     monkeypatch,
     capsys,
 ):
-    """既有代码确认只能用于基线后零修改，不能遮住本轮真实变化。"""
+    """既有代码确认不再因为实际文件变化而要求重设基线。"""
     _, stage_state, saved_states, journal_entries, args = _prepare_accept_existing_command(
         tmp_path,
         monkeypatch,
-        changed_paths=["src/upload.py", "tests/test_upload.py"],
+        actual_result=(True, "实际改动包含 src/upload.py 和 tests/test_upload.py，记录完整"),
     )
 
     cli_mod.cmd_gate(args)
     output = capsys.readouterr().out
 
-    assert "既有代码例外不适用" in output
-    assert "src/upload.py" in output and "tests/test_upload.py" in output
-    assert "下一步命令: workflow gate impl" in output
-    assert stage_state.existing_code_accepted_hash is None
-    assert saved_states == []
-    assert journal_entries == []
+    assert "既有实施代码已确认" in output
+    assert stage_state.existing_code_accepted_hash == "current-code-hash"
+    assert len(saved_states) == 1
+    assert len(journal_entries) == 1
 
 
-def test_accept_existing_code_rejects_invalid_scope_without_state_change(
+def test_accept_existing_code_rejects_missing_actual_evidence_without_state_change(
     tmp_path,
     monkeypatch,
     capsys,
 ):
-    """零修改也必须先核对计划、记录和当前文件，失败时状态保持原样。"""
+    """实际改动缺少理由或验收关联时，既有代码确认保持原样。"""
     _, stage_state, saved_states, journal_entries, args = _prepare_accept_existing_command(
         tmp_path,
         monkeypatch,
-        changed_paths=[],
-        existing_result=(
+        actual_result=(
             False,
-            "1. 实施计划文件未写入实施后记录：['src/missing.py']\n"
-            "2. 既有实现路径不是当前项目内普通文件：src/missing.py",
+            "1. 实际改动文件尚未在实施记录中说明：src/missing.py；请补充修改理由、对应 AC 编号和测试证据\n"
+            "2. 实施记录列出但未检测到进入 impl 后的实际变化：src/stale.py",
         ),
     )
 
     cli_mod.cmd_gate(args)
     output = capsys.readouterr().out
 
-    assert "实施计划文件未写入实施后记录" in output
-    assert "既有实现路径不是当前项目内普通文件" in output
+    assert "实际改动文件尚未在实施记录中说明" in output
+    assert "实施记录列出但未检测到" in output
     assert stage_state.code_baseline_hash == "original-baseline"
     assert stage_state.existing_code_accepted_hash is None
     assert saved_states == []
     assert journal_entries == []
 
 
-def test_accept_existing_code_preserves_original_baseline(
+def test_accept_existing_code_preserves_observation_snapshot(
     tmp_path,
     monkeypatch,
     capsys,
 ):
-    """合法既有代码确认只写确认哈希，不覆盖实施前原始基线。"""
+    """合法既有代码确认只写确认哈希，不覆盖原有观察快照。"""
     _, stage_state, saved_states, journal_entries, args = _prepare_accept_existing_command(
         tmp_path,
         monkeypatch,
-        changed_paths=[],
     )
 
     cli_mod.cmd_gate(args)
@@ -846,7 +825,7 @@ def test_material_change_reconfirms_the_new_gate_state(
     assert stage_state.gate.discussion_complete is True
     assert stage_state.discussion_material_hash == "new-materials"
     assert stage_state.plan_confirmed_hash == "new-plan"
-    assert stage_state.code_baseline_hash == "new-code"
+    assert stage_state.code_baseline_hash is None
     assert "impl 讨论完毕" in output
     assert "实施计划已重新确认" not in output
     assert any(entry[0][1] == "门禁讨论完毕" for entry in journal_entries)

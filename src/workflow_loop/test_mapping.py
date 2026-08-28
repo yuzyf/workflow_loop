@@ -114,6 +114,7 @@ class WorkflowTestMarker:
     expected_evidence: str
     definition_line: int = 0
     definition_end_line: int = 0
+    definition_name: str = ""
     body_excerpt: str = ""
     body_sha256: str = ""
 
@@ -449,6 +450,33 @@ def planned_test_source_paths(project_root: str, topics: list[str]) -> list[str]
     return sorted(set(paths))
 
 
+def all_test_source_paths(project_root: str) -> list[str]:
+    """返回项目中可读的测试源码路径，用于实际改动归属，不是测试白名单。"""
+
+    excluded = {
+        ".git",
+        ".workflow_loop",
+        ".venv",
+        "venv",
+        "node_modules",
+        "dist",
+        "build",
+        ".next",
+        "__pycache__",
+        ".pytest_cache",
+    }
+    paths: list[str] = []
+    for root, directories, files in os.walk(project_root):
+        directories[:] = [name for name in directories if name not in excluded]
+        for filename in files:
+            relative = os.path.relpath(os.path.join(root, filename), project_root).replace(
+                os.sep, "/"
+            )
+            if _is_test_source(relative):
+                paths.append(relative)
+    return sorted(set(paths))
+
+
 def _clean_marker_line(line: str) -> str:
     value = line.strip()
     value = re.sub(r"^(?:#|/{2,}|/\*+|\*+)\s*", "", value)
@@ -619,6 +647,7 @@ def _parse_python_markers(
                 marker,
                 definition_line=node.lineno,
                 definition_end_line=definition_end,
+                definition_name=node.name,
                 body_excerpt=body_excerpt,
                 body_sha256=hashlib.sha256(body_source.encode("utf-8")).hexdigest(),
             )
@@ -791,10 +820,7 @@ def validate_workflow_test_markers(
     markers: list[WorkflowTestMarker] = []
     failures: list[str] = []
     try:
-        for relative_path in planned_test_source_paths(project_root, topics):
-            if not os.path.isfile(os.path.join(project_root, *relative_path.split("/"))):
-                failures.append(f"测试计划登记的测试文件尚未生成: {relative_path}")
-                continue
+        for relative_path in all_test_source_paths(project_root):
             markers.extend(
                 _parse_markers_from_file(project_root, relative_path, failures)
             )
@@ -838,12 +864,24 @@ def validate_workflow_test_markers(
                 marker_errors.append(f"测试方式应为“{item.test_method}”")
             if marker.test_level not in TEST_LEVELS:
                 marker_errors.append(f"测试层级必须是 {sorted(TEST_LEVELS)}")
-            expected_test_path, _ = _entry_parts(item.test_entry, "测试入口")
-            if marker.path.replace("\\", "/") != expected_test_path:
-                marker_errors.append(f"标识文件应为“{expected_test_path}”")
+            try:
+                actual_test_path, actual_test_target = _entry_parts(
+                    marker.test_entry,
+                    "测试入口",
+                )
+            except ValueError as exc:
+                marker_errors.append(str(exc))
+            else:
+                if marker.path.replace("\\", "/") != actual_test_path:
+                    marker_errors.append(
+                        f"测试入口路径应指向标识所在文件“{marker.path}”"
+                    )
+                if marker.definition_name and actual_test_target != marker.definition_name:
+                    marker_errors.append(
+                        f"测试入口标识应为真实定义“{marker.definition_name}”"
+                    )
             exact_fields = (
                 ("产品入口", marker.product_entry, item.product_entry),
-                ("测试入口", marker.test_entry, item.test_entry),
                 ("代码入口", marker.code_entry, item.code_entry),
                 ("准备数据", marker.preparation, item.preparation),
                 ("执行动作", marker.action, item.action),
@@ -893,9 +931,72 @@ def collect_workflow_test_markers(
     topics: list[str],
 ) -> list[WorkflowTestMarker]:
     """返回当前主题的全部 Workflow-Test 标识，供执行登记读取测试入口。"""
+    return [
+        marker
+        for marker in collect_all_workflow_test_markers(project_root)
+        if marker.topic in topics
+    ]
+
+
+def collect_all_workflow_test_markers(project_root: str) -> list[WorkflowTestMarker]:
+    """读取所有测试源码中的追踪标识，用于把实际改动归属到主题。"""
+
     markers: list[WorkflowTestMarker] = []
-    for relative_path in planned_test_source_paths(project_root, topics):
-        if not os.path.isfile(os.path.join(project_root, *relative_path.split("/"))):
-            continue
-        markers.extend(_parse_markers_from_file(project_root, relative_path))
-    return [marker for marker in markers if marker.topic in topics]
+    errors: list[str] = []
+    for relative_path in all_test_source_paths(project_root):
+        if os.path.isfile(os.path.join(project_root, *relative_path.split("/"))):
+            markers.extend(_parse_markers_from_file(project_root, relative_path, errors))
+    if errors:
+        raise ValueError("\n".join(errors))
+    return markers
+
+
+def test_item_path_mapping(
+    project_root: str,
+    topics: list[str],
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    """返回真实测试文件到 ``(主题, TC)`` 的直接归属。"""
+
+    mapping: dict[str, set[tuple[str, str]]] = {}
+    for marker in collect_workflow_test_markers(project_root, topics):
+        mapping.setdefault(marker.path.replace("\\", "/"), set()).add(
+            (marker.topic, marker.test_id)
+        )
+    return {
+        path: tuple(sorted(items))
+        for path, items in sorted(mapping.items())
+    }
+
+
+def describe_actual_test_change_links(
+    project_root: str,
+    topics: list[str],
+    paths: list[str],
+) -> list[str]:
+    """把实际测试路径解释为直接测试项或共享支持文件。"""
+
+    direct = test_item_path_mapping(project_root, topics)
+    all_items = tuple(
+        (item.topic, item.test_id, item.criterion_id)
+        for item in automated_test_items(project_root, topics)
+    )
+    descriptions: list[str] = []
+    for path in sorted(set(paths)):
+        linked = direct.get(path.replace("\\", "/"), ())
+        if linked:
+            labels = [
+                f"{topic}/{test_id}/"
+                + next(
+                    item.criterion_id
+                    for item in automated_test_items(project_root, topics)
+                    if item.topic == topic and item.test_id == test_id
+                )
+                for topic, test_id in linked
+            ]
+            descriptions.append(f"{path}：直接关联 {labels}")
+        else:
+            labels = [f"{topic}/{test_id}/{criterion_id}" for topic, test_id, criterion_id in all_items]
+            descriptions.append(
+                f"{path}：没有直接 Workflow-Test 标识，按共享测试支持文件关联 {labels}"
+            )
+    return descriptions
