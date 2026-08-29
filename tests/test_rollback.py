@@ -1278,3 +1278,43 @@ def test_abort_retry_detects_change_after_restore_progress_write_failure(tmp_pat
     _restored, failures = rollback.restore_full_run(str(tmp_path), state)
     assert failures == []
     assert overview.read_text(encoding="utf-8") == "before\n"
+
+
+def test_planned_code_paths_and_plan_hash_read_from_impl_record_table(tmp_path: Path) -> None:
+    """R14（断言十三）：表模式下计划文件清单和计划哈希从 impl_record 表取，不读生成 md。"""
+    from workflow_loop import records as records_mod
+    from workflow_loop import state as state_mod
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "src").mkdir(parents=True)
+    _write(root / "src" / "a.py", "x = 1\n")
+    _write(root / "src" / "b.py", "y = 2\n")
+    state = state_mod.WorkflowState(
+        workflow_id="wf-table", intent="product_change", topics=["主题A"]
+    )
+    state.current_stage = "impl"
+    state.stages["impl"] = state_mod.StageState()
+    state_mod.save_state(str(root), state)
+
+    relative = records_mod.create_or_complete_table(
+        str(root), "wf-table", "impl_record", "主题A"
+    )
+    table_path = root / relative
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    table["代码修改计划"] = [
+        {"文件": "src/a.py", "计划修改内容": "修复", "对应验收条件": "AC-01"},
+        {"文件": "src/b.py", "计划修改内容": "新增", "对应验收条件": "AC-02"},
+    ]
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 不创建生成的 impl/<主题>_实施记录.md；表模式下不应读它
+    paths = rollback.planned_code_paths(str(root), ["主题A"])
+    assert paths == ["src/a.py", "src/b.py"]
+
+    plan_hash = rollback.compute_plan_hash(str(root), ["主题A"])
+    assert isinstance(plan_hash, str) and plan_hash
+    # 计划内容变化后哈希应变化（证明从表内容算，不读 md）
+    table["代码修改计划"][0]["计划修改内容"] = "改了计划"
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert rollback.compute_plan_hash(str(root), ["主题A"]) != plan_hash

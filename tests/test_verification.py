@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 
 from workflow_loop.project import create_project, load_project, register_topics, save_project
@@ -1516,3 +1517,70 @@ def test_new_acceptance_topic_invalidates_confirmed_plan(tmp_path):
 
     assert invalidations == [("acceptance_plan", "acceptance_plan 及全部后续阶段")]
     assert state.current_stage == "acceptance_plan"
+
+
+def test_impl_credential_invalidates_when_impl_record_content_changes(tmp_path) -> None:
+    """R29（断言十二）：门2→3 之间 impl_record 表内容变化即凭据失效。"""
+    from workflow_loop import records as records_mod
+    from workflow_loop import state as state_mod
+
+    state = state_mod.WorkflowState(
+        workflow_id="wf-cred", intent="product_change", topics=["主题A"]
+    )
+    state.current_stage = "impl"
+    state.stages["impl"] = StageState(gate=GateState(discussion_complete=True))
+    save_state(str(tmp_path), state)
+
+    relative = records_mod.create_or_complete_table(
+        str(tmp_path), "wf-cred", "impl_record", "主题A"
+    )
+    table_path = tmp_path / relative
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    table["代码修改计划"] = [
+        {"文件": "src/a.py", "计划修改内容": "修复", "对应验收条件": "AC-01"}
+    ]
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    credential = create_validation_credential(str(tmp_path), state, "impl", "实施校验通过")
+    state.stages["impl"].validation_credential = credential
+
+    # 改表内 AI 内容（计划修改内容）→ 凭据应失效
+    table["代码修改计划"][0]["计划修改内容"] = "改了计划内容"
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    valid, detail = compare_validation_credential(str(tmp_path), state, "impl")
+    assert valid is False
+    assert "records_content_hash" in detail
+
+
+def test_impl_credential_unaffected_by_program_only_doc_hash_change(tmp_path) -> None:
+    """R29（断言十二）：程序重算 DOC_HASH_KEY 不应让凭据失效——内容哈希剔除了程序专用键。"""
+    from workflow_loop import records as records_mod
+    from workflow_loop import state as state_mod
+
+    state = state_mod.WorkflowState(
+        workflow_id="wf-cred2", intent="product_change", topics=["主题A"]
+    )
+    state.current_stage = "impl"
+    state.stages["impl"] = StageState(gate=GateState(discussion_complete=True))
+    save_state(str(tmp_path), state)
+
+    relative = records_mod.create_or_complete_table(
+        str(tmp_path), "wf-cred2", "impl_record", "主题A"
+    )
+    table_path = tmp_path / relative
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    table["代码修改计划"] = [
+        {"文件": "src/a.py", "计划修改内容": "修复", "对应验收条件": "AC-01"}
+    ]
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    credential = create_validation_credential(str(tmp_path), state, "impl", "实施校验通过")
+    state.stages["impl"].validation_credential = credential
+
+    # 只改程序专用键（程序重算生成文档哈希）→ AI 内容未变 → 凭据仍有效
+    table[records_mod.DOC_HASH_KEY] = "program-recomputed-hash-value"
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    valid, detail = compare_validation_credential(str(tmp_path), state, "impl")
+    assert valid is True, detail

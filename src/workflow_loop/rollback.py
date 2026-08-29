@@ -598,6 +598,19 @@ def _recorded_path_texts(
 
 
 def _acceptance_ids(project_root: str, topic: str) -> tuple[set[str], str | None]:
+    # R14：表模式从 acceptance_plan 工作记录表取 AC 编号，不正则解析生成文档
+    table, table_relative = _filled_record_table(project_root, topic, "acceptance_plan")
+    if table is not None:
+        identifiers: set[str] = set()
+        for row in table.get("验收条件", []) or []:
+            if not isinstance(row, dict):
+                continue
+            raw = str(row.get("验收条件编号", "")).strip()
+            if raw:
+                identifiers.add(raw.upper())
+        if identifiers:
+            return identifiers, None
+        return set(), f"验收计划工作记录表没有验收条件行：{table_relative}"
     relative_path = topic_paths(project_root, topic)["acceptance_plan"]
     full_path = os.path.join(project_root, relative_path)
     if not os.path.isfile(full_path):
@@ -633,54 +646,76 @@ def _recorded_code_changes_with_diagnostics(
         "数据、状态或输出的实际变化",
     )
     for topic in topics:
-        relative_path = topic_paths(project_root, topic)["impl_doc"]
-        full_path = os.path.join(project_root, relative_path)
-        if not os.path.isfile(full_path):
-            evidence = f"{relative_path}：缺少主题实施文档"
-            diagnostics.append(
-                diagnostics_mod.Diagnostic(
-                    kind="error",
-                    check_id="impl.implementation_record.document_missing",
-                    location=relative_path,
-                    expected="当前验收主题有一份实施记录文档，并包含实施后记录",
-                    actual="主题实施文档不存在",
-                    evidence=evidence,
-                    impact="无法读取本主题实际修改记录，不能核对实施记录与真实文件差异",
-                    next_action="创建或恢复本主题的实施记录文档，并填写实施后记录",
+        # R14：表模式优先从 impl_record 工作记录表读实际代码修改行，不读生成 md
+        table, table_relative = _impl_record_table(project_root, topic)
+        if table is not None:
+            rows = _impl_record_rows(table, "实际代码修改")
+            if not rows:
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.table_empty",
+                        location=table_relative,
+                        expected="impl_record 工作记录表填写了实际代码修改行",
+                        actual="实际代码修改行清单为空",
+                        evidence=f"{table_relative}：实际代码修改行清单为空",
+                        impact="无法读取本主题实际修改记录，不能核对实施记录与真实文件差异",
+                        next_action="在 impl_record 表的实际代码修改行清单填写文件与代码位置",
+                    )
                 )
-            )
-            continue
-        try:
-            with open(full_path, "r", encoding="utf-8") as stream:
-                content = stream.read()
-            section = _code_result_section(content)
-            current_result_structure = re.search(
-                r"^#{1,6}[ \t]+3\.4\.1[ \t]+实际代码修改[ \t]*$",
-                content,
-                re.MULTILINE,
-            ) is not None
-            section_offset = content.find(section)
-            section_start_line = content[:section_offset].count("\n") + 1
-            rows = _table_rows(
-                section,
-                context=f"{relative_path} 的实际代码修改记录",
-                required_headers=required_headers,
-            )
-        except (OSError, ValueError) as exc:
-            evidence = str(exc)
-            diagnostics.append(
-                diagnostics_mod.Diagnostic(
-                    kind="error",
-                    check_id="impl.implementation_record.table_invalid",
-                    location=f"{relative_path}，“3.4.1 实际代码修改”",
-                    expected="实施后记录包含字段完整、列数正确的实际代码修改表",
-                    actual=evidence,
-                    evidence=evidence,
-                    impact="无法从实施记录得到可核对的文件集合",
-                    next_action="修正该章节的实际代码修改表头、列数和数据行后再核对",
+                continue
+            relative_path = table_relative
+            section_start_line = 1
+            current_result_structure = True
+        else:
+            relative_path = topic_paths(project_root, topic)["impl_doc"]
+            full_path = os.path.join(project_root, relative_path)
+            if not os.path.isfile(full_path):
+                evidence = f"{relative_path}：缺少主题实施文档"
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.document_missing",
+                        location=relative_path,
+                        expected="当前验收主题有一份实施记录文档，并包含实施后记录",
+                        actual="主题实施文档不存在",
+                        evidence=evidence,
+                        impact="无法读取本主题实际修改记录，不能核对实施记录与真实文件差异",
+                        next_action="创建或恢复本主题的实施记录文档，并填写实施后记录",
+                    )
                 )
-            )
-            continue
+                continue
+            try:
+                with open(full_path, "r", encoding="utf-8") as stream:
+                    content = stream.read()
+                section = _code_result_section(content)
+                current_result_structure = re.search(
+                    r"^#{1,6}[ \t]+3\.4\.1[ \t]+实际代码修改[ \t]*$",
+                    content,
+                    re.MULTILINE,
+                ) is not None
+                section_offset = content.find(section)
+                section_start_line = content[:section_offset].count("\n") + 1
+                rows = _table_rows(
+                    section,
+                    context=f"{relative_path} 的实际代码修改记录",
+                    required_headers=required_headers,
+                )
+            except (OSError, ValueError) as exc:
+                evidence = str(exc)
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_record.table_invalid",
+                        location=f"{relative_path}，“3.4.1 实际代码修改”",
+                        expected="实施后记录包含字段完整、列数正确的实际代码修改表",
+                        actual=evidence,
+                        evidence=evidence,
+                        impact="无法从实施记录得到可核对的文件集合",
+                        next_action="修正该章节的实际代码修改表头、列数和数据行后再核对",
+                    )
+                )
+                continue
 
         accepted_ids, acceptance_error = _acceptance_ids(project_root, topic)
         if acceptance_error:
@@ -1244,6 +1279,48 @@ def _recorded_code_changes(
     return changes, list(dict.fromkeys(item.evidence for item in diagnostics))
 
 
+def _filled_record_table(
+    project_root: str, topic: str, kind: str
+) -> tuple[dict | None, str | None]:
+    """表模式启用且已填写时返回 (工作记录表, 表相对路径)；否则 (None, None)。
+
+    R14：表模式下门禁以工作记录表为唯一事实来源，不读回生成的文档。
+    """
+    state = state_mod.load_state(project_root)
+    if state is None:
+        return None, None
+    from . import records as records_mod
+
+    relative = records_mod.table_relative_path(
+        project_root, state.workflow_id, kind, topic
+    )
+    full = os.path.join(project_root, relative)
+    if not os.path.isfile(full):
+        return None, None
+    try:
+        table = records_mod.load_table(full)
+    except Exception:
+        return None, None
+    if not records_mod.table_is_filled(table):
+        return None, None
+    return table, relative
+
+
+def _impl_record_table(project_root: str, topic: str) -> tuple[dict | None, str | None]:
+    """impl_record 工作记录表（表模式启用且已填写时）。"""
+    return _filled_record_table(project_root, topic, "impl_record")
+
+
+def _impl_record_rows(table: dict, row_list_key: str) -> list[tuple[int, dict]]:
+    """读取工作记录表的某行清单，返回 (1 起行号, 行字典)；跳过非字典行。"""
+    rows = table.get(row_list_key, []) or []
+    result: list[tuple[int, dict]] = []
+    for index, row in enumerate(rows, 1):
+        if isinstance(row, dict):
+            result.append((index, row))
+    return result
+
+
 def _planned_code_changes(
     project_root: str,
     topics: list[str],
@@ -1252,49 +1329,70 @@ def _planned_code_changes(
     changes: list[PlannedCodeChange] = []
     diagnostics: list[diagnostics_mod.Diagnostic] = []
     for topic in topics:
-        relative_path = topic_paths(project_root, topic)["impl_doc"]
-        full_path = os.path.join(project_root, relative_path)
-        if not os.path.isfile(full_path):
-            evidence = f"缺少主题实施文档：{relative_path}"
-            diagnostics.append(
-                diagnostics_mod.Diagnostic(
-                    kind="error",
-                    check_id="impl.implementation_plan.document_missing",
-                    location=relative_path,
-                    expected="当前验收主题有一份包含代码修改计划的实施记录文档",
-                    actual="主题实施文档不存在",
-                    evidence=evidence,
-                    impact="无法确定本轮允许修改的文件范围",
-                    next_action="创建或恢复本主题实施记录文档，并填写代码修改计划",
+        # R14：表模式优先从 impl_record 工作记录表读计划行，不读生成 md
+        table, table_relative = _impl_record_table(project_root, topic)
+        if table is not None:
+            rows = _impl_record_rows(table, "代码修改计划")
+            if not rows:
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_plan.table_empty",
+                        location=table_relative,
+                        expected="impl_record 工作记录表填写了代码修改计划行",
+                        actual="代码修改计划行清单为空",
+                        evidence=f"{table_relative}：代码修改计划行清单为空",
+                        impact="无法确定本轮允许修改的文件范围",
+                        next_action="在 impl_record 表的代码修改计划行清单填写文件与计划修改内容",
+                    )
                 )
-            )
-            continue
-        try:
-            with open(full_path, "r", encoding="utf-8") as stream:
-                content = stream.read()
-            section = _code_plan_section(content)
-            section_offset = content.find(section)
-            section_start_line = content[:section_offset].count("\n") + 1
-            rows = _table_rows(
-                section,
-                context=f"{relative_path} 的代码修改计划",
-                required_headers=("文件",),
-            )
-        except (OSError, ValueError) as exc:
-            evidence = str(exc)
-            diagnostics.append(
-                diagnostics_mod.Diagnostic(
-                    kind="error",
-                    check_id="impl.implementation_plan.table_invalid",
-                    location=f"{relative_path}，“2.3 代码修改计划”",
-                    expected="代码修改计划包含带“文件”列且列数正确的表格",
-                    actual=evidence,
-                    evidence=evidence,
-                    impact="无法确定本轮实施计划覆盖的文件范围",
-                    next_action="修正该章节的代码修改计划表头、列数和数据行",
+                continue
+            relative_path = table_relative
+            section_start_line = 1
+        else:
+            relative_path = topic_paths(project_root, topic)["impl_doc"]
+            full_path = os.path.join(project_root, relative_path)
+            if not os.path.isfile(full_path):
+                evidence = f"缺少主题实施文档：{relative_path}"
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_plan.document_missing",
+                        location=relative_path,
+                        expected="当前验收主题有一份包含代码修改计划的实施记录文档",
+                        actual="主题实施文档不存在",
+                        evidence=evidence,
+                        impact="无法确定本轮允许修改的文件范围",
+                        next_action="创建或恢复本主题实施记录文档，并填写代码修改计划",
+                    )
                 )
-            )
-            continue
+                continue
+            try:
+                with open(full_path, "r", encoding="utf-8") as stream:
+                    content = stream.read()
+                section = _code_plan_section(content)
+                section_offset = content.find(section)
+                section_start_line = content[:section_offset].count("\n") + 1
+                rows = _table_rows(
+                    section,
+                    context=f"{relative_path} 的代码修改计划",
+                    required_headers=("文件",),
+                )
+            except (OSError, ValueError) as exc:
+                evidence = str(exc)
+                diagnostics.append(
+                    diagnostics_mod.Diagnostic(
+                        kind="error",
+                        check_id="impl.implementation_plan.table_invalid",
+                        location=f"{relative_path}，“2.3 代码修改计划”",
+                        expected="代码修改计划包含带“文件”列且列数正确的表格",
+                        actual=evidence,
+                        evidence=evidence,
+                        impact="无法确定本轮实施计划覆盖的文件范围",
+                        next_action="修正该章节的代码修改计划表头、列数和数据行",
+                    )
+                )
+                continue
         for local_line, row in rows:
             line = section_start_line + local_line - 1
             raw_path = row["文件"]
@@ -1547,6 +1645,14 @@ def recorded_code_paths(project_root: str, topics: list[str]) -> list[str]:
 def compute_plan_hash(project_root: str, topics: list[str]) -> str:
     payload: list[str] = []
     for topic in topics:
+        # R14：表模式从 impl_record 工作记录表算计划哈希，不读生成 md
+        table, _table_relative = _impl_record_table(project_root, topic)
+        if table is not None:
+            plan_rows = table.get("代码修改计划", []) or []
+            payload.append(
+                f"{topic}\n{json.dumps(plan_rows, ensure_ascii=False, sort_keys=True)}"
+            )
+            continue
         relative_path = topic_paths(project_root, topic)["impl_doc"]
         full_path = os.path.join(project_root, relative_path)
         with open(full_path, "r", encoding="utf-8") as stream:

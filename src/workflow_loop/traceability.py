@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -240,7 +241,26 @@ def _criterion_id_from_cell(topic: str, criterion_cell: str) -> str:
 
 
 def _test_plan_links(project_root: str, topic: str, criterion_id: str) -> str:
-    """只生成当前 AC 对应的测试计划和 TC 链接。"""
+    """只生成当前 AC 对应的测试计划和 TC 链接。
+
+    测试工作记录表为空的纯人工主题：不生成自动化链接，写明由最终全量回归
+    和主题验收人工核对。
+    """
+    from . import records as records_mod
+    from .state import load_state
+
+    state = load_state(project_root)
+    if state is not None:
+        relative = records_mod.table_relative_path(
+            project_root, state.workflow_id, "test_plan", topic
+        )
+        if records_mod.table_exists(project_root, relative):
+            try:
+                table = records_mod.load_table(os.path.join(project_root, relative))
+            except records_mod.RecordsError:
+                table = None
+            if table is not None and table.get("测试范围说明") and not table.get("测试项"):
+                return "无自动化测试项，转主题验收人工核对；自动化验证由最终全量回归承担"
     test_plan_path = topic_paths(project_root, topic)["test_plan"]
     items = [
         item
@@ -565,6 +585,108 @@ def validate_structure(
         f"{TRACEABILITY_PATH} 当前工作流包含 {len(rows)} 条"
         f"{_column_count_label(len(active_headers))}交付记录",
     )
+
+
+def _trace_cell(value: str) -> str:
+    """转义单元格里的管道符和换行，避免破坏追踪表表格（R3 在生成器统一执行）。"""
+    text = str(value)
+    text = text.replace("\\", "\\\\")
+    text = text.replace("|", "\\|")
+    text = text.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+    return text
+
+
+def _source_link(basis: str) -> str:
+    """把 AC 的产品设计依据（如“工作记录表与正式文档生成 R11”）链到功能文档第 4 章。"""
+    name = basis.split(" R")[0].split("（")[0].strip()
+    if not name or name == basis or not name.replace("_", "").isalnum() and not any("\u4e00" <= ch <= "\u9fff" for ch in name):
+        return _trace_cell(basis)
+    return f"[产品设计：{_trace_cell(name)}](./spec/功能_{_trace_cell(name)}.md#4-规则)"
+
+
+def _current_requirement_text(project_root: str, workflow_id: str) -> str:
+    """从产品总说明本轮修改记录取本次需求；取不到时给一个指回修改记录的说明。"""
+    try:
+        overview = os.path.join(project_root, artifact_paths_mod.PRODUCT_OVERVIEW_DOC)
+        if os.path.isfile(overview):
+            content = Path(overview).read_text(encoding="utf-8")
+            for line in content.splitlines():
+                if workflow_id in line and "|" in line:
+                    cells = [c.strip() for c in line.split("|")]
+                    # 修改记录行：| 日期 | 工作流编号 | 用户需求 | 修改类型 | 修改内容 | ...
+                    for index, cell in enumerate(cells):
+                        if cell == workflow_id and index + 2 < len(cells):
+                            return _trace_cell(cells[index + 2])
+    except Exception:
+        pass
+    return f"详见 spec/产品总说明.md 第 9 章工作流 {workflow_id} 的修改记录。"
+
+
+def ensure_workflow_section(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> bool:
+    """追踪表没有当前工作流章节时，按模板生成本轮章节并追加（断言三：表流程生成全部文档）。"""
+    relative = _trace_relative_path(project_root)
+    full = os.path.join(project_root, relative)
+    if os.path.isfile(full):
+        content = Path(full).read_text(encoding="utf-8")
+    else:
+        content = "# 需求交付追踪表\n"
+    if _workflow_heading_pattern(workflow_id).search(content):
+        return False
+    from . import records as records_mod
+    lines = [
+        "## " + workflow_id,
+        "",
+        "### 本次需求",
+        "",
+        _current_requirement_text(project_root, workflow_id),
+        "",
+        "### 交付链路",
+        "",
+        "| " + " | ".join(TRACEABILITY_HEADERS) + " |",
+        "|" + "---|" * len(TRACEABILITY_HEADERS),
+    ]
+    for topic in topics:
+        rel = records_mod.table_relative_path(project_root, workflow_id, "acceptance_plan", topic)
+        if not records_mod.table_exists(project_root, rel):
+            continue
+        table = records_mod.load_table(os.path.join(project_root, rel))
+        plan_path = topic_paths(project_root, topic)["acceptance_plan"]
+        plan_link = f"[{_trace_cell(topic)}](./{_trace_cell(plan_path)})"
+        for ac in table.get("验收条件", []):
+            ac_id = str(ac.get("验收条件编号", "")).strip()
+            cond = str(ac.get("通过标准", "")).strip()
+            basis = str(ac.get("产品设计依据", "")).strip()
+            cond_cell = _trace_cell(f"{ac_id}：{cond}") if ac_id and cond else _trace_cell(ac_id or cond)
+            row = [
+                _source_link(basis),
+                plan_link,
+                cond_cell,
+                "本轮未执行穿刺，无可复用资产",
+                "待制定",
+                "待制定",
+                "待执行",
+                "待执行",
+                "待执行",
+                "待更新",
+            ]
+            lines.append("| " + " | ".join(row) + " |")
+    lines += [
+        "",
+        "### 阻塞和退回记录",
+        "",
+        "| 时间 | 阶段 | 原因 | 处理结果 |",
+        "|---|---|---|---|",
+        "| 暂无 | 暂无 | 暂无 | 暂无 |",
+        "",
+    ]
+    section = "\n".join(lines)
+    content = content.rstrip("\n") + "\n" + section
+    _write_traceability(project_root, relative, content)
+    return True
 
 
 def _update_stage_rows(

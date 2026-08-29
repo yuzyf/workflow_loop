@@ -468,13 +468,22 @@ def test_three_gates_advance_in_the_required_order(tmp_path):
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir(exist_ok=True)
     (spec_dir / "产品总说明.md").write_text(
-        "# 产品总说明\n\n[一次安装](./功能_一次安装.md)\n",
+        "# 产品总说明\n\n## 7. 产品功能\n\n旧清单\n\n## 8. 相关文档\n\n暂无\n",
         encoding="utf-8",
     )
     (spec_dir / "功能_一次安装.md").write_text(
         "# 【功能】一次安装\n",
         encoding="utf-8",
     )
+    # R11：表流程——填 product_features 工作记录表（不靠手写文档过门）
+    _records_dir = tmp_path / ".workflow_loop" / "records"
+    _wf_dirs = sorted(d for d in _records_dir.iterdir() if d.is_dir())
+    _pf_path = _wf_dirs[0] / "product_features_product_features.json"
+    _pf = json.loads(_pf_path.read_text(encoding="utf-8"))
+    _pf["功能"] = [
+        {"功能名称": "一次安装", "一句话说明": "一条命令完成安装", "对应场景": "安装场景", "功能文档路径": "./功能_一次安装.md"}
+    ]
+    _pf_path.write_text(json.dumps(_pf, ensure_ascii=False, indent=2), encoding="utf-8")
 
     code, out, err = _run(["gate", "spec"], tmp_path)
     assert code == 0, err

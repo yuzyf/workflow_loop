@@ -25,6 +25,7 @@ from .. import test_execution as test_execution_mod
 from .. import test_runner as test_runner_mod
 from .. import test_entry as test_entry_mod
 from ..project import load_project
+from .. import state as state_mod
 from ..state import load_state
 from ..test_mapping import (
     automated_test_items,
@@ -46,6 +47,7 @@ from ..verification import (
     compute_test_code_snapshot_hash,
     get_linked_product_design_paths,
 )
+from .. import records as records_mod
 from .. import rollback as rollback_mod
 from .. import verification as verification_mod
 from .base import StageStrategy, clean_spike_tmp
@@ -65,6 +67,35 @@ def _validator_error(label: str, result: tuple[bool, str], errors: list[str]) ->
     if not ok:
         errors.append(f"{label}：{detail}")
     return ok
+
+
+def _stage_table_sync(
+    project_root: str,
+    workflow_state,
+    stage_name: str,
+) -> tuple[bool, str] | None:
+    """第二道门前同步工作记录表。
+
+    返回 None 表示当前环节没有启用表（旧轮次走原有检查）；否则返回
+    (通过, 详情)。表有问题时详情带 [格式问题]/[内容问题] 类别标注。
+    """
+    topics = list(workflow_state.topics) or current_workflow_topics(project_root)
+    enabled = records_mod.has_any_table_file(project_root, workflow_state.workflow_id, stage_name, topics)
+    if not enabled:
+        return None
+    problems, documents = records_mod.sync_stage_tables(project_root, workflow_state)
+    if not problems and not documents:
+        # 表文件存在但都没有填写内容：表模式已启用，报“尚未填写”并停留，不退回文档模式（R11）
+        return (
+            False,
+            "工作记录表尚未填写：本环节已启用工作记录表，但还没有填写内容；"
+            "请在工作记录表中填写后再执行门禁，程序不会退回文档模式。",
+        )
+    if problems:
+        errors = [f"[{category}] {message}" for category, message in problems]
+        valid, detail = _validation_result(errors, "工作记录表与按表生成的文档一致")
+        return (False, detail)
+    return (True, f"工作记录表校验通过并按表生成/核对 {len(documents)} 份文档")
 
 
 # 产品设计 stage：工作流第一个环节，产出 spec/产品总说明.md + spec/功能_*.md
@@ -91,6 +122,11 @@ class SpecStage(StageStrategy):
         overview_rel = artifact_paths_mod.PRODUCT_OVERVIEW_DOC
         overview_path = os.path.join(project_root, overview_rel)
         errors: list[str] = []
+        state_for_tables = load_state(project_root)
+        if state_for_tables is not None:
+            table_gate = _stage_table_sync(project_root, state_for_tables, self.name())
+            if table_gate is not None and not table_gate[0]:
+                return table_gate
         overview_exists = os.path.isfile(overview_path)
         if not overview_exists:
             errors.append(f"{overview_rel} 不存在")
@@ -208,6 +244,11 @@ class SpikeStage(StageStrategy):
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         errors: list[str] = []
+        state_for_tables = load_state(project_root)
+        if state_for_tables is not None:
+            table_gate = _stage_table_sync(project_root, state_for_tables, self.name())
+            if table_gate is not None and not table_gate[0]:
+                return table_gate
         state_exists = load_state(project_root) is not None
         index_exists = os.path.isfile(
             os.path.join(project_root, artifact_paths_mod.SPIKE_INDEX_DOC)
@@ -270,6 +311,10 @@ class AcceptancePlanStage(StageStrategy):
         if not acc_dir_exists:
             errors.append("acceptance/ 目录不存在")
         state = load_state(project_root)
+        if state is not None:
+            table_gate = _stage_table_sync(project_root, state, self.name())
+            if table_gate is not None and not table_gate[0]:
+                return table_gate
         if state is None:
             errors.append("工作流状态：找不到当前工作流状态")
             errors.append("验收主题选择：未检查：无法取得当前需求类型和工作流编号")
@@ -724,6 +769,33 @@ class ImplStage(StageStrategy):
 
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
         # 第一道门只确认实施计划已经说明预期结果，不检查文件白名单或代码基线。
+        topics = current_workflow_topics(project_root)
+        if topics and records_mod.has_any_table(
+            project_root,
+            workflow_state.workflow_id,
+            "impl",
+            topics,
+        ):
+            errors: list[str] = []
+            for topic in topics:
+                relative = records_mod.table_relative_path(
+                    project_root, workflow_state.workflow_id, "impl_record", topic
+                )
+                table = records_mod.load_table(os.path.join(project_root, relative))
+                plan_rows = table.get("代码修改计划", [])
+                if not plan_rows:
+                    errors.append(f"{topic} 的工作记录表还没有代码修改计划行")
+                    continue
+                for index, row in enumerate(plan_rows, 1):
+                    for column in ("文件", "计划修改内容"):
+                        if not str(row.get(column, "")).strip():
+                            errors.append(
+                                f"{topic} 的工作记录表代码修改计划第 {index} 行的 {column} 未填写"
+                            )
+            return _validation_result(
+                errors,
+                "全部验收主题的代码计划已在工作记录表填写",
+            )
         valid, detail, _ = self._validate_topic_documents(
             project_root,
             workflow_state,
@@ -766,9 +838,16 @@ class ImplStage(StageStrategy):
                 "实施文档、实际改动和需求交付追踪关系完整",
             )
         errors: list[str] = []
-        valid, detail, topics = self.validate_implementation_records(project_root, state)
-        if not valid:
-            errors.append(detail)
+        topics = list(state.topics or ([state.topic] if state.topic else [])) or current_workflow_topics(project_root)
+        table_gate = _stage_table_sync(project_root, state, self.name())
+        table_active = table_gate is not None
+        if table_active:
+            if not table_gate[0]:
+                return table_gate
+        else:
+            valid, detail, topics = self.validate_implementation_records(project_root, state)
+            if not valid:
+                errors.append(detail)
 
         changes_ok, changes_detail = rollback_mod.validate_actual_implementation_changes(
             project_root,
@@ -791,9 +870,31 @@ class ImplStage(StageStrategy):
 
 
 def _test_code_paths(project_root: str) -> list[str]:
-    """返回测试计划和项目入口明确登记的测试路径，不遍历项目目录。"""
+    """返回测试计划和项目入口明确登记的测试路径，不遍历项目目录。
+
+    测试计划工作记录表启用时，从表中的命令参数数组提取测试来源路径。
+    """
     topics = current_workflow_topics(project_root)
-    paths = set(planned_test_source_paths(project_root, topics)) if topics else set()
+    try:
+        paths = set(planned_test_source_paths(project_root, topics)) if topics else set()
+    except ValueError:
+        paths = set()
+        state = load_state(project_root)
+        workflow_id = state.workflow_id if state is not None else ""
+        for topic in topics or []:
+            relative = records_mod.table_relative_path(
+                project_root, workflow_id, "test_plan", topic
+            )
+            if not records_mod.table_exists(project_root, relative):
+                continue
+            table = records_mod.load_table(os.path.join(project_root, relative))
+            for row in table.get("测试项", []):
+                command = row.get("命令参数数组", [])
+                if not isinstance(command, list):
+                    continue
+                for part in command:
+                    if isinstance(part, str) and part.endswith(".py") and not part.startswith("-"):
+                        paths.add(part)
     project = load_project(project_root)
     if project is not None and isinstance(project.test_entry, dict):
         paths.update(test_entry_mod.referenced_project_scripts(project.test_entry))
@@ -1027,6 +1128,34 @@ class QaStage(StageStrategy):
 
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
         # 开始确认只检查测试范围、计划结构、实施结果和真实入口，不执行测试。
+        topics = list(workflow_state.topics) or current_workflow_topics(project_root)
+        if topics and records_mod.has_any_table(
+            project_root,
+            workflow_state.workflow_id,
+            "qa",
+            topics,
+        ):
+            errors: list[str] = []
+            for topic in topics:
+                relative = records_mod.table_relative_path(
+                    project_root, workflow_state.workflow_id, "test_plan", topic
+                )
+                if not records_mod.table_exists(project_root, relative):
+                    errors.append(f"{topic} 缺少测试工作记录表")
+                    continue
+                table = records_mod.load_table(os.path.join(project_root, relative))
+                rows = table.get("测试项", [])
+                if not rows and not table.get("测试范围说明"):
+                    errors.append(
+                        f"{topic} 的测试工作记录表既没有测试项行也没有范围说明；"
+                        "纯人工主题请在表中写明范围说明"
+                    )
+            if errors:
+                return _validation_result(errors, "全部主题的测试项已在工作记录表填写")
+            return _validation_result(
+                [],
+                "测试范围已经由各主题测试工作记录表确认；登记与执行按表进行",
+            )
         return TestPlanStage().code_validate(project_root)
 
     def _validate_test_code(self, project_root: str) -> tuple[bool, str]:
@@ -1048,9 +1177,37 @@ class QaStage(StageStrategy):
                 "qa（测试验证）内部计划、代码、任务和结果完整",
             )
         errors: list[str] = []
-        plan_ok, plan_detail = TestPlanStage().code_validate(project_root)
-        if not plan_ok:
-            errors.append(f"测试计划和范围：{plan_detail}")
+        topics = list(state.topics) or current_workflow_topics(project_root)
+        table_gate = _stage_table_sync(project_root, state, self.name())
+        table_active = table_gate is not None
+        if table_active:
+            if not table_gate[0]:
+                return table_gate
+        else:
+            plan_ok, plan_detail = TestPlanStage().code_validate(project_root)
+            if not plan_ok:
+                errors.append(f"测试计划和范围：{plan_detail}")
+        if table_active:
+            for topic in topics:
+                relative = records_mod.table_relative_path(
+                    project_root, state.workflow_id, "test_plan", topic
+                )
+                if not records_mod.table_exists(project_root, relative):
+                    continue
+                table = records_mod.load_table(os.path.join(project_root, relative))
+                for row in table.get("测试项", []):
+                    test_id = str(row.get("测试项编号", "")).strip()
+                    task = (state.stages.get("qa").test_tasks if state.stages.get("qa") else {}).get(topic, {}).get(test_id)
+                    if task is None:
+                        errors.append(f"{topic} / {test_id}：已在工作记录表但尚未登记执行任务")
+                    elif not state_mod.execution_task_has_current_success(task):
+                        errors.append(f"{topic} / {test_id}：还没有当前成功的机器执行记录")
+            if errors:
+                return _validation_result(errors, "qa（测试验证）内部计划、代码、任务登记和结果完整")
+            return _validation_result(
+                [],
+                "qa（测试验证）工作记录表、登记任务和机器记录全部一致",
+            )
         code_ok, code_detail = self._validate_test_code(project_root)
         if not code_ok:
             errors.append(f"测试代码：{code_detail}")
@@ -1120,6 +1277,11 @@ class TopicAcceptanceStage(StageStrategy):
                 "主题验收结果完整",
             )
         errors: list[str] = []
+        table_gate = _stage_table_sync(project_root, state, self.name())
+        table_active = table_gate is not None
+        if table_active:
+            if not table_gate[0]:
+                return table_gate
         topics = current_workflow_topics(project_root)
         if not topics:
             errors.append("当前工作流还没有确认验收主题")
@@ -1127,6 +1289,8 @@ class TopicAcceptanceStage(StageStrategy):
             errors.append("主题验收结果：未检查：没有验收主题")
             errors.append("需求交付追踪关系：未检查：没有验收主题")
             return _validation_result(errors, "主题验收结果完整")
+        if table_active:
+            return _validation_result(errors, "主题验收结果完整（按工作记录表核对）")
         test_ok, test_detail = validate_test_execution_results(
             project_root,
             state.workflow_id,
@@ -1190,6 +1354,25 @@ class RegressionTestStage(StageStrategy):
         errors: list[str] = []
         if not topics:
             errors.append("当前工作流还没有确认验收主题")
+        elif records_mod.has_any_table(
+            project_root,
+            workflow_state.workflow_id,
+            "topic_acceptance",
+            topics,
+        ):
+            # 表路径：验收结论以验收工作记录表为准（topic_acceptance 第二道门已核对）
+            for topic in topics:
+                relative = records_mod.table_relative_path(
+                    project_root, workflow_state.workflow_id, "acceptance_result", topic
+                )
+                if not records_mod.table_exists(project_root, relative):
+                    continue
+                table = records_mod.load_table(os.path.join(project_root, relative))
+                for row in table.get("验收结果", []):
+                    if isinstance(row, dict) and str(row.get("验收结论", "")).strip() != "passed":
+                        errors.append(
+                            f"{topic} / {row.get('验收条件编号')}：验收结论不是 passed，不能进入最终全量回归"
+                        )
         else:
             _validator_error(
                 "主题验收",
@@ -1311,6 +1494,11 @@ class UpdateCodeDesignStage(StageStrategy):
     def code_validate(self, project_root: str) -> tuple[bool, str]:
         architecture_rel = artifact_paths_mod.CODE_DESIGN_DOC
         errors: list[str] = []
+        state_for_tables = load_state(project_root)
+        if state_for_tables is not None:
+            table_gate = _stage_table_sync(project_root, state_for_tables, self.name())
+            if table_gate is not None and not table_gate[0]:
+                return table_gate
         architecture_exists = os.path.isfile(os.path.join(project_root, architecture_rel))
         if not architecture_exists:
             errors.append(f"{architecture_rel} 不存在")
@@ -1561,6 +1749,11 @@ class ReproduceStage(StageStrategy):
         return "Standardized_Repository/reproduce/reproduce.md"
 
     def code_validate(self, project_root: str) -> tuple[bool, str]:
+        state_for_tables = load_state(project_root)
+        if state_for_tables is not None:
+            table_gate = _stage_table_sync(project_root, state_for_tables, self.name())
+            if table_gate is not None and not table_gate[0]:
+                return table_gate
         bug_dir = os.path.join(project_root, "bug")
         errors: list[str] = []
         bug_dir_exists = os.path.isdir(bug_dir)

@@ -1873,12 +1873,83 @@ def validate_downstream_traceability(
     return traceability_mod.validate_structure(project_root, workflow_id, topics)
 
 
+def _table_mode_qa(project_root: str, workflow_id: str, topics: list[str]) -> bool:
+    """全部主题都有已填测试工作记录表时，qa 的文档校验走表核对。"""
+    from . import records as records_mod
+
+    if not topics:
+        return False
+    for topic in topics:
+        relative = records_mod.table_relative_path(
+            project_root, workflow_id, "test_plan", topic
+        )
+        if not records_mod.table_exists(project_root, relative):
+            return False
+        try:
+            table = records_mod.load_table(os.path.join(project_root, relative))
+        except records_mod.RecordsError:
+            return False
+        if not (table.get("测试项") or table.get("测试范围说明")):
+            return False
+    return True
+
+
+def _validate_test_plan_from_tables(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """表模式：核对每条验收条件在测试计划表中有测试项覆盖。"""
+    import re as _re
+
+    from . import records as records_mod
+    from .topic import topic_paths
+
+    failures: list[str] = []
+    for topic in topics:
+        relative = records_mod.table_relative_path(
+            project_root, workflow_id, "test_plan", topic
+        )
+        table = records_mod.load_table(os.path.join(project_root, relative))
+        rows = table.get("测试项", [])
+        if not rows:
+            # 纯人工主题：自动化验证由最终全量回归承担，验收条件在主题验收人工核对
+            continue
+        coverage: dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for criterion_id in _re.findall(r"AC-\d+", str(row.get("对应验收条件", ""))):
+                coverage[criterion_id] = coverage.get(criterion_id, 0) + 1
+        acceptance_rel = topic_paths(project_root, topic)["acceptance_plan"]
+        acceptance_full = os.path.join(project_root, acceptance_rel)
+        if not os.path.isfile(acceptance_full):
+            failures.append(f"{topic}：上游验收计划 {acceptance_rel} 不存在")
+            continue
+        criterion_ids = ACCEPTANCE_CRITERION_RE.findall(
+            _read_text(project_root, acceptance_rel)
+        )
+        for criterion_id in criterion_ids:
+            if coverage.get(criterion_id, 0) == 0:
+                failures.append(
+                    f"{topic} 的测试工作记录表没有覆盖 {criterion_id}"
+                )
+    if failures:
+        return False, _format_validation_failures(failures)
+    return True, f"{len(topics)} 个主题的测试计划表覆盖全部验收条件"
+
+
 def validate_test_plan_documents(
     project_root: str,
     workflow_id: str,
     topics: list[str],
 ) -> tuple[bool, str]:
-    """校验测试计划结构，以及每条 AC 到 TC 的覆盖关系。"""
+    """校验测试计划结构，以及每条 AC 到 TC 的覆盖关系。
+
+    全部主题都已填写测试工作记录表时，表是真本，按表核对覆盖关系。
+    """
+    if _table_mode_qa(project_root, workflow_id, topics):
+        return _validate_test_plan_from_tables(project_root, workflow_id, topics)
     qa_index = artifact_paths_mod.QA_INDEX_DOC
     index_path = os.path.join(project_root, qa_index)
     failures: list[str] = []
@@ -2022,7 +2093,49 @@ def _validate_topic_acceptance_result(
     workflow_id: str,
     topic: str,
 ) -> tuple[bool, str]:
-    """校验正式主题验收结果只包含全部通过的当前验收条件。"""
+    """校验正式主题验收结果只包含全部通过的当前验收条件。
+
+    验收结果工作记录表启用时，表是真本：按表核对结论，不读旧文档/状态记录。
+    """
+    from . import records as records_mod
+
+    table_relative = records_mod.table_relative_path(
+        project_root, workflow_id, "acceptance_result", topic
+    )
+    if records_mod.table_exists(project_root, table_relative):
+        table = records_mod.load_table(os.path.join(project_root, table_relative))
+        failures: list[str] = []
+        plan_relative = topic_paths(project_root, topic)["acceptance_plan"]
+        plan_ids = [
+            match.group(1)
+            for match in ACCEPTANCE_CRITERION_RE.finditer(
+                _read_text(project_root, plan_relative)
+                if os.path.isfile(os.path.join(project_root, plan_relative))
+                else ""
+            )
+        ]
+        result_ids = [
+            str(row.get("验收条件编号", "")).strip()
+            for row in table.get("验收结果", [])
+            if isinstance(row, dict) and str(row.get("验收条件编号", "")).strip()
+        ]
+        if plan_ids and result_ids != plan_ids:
+            failures.append(
+                f"{topic} 的验收条件必须与验收计划一致: 计划={plan_ids}, 结果={result_ids}"
+            )
+        for row in table.get("验收结果", []):
+            if not isinstance(row, dict):
+                continue
+            ac = str(row.get("验收条件编号", "")).strip()
+            if str(row.get("验收结论", "")).strip() != "passed":
+                failures.append(f"{topic} / {ac} 验收结论不是 passed")
+            elif not _has_real_text(str(row.get("实际观察结果", ""))):
+                failures.append(f"{topic} / {ac} 缺少实际观察结果")
+            elif not _has_real_text(str(row.get("证据", ""))):
+                failures.append(f"{topic} / {ac} 缺少证据")
+        if failures:
+            return False, _format_validation_failures(failures)
+        return True, f"{topic} 的验收结果表全部通过"
     paths = topic_paths(project_root, topic)
     rel_path = paths["acceptance_result"]
     failures: list[str] = []

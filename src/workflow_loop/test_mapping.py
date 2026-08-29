@@ -9,6 +9,16 @@ import os
 import re
 
 from . import snapshots as snapshots_mod
+from .state import load_state
+
+
+def table_is_filled_marker(table: dict) -> bool:
+    for key, value in table.items():
+        if key in {"表版本", "工作流编号", "验收主题", "生成文档哈希", "生成文档路径", "填写说明", "未完成状态"}:
+            continue
+        if isinstance(value, list) and value:
+            return True
+    return False
 from .topic import topic_paths
 
 
@@ -205,9 +215,56 @@ def _validate_plan_entry(
     return normalized
 
 
-def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:
-    """读取一个主题测试计划中的 AC、TC 和测试方式。"""
+def _test_plan_items_from_table(project_root: str, topic: str) -> list[TestPlanItem] | None:
+    """测试计划工作记录表启用且已填时，从表构造计划项；否则返回 None。"""
+    from . import records as records_mod
 
+    state = load_state(project_root)
+    workflow_id = state.workflow_id if state is not None else ""
+    relative = records_mod.table_relative_path(project_root, workflow_id, "test_plan", topic)
+    if not records_mod.table_exists(project_root, relative):
+        return None
+    try:
+        table = records_mod.load_table(os.path.join(project_root, relative))
+    except records_mod.RecordsError:
+        return None
+    if not table.get("测试项"):
+        # 纯人工主题：表已填写但没有任何自动化测试项
+        if table_is_filled_marker(table):
+            return []
+        return None
+    items: list[TestPlanItem] = []
+    for row in table["测试项"]:
+        if not isinstance(row, dict):
+            continue
+        test_id = str(row.get("测试项编号", "")).strip()
+        if not test_id:
+            continue
+        criterion_cell = str(row.get("对应验收条件", "")).strip()
+        criterion_ids = re.findall(r"AC-\d+", criterion_cell) or [criterion_cell]
+        for criterion_id in criterion_ids:
+            items.append(
+                TestPlanItem(
+                    topic=topic,
+                    criterion_id=criterion_id,
+                    criterion_name="",
+                    test_id=test_id,
+                    test_name=str(row.get("正式目标名称", "")).strip(),
+                    test_method="自动化测试",
+                    test_entry=str(row.get("正式目标名称", "")).strip(),
+                )
+            )
+    return items
+
+
+def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:
+    """读取一个主题测试计划中的 AC、TC 和测试方式。
+
+    测试计划工作记录表启用且已填时，表是真本，直接从表构造计划项。
+    """
+    table_items = _test_plan_items_from_table(project_root, topic)
+    if table_items is not None:
+        return table_items
     relative_path = topic_paths(project_root, topic)["test_plan"]
     full_path = os.path.join(project_root, relative_path)
     if not os.path.isfile(full_path):

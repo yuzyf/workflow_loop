@@ -236,25 +236,61 @@ def prepare_task(
         raise ValueError(f"主题不属于当前工作流: {topic}")
     normalized_cwd = normalize_task_cwd(project_root, cwd)
 
-    items = test_mapping.parse_test_plan_items(project_root, topic)
-    item = next((candidate for candidate in items if candidate.test_id == test_id), None)
+    from . import records as records_mod
+
+    plan_relative = records_mod.table_relative_path(
+        project_root, workflow_state.workflow_id, "test_plan", topic
+    )
+    table_mode = records_mod.table_exists(project_root, plan_relative)
+    item = None
+    if table_mode:
+        table = records_mod.load_table(os.path.join(project_root, plan_relative))
+        row = next(
+            (
+                candidate
+                for candidate in table.get("测试项", [])
+                if isinstance(candidate, dict)
+                and str(candidate.get("测试项编号", "")).strip() == test_id
+            ),
+            None,
+        )
+        if row is not None:
+            item = test_mapping.TestPlanItem(
+                topic=topic,
+                criterion_id=str(row.get("对应验收条件", "")).strip(),
+                criterion_name="",
+                test_id=test_id,
+                test_name=str(row.get("正式目标名称", "")).strip(),
+                test_method="自动化测试",
+                test_entry=str(row.get("正式目标名称", "")).strip(),
+            )
+    else:
+        try:
+            items = test_mapping.parse_test_plan_items(project_root, topic)
+            item = next((candidate for candidate in items if candidate.test_id == test_id), None)
+        except ValueError:
+            if test_mapping._test_plan_items_from_table(project_root, topic) is not None:
+                table_mode = True
     if item is None:
         raise ValueError(f"{topic} 的测试计划没有 {test_id}")
     if not item.requires_test_code:
         raise ValueError(f"{topic} / {test_id} 不是自动化或混合测试项，不需要登记自动化命令")
 
-    marker_ok, marker_detail = test_mapping.validate_workflow_test_markers(
-        project_root,
-        [topic],
-    )
-    if not marker_ok:
-        raise ValueError(marker_detail)
-    entries = _markers_by_test(project_root, [topic]).get((topic, test_id), [])
-    if not entries:
-        raise ValueError(f"{topic} / {test_id} 没有可追踪的测试入口")
-    entries_ok, entries_detail = validate_command_entries(command, entries)
-    if not entries_ok:
-        raise ValueError(f"{topic} / {test_id}: {entries_detail}")
+    if table_mode:
+        entries = [item.test_entry] if item.test_entry else [test_id]
+    else:
+        marker_ok, marker_detail = test_mapping.validate_workflow_test_markers(
+            project_root,
+            [topic],
+        )
+        if not marker_ok:
+            raise ValueError(marker_detail)
+        entries = _markers_by_test(project_root, [topic]).get((topic, test_id), [])
+        if not entries:
+            raise ValueError(f"{topic} / {test_id} 没有可追踪的测试入口")
+        entries_ok, entries_detail = validate_command_entries(command, entries)
+        if not entries_ok:
+            raise ValueError(f"{topic} / {test_id}: {entries_detail}")
 
     report_path = _report_relative_path(project_root, workflow_state, topic, test_id)
     absolute_report = os.path.join(project_root, *report_path.split("/"))
@@ -290,26 +326,114 @@ def missing_prepared_tasks(
     project_root: str,
     workflow_state: WorkflowState,
 ) -> list[str]:
-    """返回所有需要自动执行但尚未登记命令的主题/测试项。"""
+    """返回所有需要自动执行但尚未登记命令的主题/测试项。
+
+    测试计划工作记录表启用时，按表核对；否则按旧测试计划文档核对。
+    """
     missing: list[str] = []
-    for item in test_mapping.automated_test_items(project_root, workflow_state.topics):
+    try:
+        planned = test_mapping.automated_test_items(project_root, workflow_state.topics)
+        pairs = [(item.topic, item.test_id) for item in planned]
+    except ValueError:
+        pairs = []
+        from . import records as records_mod
+
+        for topic in workflow_state.topics:
+            relative = records_mod.table_relative_path(
+                project_root, workflow_state.workflow_id, "test_plan", topic
+            )
+            if not records_mod.table_exists(project_root, relative):
+                continue
+            table = records_mod.load_table(os.path.join(project_root, relative))
+            for row in table.get("测试项", []):
+                if isinstance(row, dict) and str(row.get("测试项编号", "")).strip():
+                    pairs.append((topic, str(row["测试项编号"]).strip()))
+    for topic, test_id in pairs:
         task = (_execution_stage_state(workflow_state) or state_mod.StageState()).test_tasks.get(
-            item.topic,
+            topic,
             {},
-        ).get(item.test_id)
+        ).get(test_id)
         if task is None:
-            missing.append(f"{item.topic} / {item.test_id}")
+            missing.append(f"{topic} / {test_id}")
     return missing
+
+
+def _validate_prepared_tasks_from_tables(
+    project_root: str,
+    workflow_state: WorkflowState,
+    stage_state,
+    topics: list[str],
+) -> tuple[bool, str]:
+    """表模式：登记任务必须与测试工作记录表逐行一致。"""
+    from . import records as records_mod
+
+    errors: list[str] = []
+    expected: dict[tuple[str, str], list[str]] = {}
+    for topic in topics:
+        relative = records_mod.table_relative_path(
+            project_root, workflow_state.workflow_id, "test_plan", topic
+        )
+        table = records_mod.load_table(os.path.join(project_root, relative))
+        for row in table.get("测试项", []):
+            if not isinstance(row, dict):
+                continue
+            test_id = str(row.get("测试项编号", "")).strip()
+            command = row.get("命令参数数组", [])
+            command = [str(part) for part in command] if isinstance(command, list) else []
+            expected[(topic, test_id)] = command
+    actual = {
+        (topic, test_id): task
+        for topic, tasks in stage_state.test_tasks.items()
+        for test_id, task in tasks.items()
+    }
+    for key in sorted(set(expected) - set(actual)):
+        errors.append(f"{key[0]} / {key[1]}：已在工作记录表但尚未登记执行任务")
+    for key in sorted(set(actual) - set(expected)):
+        errors.append(f"{key[0]} / {key[1]}：登记任务不在测试工作记录表中")
+    for key in sorted(set(expected) & set(actual)):
+        task = actual[key]
+        command = expected[key]
+        if task.command[: len(command)] != command:
+            errors.append(
+                f"{key[0]} / {key[1]}：登记命令与工作记录表不一致；"
+                f"表内 {' '.join(command)}，已登记 {' '.join(task.command[: len(command)])}"
+            )
+    if errors:
+        return False, "；".join(errors)
+    return True, f"全部 {len(expected)} 个测试项的登记任务与工作记录表一致"
 
 
 def validate_prepared_tasks(
     project_root: str,
     workflow_state: WorkflowState,
 ) -> tuple[bool, str]:
-    """核对登记任务与当前测试计划、依赖和 Workflow-Test 入口完全一致。"""
+    """核对登记任务与当前测试计划、依赖和 Workflow-Test 入口完全一致。
+
+    全部主题都有测试工作记录表时按表核对（表模式）；否则走旧测试计划文档核对。
+    """
     stage_state = _execution_stage_state(workflow_state)
     if stage_state is None:
         return False, "当前工作流没有 qa（测试验证）或旧 test_execution 阶段"
+    from . import records as records_mod
+
+    topics = sorted(workflow_state.topics)
+    table_topics = [
+        topic
+        for topic in topics
+        if records_mod.table_exists(
+            project_root,
+            records_mod.table_relative_path(
+                project_root, workflow_state.workflow_id, "test_plan", topic
+            ),
+        )
+    ]
+    if topics and table_topics == topics:
+        return _validate_prepared_tasks_from_tables(
+            project_root,
+            workflow_state,
+            stage_state,
+            topics,
+        )
     errors: list[tuple[str, str, str, str]] = []
     expected: dict[tuple[str, str], test_mapping.TestPlanItem] = {}
     invalid_plan_topics: set[str] = set()

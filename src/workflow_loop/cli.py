@@ -30,6 +30,7 @@ from . import test_execution as test_execution_mod
 from . import test_report as test_report_mod
 from . import test_mapping as test_mapping_mod
 from . import acceptance_records as acceptance_records_mod
+from . import records as records_mod
 from . import rollback as rollback_mod
 from . import stage_materials as stage_materials_mod
 from . import artifact_paths as artifact_paths_mod
@@ -1639,6 +1640,17 @@ def cmd_discuss(args) -> None:
     journal_mod.append_entry(project_root, "角色文档加载", "workflow.py",
                             stage=stage.name())
 
+    # 环节引入工作记录表时，加载材料即生成/补齐表（不覆盖已填内容）
+    try:
+        created_tables = records_mod.ensure_stage_tables(project_root, wf_state)
+    except (OSError, ValueError, records_mod.RecordsError) as exc:
+        created_tables = []
+        print(f"\n警告：工作记录表生成失败：{exc}")
+    if created_tables:
+        print("\n【工作记录表】程序已为当前环节生成/补齐以下填空表（AI 只填空位，正式文档由程序按表生成）：")
+        for table_path in created_tables:
+            print(f"  {table_path}")
+
     print_next_step(
         "AI 必须先用文件读取工具逐份读取上面清单里的全部文件；读取失败时停下并报告，"
         "不能假装已经读取。随后按阶段工作规范调查并与用户讨论。"
@@ -3092,6 +3104,100 @@ def cmd_test_entry(args) -> None:
         )
 
 
+def _prepare_tasks_from_tables(project_root: str, wf_state) -> None:
+    """核对测试工作记录表并一次登记全部测试项；不逐条接受命令行参数。"""
+    topics = topic_mod.current_workflow_topics(project_root)
+    if not topics:
+        print("错误：当前工作流还没有确认验收主题，无法按表登记测试项")
+        sys.exit(1)
+    registered: list[str] = []
+    problems: list[str] = []
+    for topic in topics:
+        relative = records_mod.table_relative_path(
+            project_root, wf_state.workflow_id, "test_plan", topic
+        )
+        if not records_mod.table_exists(project_root, relative):
+            continue
+        try:
+            table = records_mod.load_table(os.path.join(project_root, relative))
+            row_problems = records_mod.validate_table("test_plan", table)
+        except records_mod.RecordsError as exc:
+            problems.append(str(exc))
+            continue
+        if row_problems:
+            problems.extend(f"{topic}: {message}" for _category, message in row_problems)
+            continue
+        for row in table.get("测试项", []):
+            test_id = str(row.get("测试项编号", "")).strip()
+            raw_command = row.get("命令参数数组", [])
+            command = [str(part) for part in raw_command] if isinstance(raw_command, list) else []
+            try:
+                timeout = int(row.get("超时秒数", test_execution_mod.DEFAULT_TIMEOUT_SECONDS))
+            except (TypeError, ValueError):
+                problems.append(f"{topic} {test_id}: 超时秒数必须是整数")
+                continue
+            try:
+                task = test_execution_mod.prepare_task(
+                    project_root,
+                    wf_state,
+                    topic,
+                    test_id,
+                    command,
+                    timeout,
+                    cwd=str(row.get("工作目录", "") or "") or None,
+                    report_adapter=str(row.get("报告适配器", "") or "") or None,
+                )
+            except ValueError as exc:
+                problems.append(f"{topic} {test_id}: {exc}")
+                continue
+            registered.append(f"{topic} / {test_id}（{test_id} 命令: {' '.join(task.command)}）")
+    if problems:
+        print("═══ 按表登记未完成 ═══")
+        for index, problem in enumerate(problems, 1):
+            print(f"{index}. {problem}")
+        print_next_step("按上面每项修正测试工作记录表后，重新由 AI 执行 `workflow test prepare --from-tables`")
+        sys.exit(1)
+    if not registered:
+        print("没有找到任何测试工作记录表或表内没有测试项；逐条登记仍可用旧参数方式。")
+        print_next_step("先在工作记录表中填写测试项，再由 AI 执行 `workflow test prepare --from-tables`")
+        return
+    # 清理不在任何已填测试计划表中的陈旧登记，保证任务集合与表一致
+    expected_keys = set()
+    for topic in topics:
+        relative = records_mod.table_relative_path(
+            project_root, wf_state.workflow_id, "test_plan", topic
+        )
+        if records_mod.table_exists(project_root, relative):
+            table = records_mod.load_table(os.path.join(project_root, relative))
+            for row in table.get("测试项", []):
+                if isinstance(row, dict):
+                    expected_keys.add((topic, str(row.get("测试项编号", "")).strip()))
+    execution_state = wf_state.stages.get(wf_state.current_stage)
+    if execution_state is not None:
+        for topic in list(execution_state.test_tasks):
+            for test_id in list(execution_state.test_tasks[topic]):
+                if (topic, test_id) not in expected_keys:
+                    del execution_state.test_tasks[topic][test_id]
+            if not execution_state.test_tasks[topic]:
+                del execution_state.test_tasks[topic]
+    state_mod.save_state(project_root, wf_state)
+    journal_mod.append_entry(
+        project_root,
+        "测试项按表登记",
+        "user",
+        workflow_id=wf_state.workflow_id,
+        count=len(registered),
+    )
+    print("═══ 测试项已按工作记录表登记 ═══")
+    for item in registered:
+        print(f"  - {item}")
+    missing = test_execution_mod.missing_prepared_tasks(project_root, wf_state)
+    if missing:
+        print_next_step(f"表中仍有未登记的自动化测试项: {missing}；补齐后重新执行 `workflow test prepare --from-tables`")
+    else:
+        print_next_step("全部自动化测试项已经登记，由 AI 执行 `workflow test run` 正式执行")
+
+
 def cmd_test_prepare(args) -> None:
     """登记一个测试项的真实 argv 命令，不执行命令。"""
     project_root = resolve_project_root()
@@ -3113,6 +3219,13 @@ def cmd_test_prepare(args) -> None:
     command = list(args.command_argv or [])
     if command and command[0] == "--":
         command = command[1:]
+    if getattr(args, "from_tables", False):
+        _prepare_tasks_from_tables(project_root, wf_state)
+        return
+    if not command or not args.topic or not args.tc or not args.report_adapter:
+        print("错误：逐条登记需要 --topic、--tc、--report-adapter 和 -- 后的命令；按工作记录表登记时使用 --from-tables")
+        print_next_step("在测试工作记录表填写全部测试项后，由 AI 执行 `workflow test prepare --from-tables`")
+        sys.exit(1)
     try:
         task = test_execution_mod.prepare_task(
             project_root,
@@ -3237,6 +3350,26 @@ def cmd_test_run(args) -> None:
             print_next_step(f"当前没有自动化测试结果文件需要生成，直接调 `workflow gate {wf_state.current_stage}`")
 
 
+def _reject_criterion_not_in_table(project_root: str, wf_state, topic: str, criterion: str) -> bool:
+    """验收计划表启用时，记录的 AC 编号必须在表中存在。"""
+    relative = records_mod.table_relative_path(
+        project_root, wf_state.workflow_id, "acceptance_plan", topic
+    )
+    if not records_mod.table_exists(project_root, relative):
+        return False
+    table = records_mod.load_table(os.path.join(project_root, relative))
+    known = {
+        str(row.get("验收条件编号", "")).strip()
+        for row in table.get("验收条件", [])
+        if isinstance(row, dict)
+    }
+    if criterion in known:
+        return False
+    print(f"错误：验收条件 {criterion} 不在 {topic} 的验收工作记录表中；表中已知编号：{sorted(x for x in known if x)}")
+    print_next_step("先把该验收条件写进验收工作记录表并通过验收计划门禁，再记录验收回答")
+    sys.exit(1)
+
+
 def cmd_acceptance_record(args) -> None:
     """记录一条人工或混合验收条件的用户回答。"""
     project_root = resolve_project_root()
@@ -3248,6 +3381,7 @@ def cmd_acceptance_record(args) -> None:
         print(f"错误：当前 stage 是 {wf_state.current_stage}，不能记录主题验收回答")
         print_next_step(current_stage_next_instruction(wf_state))
         return
+    _reject_criterion_not_in_table(project_root, wf_state, args.topic, args.criterion)
     try:
         created = acceptance_records_mod.ensure_automated_records(project_root, wf_state)
         record = acceptance_records_mod.record_user_result(
@@ -4204,11 +4338,11 @@ def cmd_gate(args) -> None:
                 stage_name,
                 stage,
             )
-        except (OSError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - 校验异常必须转成结构化失败，不允许裸堆栈
             _print_gate_failure(
                 stage_name=stage_name,
                 gate_name="代码校验",
-                details=f"阶段校验无法完成：{exc}",
+                details=f"阶段校验无法完成：{type(exc).__name__}: {exc}",
                 command=f"workflow gate {stage_name}",
                 side_effects="只读校验当前阶段材料和状态，不自动修改业务代码",
                 success_condition="当前阶段的全部独立检查通过",
@@ -4259,6 +4393,11 @@ def cmd_gate(args) -> None:
             if stage_name == "spike":
                 wf_state.meta.pop(PENDING_SPIKE_ASSETS_META_KEY, None)
             state_mod.save_state(project_root, wf_state)
+            _categories = {
+                "格式问题": details.count("格式问题"),
+                "内容问题": details.count("内容问题"),
+                "未检查": details.count("未检查"),
+            }
             journal_mod.append_entry(
                 project_root,
                 "门禁代码校验",
@@ -4266,6 +4405,7 @@ def cmd_gate(args) -> None:
                 stage=stage_name,
                 passed=False,
                 details=details,
+                categories=_categories,
             )
             print(f"═══ {stage_name} 代码校验失败 ═══")
             # validate_stage_output 已经生成完整报告和唯一下一命令，不再追加猜测性提示。
@@ -4958,6 +5098,55 @@ def cmd_repair_links(args) -> None:
 
 
 # status 命令：只读打印 state + journal 摘要，不迁移、不恢复、不建立基线
+def cmd_scaffold(args) -> None:
+    """为当前环节生成/补齐工作记录表；已填内容不覆盖。"""
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("错误：找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    wf_state = _load_active_workflow_for_command(project_root)
+    stage = args.stage or wf_state.current_stage
+    try:
+        if args.topic:
+            created = []
+            for topic in args.topic:
+                for kind in records_mod.stage_table_kinds(stage):
+                    created.append(
+                        records_mod.create_or_complete_table(
+                            project_root, wf_state.workflow_id, kind, topic
+                        )
+                    )
+        elif stage == wf_state.current_stage:
+            created = records_mod.ensure_stage_tables(project_root, wf_state)
+        else:
+            topics = topic_mod.current_workflow_topics(project_root)
+            created = []
+            for kind in records_mod.stage_table_kinds(stage):
+                if kind in records_mod.WORKFLOW_LEVEL_KINDS:
+                    created.append(
+                        records_mod.create_or_complete_table(
+                            project_root, wf_state.workflow_id, kind, ""
+                        )
+                    )
+                else:
+                    for topic in topics or [""]:
+                        created.append(
+                            records_mod.create_or_complete_table(
+                                project_root, wf_state.workflow_id, kind, topic
+                            )
+                        )
+    except (OSError, ValueError, records_mod.RecordsError) as exc:
+        print(f"错误：工作记录表生成失败：{exc}")
+        sys.exit(1)
+    if not created:
+        print("当前环节没有需要生成的工作记录表。")
+    else:
+        print("═══ 工作记录表已就绪 ═══")
+        for table_path in created:
+            print(f"  {table_path}")
+    print_next_step("由 AI 在表中填写固定事实（数据一段一条），正式文档由程序按表生成")
+
+
 def cmd_status(args) -> None:
     # 定位项目根
     project_root = resolve_project_root()
@@ -5002,8 +5191,22 @@ def cmd_status(args) -> None:
             next_instruction = "本轮已经作废；由 AI 根据当前真实状态重新调查并推荐路线，用户确认后再开始新轮次"
         print(f"\n下一步：{next_instruction}")
         return
-    if wf_state.run_status == "active":
-        _print_legacy_stage_migration_preview(project_root, wf_state)
+    if wf_state.run_status != "active":
+        print("═══ 工作流状态 ═══")
+        print(f"workflow_id: {wf_state.workflow_id}")
+        print(f"intent: {wf_state.intent}")
+        print(f"run_status: {wf_state.run_status}")
+        print(f"当前 stage: {wf_state.current_stage}")
+        if wf_state.run_status == "completed":
+            print(f"结束时间: {wf_state.ended_at or '（未记录）'}")
+            print("本轮已经完成；有新任务时先由 AI 调查并推荐路线，再由用户确认进入哪种任务")
+        else:
+            print(f"作废时间: {wf_state.aborted_at or '（未记录）'}")
+            print("本轮已经作废；由 AI 根据当前真实状态重新调查并推荐路线，用户确认后再开始新轮次")
+        print_next_step("由 AI 执行 `workflow start` 查看可选工作意图并开始新轮次" if wf_state.run_status == "aborted"
+                        else "有新任务时由 AI 调查现状、推荐路线，用户确认后执行 `workflow start --intent <意图>`")
+        return
+    _print_legacy_stage_migration_preview(project_root, wf_state)
 
     # 打印 state 摘要
     print(f"═══ 工作流状态 ═══")
@@ -5340,6 +5543,7 @@ def cmd_abort(args) -> None:
     _clear_pending_spike_assets(wf_state)
     wf_state.run_status = "aborted"
     wf_state.aborted_at = state_mod.now_iso()
+    removed_tables = records_mod.delete_workflow_records(project_root, wf_state.workflow_id)
     state_mod.save_state(project_root, wf_state)
     journal_mod.append_entry(
         project_root,
@@ -5354,6 +5558,7 @@ def cmd_abort(args) -> None:
         restored_at=wf_state.rollback.restored_at,
         cleanup_completed_at=wf_state.rollback.cleanup_completed_at,
         aborted_at=wf_state.aborted_at,
+        removed_record_tables=removed_tables,
     )
 
     print("═══ 工作流整轮已作废 ═══")
@@ -5689,7 +5894,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(
         dest="command",
         help="可用命令",
-        metavar="{start,light,discuss,test,spike,acceptance,gate,repair-links,status,done,abort,return,update,uninstall}",
+        metavar="{start,light,discuss,test,spike,acceptance,gate,repair-links,scaffold,status,done,abort,return,update,uninstall}",
     )
 
     # start 命令
@@ -5742,12 +5947,20 @@ def main() -> None:
         default=[],
         help="本轮新建或将修改的统一入口脚本路径；多个脚本时重复填写，必须在写脚本前登记",
     )
-    test_prepare_parser = test_subparsers.add_parser("prepare", help="登记一个测试项的真实命令")
-    test_prepare_parser.add_argument("--topic", required=True, help="验收主题名称")
-    test_prepare_parser.add_argument("--tc", required=True, help="测试项编号，例如 TC-01")
+    test_prepare_parser = test_subparsers.add_parser(
+        "prepare",
+        help="核对工作记录表并登记测试项，或按旧参数登记单个测试项",
+    )
+    test_prepare_parser.add_argument(
+        "--from-tables",
+        action="store_true",
+        help="核对测试工作记录表并一次登记全部测试项（推荐路径）",
+    )
+    test_prepare_parser.add_argument("--topic", required=False, help="验收主题名称")
+    test_prepare_parser.add_argument("--tc", required=False, help="测试项编号，例如 TC-01")
     test_prepare_parser.add_argument(
         "--report-adapter",
-        required=True,
+        required=False,
         choices=sorted(test_report_mod.SUPPORTED_REPORT_ADAPTERS),
         help="结构化测试报告适配器；程序会追加唯一报告参数并管理报告路径",
     )
@@ -5895,6 +6108,24 @@ def main() -> None:
         metavar="PREVIEW_HASH",
         help="应用与当前文件仍完全一致的预览哈希；哈希不匹配时整批零写入",
     )
+    # scaffold 命令：为当前环节生成工作记录表
+    scaffold_parser = subparsers.add_parser(
+        "scaffold",
+        help="为当前环节生成/补齐工作记录表（不覆盖已填内容）",
+    )
+    scaffold_parser.add_argument(
+        "stage",
+        nargs="?",
+        default=None,
+        help="环节名（如 impl、qa、spec）；省略时用当前环节",
+    )
+    scaffold_parser.add_argument(
+        "--topic",
+        action="append",
+        default=None,
+        help="只生成指定主题的表；省略时按当前环节全部主题生成",
+    )
+
     # status 命令（旧状态可能先迁移阶段路径）
     subparsers.add_parser("status", help="打印状态摘要")
     # done 命令
@@ -5971,7 +6202,18 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
-    # 分发到对应 handler
+    # 分发到对应 handler；未预期异常转成清晰错误和下一步，不裸崩
+    try:
+        _dispatch_command(args, parser)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        print(f"错误：命令执行失败（{type(exc).__name__}: {exc}）")
+        print("工作流状态没有被本次失败修改；先处理上面指出的原因。")
+        print_next_step("由 AI 执行 `workflow status` 查看当前状态；问题无法自行恢复时如实报告用户")
+
+
+def _dispatch_command(args, parser) -> None:
     if args.command == "start":
         cmd_start(args)
     elif args.command == "light":
@@ -5995,6 +6237,8 @@ def main() -> None:
         cmd_repair_links(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "scaffold":
+        cmd_scaffold(args)
     elif args.command == "done":
         cmd_done(args)
     elif args.command == "abort":

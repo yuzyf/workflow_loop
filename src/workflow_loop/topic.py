@@ -90,7 +90,25 @@ def current_workflow_topics(project_root: str) -> list[str]:
         return []
     if state.topics:
         return state.topics
-    return [state.topic] if state.topic else []
+    if state.topic:
+        return [state.topic]
+    # 断言三：state.topics 空时，从 topic_relations 工作记录表读（表为唯一输入，不靠 state.topics）
+    try:
+        from . import records as records_mod
+        import os
+        _rel = records_mod.table_relative_path(project_root, state.workflow_id, "topic_relations", "")
+        if records_mod.table_exists(project_root, _rel):
+            _t = records_mod.load_table(os.path.join(project_root, _rel))
+            _topics = [
+                str(r.get("验收主题", "")).strip()
+                for r in _t.get("主题关系", [])
+                if str(r.get("验收主题", "")).strip()
+            ]
+            if _topics:
+                return _topics
+    except Exception:
+        pass
+    return []
 
 
 def candidate_topics(project_root: str) -> list[str]:

@@ -46,7 +46,7 @@ def hash_text(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-VALIDATION_CREDENTIAL_RULES_VERSION = "3"
+VALIDATION_CREDENTIAL_RULES_VERSION = "4"
 PENDING_SPIKE_ASSETS_META_KEY = "pending_spike_assets"
 
 
@@ -150,6 +150,17 @@ def stage_responsibility_paths(
 ) -> list[str]:
     """返回第二道门真正负责的文件，不把所有下游 Markdown 混进来。"""
     topics = state.topics or ([state.topic] if state.topic else [])
+    if not topics:
+        # 主题尚未写入 state.topics 时，从 topic_relations 工作记录表读（断言三：表为唯一输入）
+        from . import records as records_mod
+        _rel = records_mod.table_relative_path(project_root, state.workflow_id, "topic_relations", "")
+        if records_mod.table_exists(project_root, _rel):
+            _ttable = records_mod.load_table(os.path.join(project_root, _rel))
+            topics = [
+                str(r.get("验收主题", "")).strip()
+                for r in _ttable.get("主题关系", [])
+                if str(r.get("验收主题", "")).strip()
+            ]
     paths: set[str] = set()
 
     if stage_name == "spec":
@@ -209,6 +220,56 @@ def stage_responsibility_paths(
     return snapshots_mod.normalize_registered_paths(project_root, paths)
 
 
+def _stage_records_content_hash(
+    project_root: str,
+    state: WorkflowState,
+    stage_name: str,
+) -> str | None:
+    """当前环节工作记录表的内容哈希（剔除生成文档哈希/路径等程序专用键）。
+
+    R29：门 2 到门 3 之间工作记录表内容变化即凭据失效。只绑定剔除程序专用键
+    后的 AI 内容哈希，不复制整份文档正文，避免程序重算文档哈希时误判失效。
+    """
+    from . import records as records_mod
+
+    kinds = records_mod.stage_table_kinds(stage_name)
+    if not kinds:
+        return None
+    topics = list(state.topics or ([state.topic] if state.topic else []))
+    topic_keys = topics + [""]
+    seen: set[str] = set()
+    digest = hashlib.sha256()
+    found = False
+    for kind in kinds:
+        for topic in topic_keys:
+            relative = records_mod.table_relative_path(
+                project_root, state.workflow_id, kind, topic
+            )
+            if relative in seen:
+                continue
+            full = os.path.join(project_root, relative)
+            if not os.path.isfile(full):
+                continue
+            seen.add(relative)
+            try:
+                table = records_mod.load_table(full)
+            except Exception:
+                continue
+            content = {
+                key: value
+                for key, value in table.items()
+                if key not in (records_mod.DOC_HASH_KEY, records_mod.GENERATED_DOC_PATH_KEY)
+            }
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(
+                json.dumps(content, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            )
+            digest.update(b"\0")
+            found = True
+    return digest.hexdigest() if found else None
+
+
 def _credential_bound_state(
     project_root: str,
     state: WorkflowState,
@@ -222,6 +283,9 @@ def _credential_bound_state(
         "topics_hash": _canonical_hash(state.topics or ([state.topic] if state.topic else [])),
         "discussion_material_hash": (
             stage_state.discussion_material_hash if stage_state is not None else None
+        ),
+        "records_content_hash": _stage_records_content_hash(
+            project_root, state, stage_name
         ),
     }
     if stage_state is None:
@@ -1570,17 +1634,80 @@ def compute_non_test_code_snapshot_hash(project_root: str) -> str:
 # 计算实施阶段使用的实施综合哈希（impl_hash）
 # 包含两部分：impl/ 下全部实施记录内容哈希 + 非测试代码快照哈希
 # test_code 阶段后续修改测试代码，不应让已经确认的实施结果失效。
+def _indexes_generated(project_root: str) -> bool:
+    """主题关系表已填时，三类索引由程序生成，不参与文档失效绑定。"""
+    from . import records as records_mod
+    from . import state as state_mod
+
+    state = state_mod.load_state(project_root)
+    if state is None:
+        return False
+    relative = records_mod.table_relative_path(
+        project_root, state.workflow_id, "topic_relations", ""
+    )
+    if not records_mod.table_exists(project_root, relative):
+        return False
+    try:
+        table = records_mod.load_table(os.path.join(project_root, relative))
+    except Exception:
+        return False
+    return bool(table.get("主题关系"))
+
+
+def _table_document_hash(
+    project_root: str,
+    workflow_id: str,
+    kind: str,
+    topic_list: list[str],
+) -> str | None:
+    """表启用时返回工作记录表文件的绑定哈希；未启用返回 None。
+
+    表是机器事实的唯一真本：按表生成的正式文档随表确定性再生，不参与失效绑定。
+    """
+    from . import records as records_mod
+
+    paths = []
+    for topic in topic_list or [""]:
+        relative = records_mod.table_relative_path(project_root, workflow_id, kind, topic)
+        if records_mod.table_exists(project_root, relative):
+            paths.append(relative)
+    if not paths:
+        return None
+    if kind in {"acceptance_plan"}:
+        relations = records_mod.table_relative_path(project_root, workflow_id, "topic_relations", "")
+        if records_mod.table_exists(project_root, relations):
+            paths.append(relations)
+    digest = hashlib.sha256()
+    for relative in sorted(set(paths)):
+        full = os.path.join(project_root, *relative.split("/"))
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        with open(full, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def compute_impl_hash(project_root: str, topics: str | list[str] | None = None) -> str:
     # 只绑定当前工作流明确登记的实施索引和主题记录，历史记录和目录内其它文件
     # 不得因为文件名后缀相同而影响当前实施状态。
     topic_list = normalize_topics(topics)
     parts = []
+    state = load_state(project_root)
     if topic_list:
-        impl_paths = [
-            artifact_paths_mod.IMPL_INDEX_DOC,
-            *[topic_paths(project_root, topic)["impl_doc"] for topic in topic_list],
-        ]
-        parts.append(f"impl_docs:{compute_document_set_hash(project_root, impl_paths)}")
+        table_hash = None
+        if state is not None:
+            table_hash = _table_document_hash(project_root, state.workflow_id, "impl_record", topic_list)
+        if table_hash is not None:
+            parts.append(f"impl_tables:{table_hash}")
+        else:
+            impl_paths = [
+                topic_paths(project_root, topic)["impl_doc"] for topic in topic_list
+            ]
+            if not _indexes_generated(project_root):
+                impl_paths.insert(0, artifact_paths_mod.IMPL_INDEX_DOC)
+            parts.append(f"impl_docs:{compute_document_set_hash(project_root, impl_paths)}")
     # 只加入非测试代码快照，测试代码由 test_code 阶段单独校验。
     parts.append(f"code_snapshot:{compute_non_test_code_snapshot_hash(project_root)}")
     # 合并所有部分算最终 SHA256
@@ -1593,6 +1720,11 @@ def compute_test_plan_hash(project_root: str, topics: str | list[str] | None) ->
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
+    state = load_state(project_root)
+    if state is not None:
+        table_hash = _table_document_hash(project_root, state.workflow_id, "test_plan", topic_list)
+        if table_hash is not None:
+            return table_hash
     snapshot = compute_test_plan_document_snapshot(project_root, topic_list)
     return str(snapshot["aggregate_hash"])
 
@@ -1604,6 +1736,11 @@ def compute_acceptance_plan_hash(project_root: str, topics: str | list[str] | No
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
+    state = load_state(project_root)
+    if state is not None:
+        table_hash = _table_document_hash(project_root, state.workflow_id, "acceptance_plan", topic_list)
+        if table_hash is not None:
+            return table_hash
     snapshot = compute_acceptance_plan_document_snapshot(project_root, topic_list)
     return str(snapshot["aggregate_hash"])
 
@@ -1639,16 +1776,22 @@ def compute_test_result_hash(
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
-    paths = [
-        topic_paths(project_root, topic)["test_result"]
-        for topic in automated_topics(project_root, topic_list)
-    ]
-    document_hash = (
-        hashlib.sha256(b"<no-automated-test-results>").hexdigest()
-        if not paths
-        else compute_document_set_hash(project_root, paths)
-    )
     current_state = state if state is not None else load_state(project_root)
+    table_hash = None
+    if current_state is not None:
+        table_hash = _table_document_hash(project_root, current_state.workflow_id, "test_result", topic_list)
+    if table_hash is not None:
+        document_hash = table_hash
+    else:
+        paths = [
+            topic_paths(project_root, topic)["test_result"]
+            for topic in automated_topics(project_root, topic_list)
+        ]
+        document_hash = (
+            hashlib.sha256(b"<no-automated-test-results>").hexdigest()
+            if not paths
+            else compute_document_set_hash(project_root, paths)
+        )
     task_hash = _canonical_hash(test_tasks_payload(current_state, topic_list))
     return hashlib.sha256(
         f"documents:{document_hash}\ntasks:{task_hash}".encode("utf-8")
@@ -1665,8 +1808,15 @@ def compute_acceptance_result_hash(
     topic_list = normalize_topics(topics)
     if not topic_list:
         return None
-    paths = [topic_paths(project_root, topic)["acceptance_result"] for topic in topic_list]
-    document_hash = compute_document_set_hash(project_root, paths)
+    current_state = state if state is not None else load_state(project_root)
+    table_hash = None
+    if current_state is not None:
+        table_hash = _table_document_hash(project_root, current_state.workflow_id, "acceptance_result", topic_list)
+    if table_hash is not None:
+        document_hash = table_hash
+    else:
+        paths = [topic_paths(project_root, topic)["acceptance_result"] for topic in topic_list]
+        document_hash = compute_document_set_hash(project_root, paths)
     current_state = state if state is not None else load_state(project_root)
     records = (
         acceptance_records_mod.acceptance_records_payload(current_state, topic_list)
