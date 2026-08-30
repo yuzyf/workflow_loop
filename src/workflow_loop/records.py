@@ -2511,7 +2511,14 @@ def _generate_test_result_document_v2(
         f"| 上游 | [测试计划](./{file_key}_测试计划.md) | 说明本次覆盖哪些测试项 |",
         f"| 上游 | [实施记录](../impl/{file_key}_实施记录.md) | 说明本次代码怎样实现 |",
         "| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |",
-        f"| 下游 | `acceptance/{file_key}_验收结果.md`（待生成） | 混合测试在这里接收人工确认 |",
+        (
+            # 模板规则：验收结果文档真实生成后才改成链接（纯人工主题写无自动化测试结果）
+            f"| 下游 | [{topic}验收结果](../acceptance/{file_key}_验收结果.md) | 混合测试在这里接收人工确认 |"
+            if project_root and os.path.isfile(
+                os.path.join(project_root, "acceptance", f"{file_key}_验收结果.md")
+            )
+            else f"| 下游 | `acceptance/{file_key}_验收结果.md`（待生成） | 混合测试在这里接收人工确认 |"
+        ),
         "",
     ]
     return "\n".join(lines)
@@ -2751,6 +2758,13 @@ def _document_reference_map(project_root: str, workflow_id: str, topic: str) -> 
             f"acceptance/{file_key}_验收结果.md",
         ):
             refs.setdefault(generator_path, []).append(("acceptance_plan", topic))
+        # 验收结果文档生成后，验收计划、实施记录与测试结果中的引用都要回补为真实链接
+        refs.setdefault(f"acceptance/{file_key}_验收结果.md", []).append(
+            ("impl_record", topic)
+        )
+        refs.setdefault(f"acceptance/{file_key}_验收结果.md", []).append(
+            ("test_result", topic)
+        )
         # 测试结果文档生成后，同主题五类环节文档中指向它的引用都要回补为真实链接
         result_refs = refs.setdefault(f"qa/{file_key}_测试结果.md", [])
         for referencing_kind in (

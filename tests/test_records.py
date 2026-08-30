@@ -993,6 +993,26 @@ def test_test_plan_columns_match_coverage_table() -> None:
     assert "[主题A测试结果](./主题A_测试结果.md)" in document_after
     assert "（待生成）" not in document_after.split("## 5.")[1]
 
+    # 结果文档的下游“验收结果”行同样按文件存在性渲染
+    result_table = {
+        "表版本": "2",
+        "工作流编号": "wf-1",
+        "验收主题": "主题A",
+        "测试结果": [
+            {"测试项编号": "TC-01", "执行结论": "passed", "机器记录编号": "", "实际结果说明": "样例说明内容。"}
+        ],
+    }
+    document_before = records_mod.generate_document(
+        "test_result", result_table, project_root=str(_project)
+    )
+    assert "`acceptance/主题A_验收结果.md`（待生成）" in document_before
+    (_project / "acceptance").mkdir(exist_ok=True)
+    (_project / "acceptance" / "主题A_验收结果.md").write_text("# 占位", encoding="utf-8")
+    document_after = records_mod.generate_document(
+        "test_result", result_table, project_root=str(_project)
+    )
+    assert "[主题A验收结果](../acceptance/主题A_验收结果.md)" in document_after
+
 
 def test_table_mode_items_carry_plan_fields_and_skip_manual_rows(tmp_path: Path) -> None:
     """Workflow-Test
