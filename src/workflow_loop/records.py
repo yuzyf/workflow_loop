@@ -1643,7 +1643,7 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
             "## 1. 验收条件覆盖",
             "",
             "| " + " | ".join(header_columns) + " |",
-            "|---|" + "---|" * len(header_columns),
+            "|" + "---|" * len(header_columns),
         ]
         # AC 编号→名称取自本主题验收计划表（渲染链接需带名称，模板与解析器一致）
         ac_names: dict[str, str] = {}
@@ -1687,7 +1687,12 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
             for r in table.get("测试项", []) if isinstance(r, dict)
         )
         if has_auto:
-            pending_result = f"| 下游 | `./{file_key}_测试结果.md`（待生成） | 记录正式执行的结构化报告事实 |"
+            result_rel = f"qa/{file_key}_测试结果.md"
+            # 模板规则：结果文档真实生成后才改成链接，生成前保持（待生成）
+            if project_root and os.path.isfile(os.path.join(project_root, result_rel)):
+                pending_result = f"| 下游 | [{topic}测试结果](./{file_key}_测试结果.md) | 记录正式执行的结构化报告事实 |"
+            else:
+                pending_result = f"| 下游 | `./{file_key}_测试结果.md`（待生成） | 记录正式执行的结构化报告事实 |"
         else:
             pending_result = "| 下游 | 无自动化测试结果，转主题验收 | 纯人工验收主题不生成测试结果文档 |"
         lines += [
@@ -2746,13 +2751,17 @@ def _document_reference_map(project_root: str, workflow_id: str, topic: str) -> 
             f"acceptance/{file_key}_验收结果.md",
         ):
             refs.setdefault(generator_path, []).append(("acceptance_plan", topic))
-        # 测试结果文档生成后，验收计划与实施记录中的结果引用都要回补为真实链接
-        refs.setdefault(f"qa/{file_key}_测试结果.md", []).append(
-            ("acceptance_plan", topic)
-        )
-        refs.setdefault(f"qa/{file_key}_测试结果.md", []).append(
-            ("impl_record", topic)
-        )
+        # 测试结果文档生成后，同主题五类环节文档中指向它的引用都要回补为真实链接
+        result_refs = refs.setdefault(f"qa/{file_key}_测试结果.md", [])
+        for referencing_kind in (
+            "acceptance_plan",
+            "impl_record",
+            "test_plan",
+            "test_result",
+            "acceptance_result",
+        ):
+            if (referencing_kind, topic) not in result_refs:
+                result_refs.append((referencing_kind, topic))
     return refs
 
 

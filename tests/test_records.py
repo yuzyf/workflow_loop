@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 from workflow_loop import records as records_mod
@@ -967,12 +968,30 @@ def test_test_plan_columns_match_coverage_table() -> None:
         ],
     }
     document = records_mod.generate_document("test_plan", table, project_root="")
+    doc_lines = document.splitlines()
     doc_header = next(
-        line for line in document.splitlines() if line.startswith("| 验收条件链接")
+        line for line in doc_lines if line.startswith("| 验收条件链接")
     )
+    doc_separator = doc_lines[doc_lines.index(doc_header) + 1]
     rendered_columns = [cell.strip() for cell in doc_header.strip().strip("|").split("|")]
+    separator_columns = len(doc_separator.strip().strip("|").split("|"))
     assert rendered_columns == doc_columns
+    assert separator_columns == len(rendered_columns), (
+        f"分隔行 {separator_columns} 列与表头 {len(rendered_columns)} 列不一致"
+    )
     assert "直白测试名称" not in rendered_columns
+
+    # 结果文档不存在时下游行保持待生成；真实生成后回补为链接
+    assert "（待生成）" in document
+
+    _project = Path(tempfile.mkdtemp())
+    (_project / "qa").mkdir(parents=True)
+    (_project / "qa" / "主题A_测试结果.md").write_text("# 占位结果文档", encoding="utf-8")
+    document_after = records_mod.generate_document(
+        "test_plan", table, project_root=str(_project)
+    )
+    assert "[主题A测试结果](./主题A_测试结果.md)" in document_after
+    assert "（待生成）" not in document_after.split("## 5.")[1]
 
 
 def test_table_mode_items_carry_plan_fields_and_skip_manual_rows(tmp_path: Path) -> None:
@@ -1114,7 +1133,15 @@ def test_table_mode_items_carry_plan_fields_and_skip_manual_rows(tmp_path: Path)
     assert ok, detail
 
     reference_map = records_mod._document_reference_map(str(root), "wf-1", "主题A")
-    assert ("impl_record", "主题A") in reference_map["qa/主题A_测试结果.md"]
+    result_refs = reference_map["qa/主题A_测试结果.md"]
+    for referencing_kind in (
+        "acceptance_plan",
+        "impl_record",
+        "test_plan",
+        "test_result",
+        "acceptance_result",
+    ):
+        assert (referencing_kind, "主题A") in result_refs, referencing_kind
 
     loaded = state_mod.load_state(str(root))
     tasks_ok, tasks_detail = test_execution_mod.validate_prepared_tasks(str(root), loaded)
