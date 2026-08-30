@@ -1,0 +1,88 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "表模式不再退回文档模式",
+  "生成文档哈希": "0ebc7de1994a741bdbdb5d83263d044e077a8f3e9baa4283015de36c87488667",
+  "生成文档路径": "impl/表模式不再退回文档模式_实施记录.md",
+  "代码修改计划": [
+    {
+      "文件": "src/workflow_loop/stages/stages.py",
+      "计划修改内容": "新增 _stage_table_sync：表启用时空表报未填写并停留、不退回文档模式（R11）；ImplStage discussion_validate 走表路径时给 topics 赋值、从 impl_record 表读计划行",
+      "对应验收条件": "AC-01、AC-02、AC-04"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "计划修改内容": "新增工作记录表模块：表版本须等于开工冻结版本且为程序支持版本（断言八）；sync_documents 按表生成全部文档、regenerate_workflow_indexes 重写索引（断言三）",
+      "对应验收条件": "AC-03、AC-04"
+    },
+    {
+      "文件": "src/workflow_loop/verification.py",
+      "计划修改内容": "stage_responsibility_paths 在 state.topics 为空时从 topic_relations 表读主题（断言三），不退回文档模式",
+      "对应验收条件": "AC-04"
+    },
+    {
+      "文件": "src/workflow_loop/topic.py",
+      "计划修改内容": "current_workflow_topics 从 topic_relations 表读，state.topics 未定时回退到表",
+      "对应验收条件": "AC-04"
+    }
+  ],
+  "实际代码修改": [
+    {
+      "文件": "src/workflow_loop/stages/stages.py",
+      "代码位置（最终文件）": "L69-L103",
+      "实际修改的代码逻辑": "新增 _stage_table_sync：表启用且未填写时返回未填写并停留，不退回文档模式",
+      "数据、状态或输出的实际变化": "空表时门禁停留当前环节并报“尚未填写”，不再静默退回文档模式",
+      "修改理由": "R11 表模式任何情况不退回文档模式",
+      "对应验收条件": "AC-01、AC-02",
+      "测试证据": "tests/test_records.py"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L402-L689",
+      "实际修改的代码逻辑": "validate_table 表版本须等于开工冻结版本且为程序支持版本；sync_documents 按表生成全部文档",
+      "数据、状态或输出的实际变化": "表版本不符即报错；按表重写正式文档并回填哈希",
+      "修改理由": "断言八表版本校验、断言三表流程生成全部文档",
+      "对应验收条件": "AC-03、AC-04",
+      "测试证据": "tests/test_records.py"
+    },
+    {
+      "文件": "src/workflow_loop/verification.py",
+      "代码位置（最终文件）": "L150-L166",
+      "实际修改的代码逻辑": "stage_responsibility_paths 在 state.topics 为空时从 topic_relations 表读主题",
+      "数据、状态或输出的实际变化": "主题未定时不退回文档模式、从表补读主题",
+      "修改理由": "断言三表为唯一输入",
+      "对应验收条件": "AC-04",
+      "测试证据": "tests/test_verification.py"
+    },
+    {
+      "文件": "src/workflow_loop/topic.py",
+      "代码位置（最终文件）": "L90-L114",
+      "实际修改的代码逻辑": "current_workflow_topics 从 topic_relations 表读",
+      "数据、状态或输出的实际变化": "state.topics 未定时回退到表读取",
+      "修改理由": "断言三",
+      "对应验收条件": "AC-04",
+      "测试证据": "tests/test_commands.py"
+    }
+  ],
+  "实施动作记录": [],
+  "实施中问题与处理": [],
+  "未完成状态": "状态：无",
+  "填写说明": {
+    "代码修改计划": {
+      "文件": "项目内相对路径，例如 src/cli.py",
+      "计划修改内容": "一句话写清这一处要改什么，例如 修复已完成轮次的 status 提示",
+      "对应验收条件": "本主题的验收条件编号，例如 AC-01、AC-02"
+    },
+    "实际代码修改": {
+      "文件": "实际修改文件的项目内相对路径，例如 src/cli.py",
+      "代码位置（最终文件）": "最终文件的行号范围，例如 L12-L34",
+      "实际修改的代码逻辑": "改了什么逻辑，例如 状态判断改为先看 run_status",
+      "数据、状态或输出的实际变化": "用户可见或程序可见的实际变化",
+      "修改理由": "为什么改，例如 修复提示死路",
+      "对应验收条件": "例如 AC-01",
+      "测试证据": "覆盖它的测试，例如 tests/test_records.py"
+    },
+    "实施动作记录": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "实施中问题与处理": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

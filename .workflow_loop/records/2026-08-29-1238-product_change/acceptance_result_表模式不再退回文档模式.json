@@ -1,0 +1,43 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "表模式不再退回文档模式",
+  "生成文档哈希": "1bb8facd169c69edf3eaf698ca36ca290cd7381f3fbbccbfd721f161cf484a53",
+  "生成文档路径": "acceptance/表模式不再退回文档模式_验收结果.md",
+  "验收结果": [
+    {
+      "验收条件编号": "AC-01",
+      "验收结论": "passed",
+      "实际观察结果": "空表/纯净表不激活表路径，表模式标记全程不变不退回文档模式",
+      "证据": "机器记录 RUN-20260829T215349+0000-e8304148；测试 tests/test_records.py::test_pristine_table_does_not_activate_table_path"
+    },
+    {
+      "验收条件编号": "AC-02",
+      "验收结论": "passed",
+      "实际观察结果": "完成后状态不指向 done，门禁停留当前环节不静默退回文档模式",
+      "证据": "机器记录 RUN-20260829T215349+0000-e2c9d8ac；测试 tests/test_records.py::test_status_after_completed_does_not_point_to_done"
+    },
+    {
+      "验收条件编号": "AC-03",
+      "验收结论": "passed",
+      "实际观察结果": "表版本非支持版本即报内容问题，校验类别完整",
+      "证据": "机器记录 RUN-20260829T215350+0000-700956b8；测试 tests/test_records.py::test_validate_reports_category_and_all_problems"
+    },
+    {
+      "验收条件编号": "AC-04",
+      "验收结论": "passed",
+      "实际观察结果": "建表后重写保留已填内容，主题确定后补生成各主题表不丢",
+      "证据": "机器记录 RUN-20260829T215350+0000-623b916b；测试 tests/test_records.py::test_table_create_then_recreate_keeps_filled_content"
+    }
+  ],
+  "验收说明": [],
+  "填写说明": {
+    "验收结果": {
+      "验收条件编号": "与验收计划表一致，例如 AC-01",
+      "验收结论": "passed、failed 或 blocked",
+      "实际观察结果": "实际看到什么",
+      "证据": "可复核的证据说明"
+    },
+    "验收说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

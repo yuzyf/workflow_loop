@@ -1,0 +1,43 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "凭据日志删除与命令",
+  "生成文档哈希": "2824d277fc31e31918732719641dc3da54c2171c18b46020a3e979febea5f87e",
+  "生成文档路径": "acceptance/凭据日志删除与命令_验收结果.md",
+  "验收结果": [
+    {
+      "验收条件编号": "AC-01",
+      "验收结论": "passed",
+      "实际观察结果": "校验凭据 bound_state 含 records 内容哈希，门2→3 表内容变化即凭据失效、程序专用键不计",
+      "证据": "机器记录 RUN-20260829T215349+0000-d70ce790；测试 tests/test_verification.py::test_impl_credential_invalidates_when_impl_record_content_changes"
+    },
+    {
+      "验收条件编号": "AC-02",
+      "验收结论": "passed",
+      "实际观察结果": "门禁失败日志持久保存每项分类（格式/内容/未检查）可统计",
+      "证据": "机器记录 RUN-20260829T215349+0000-5f61a784；测试 tests/test_commands.py::test_test_code_multiple_failures_do_not_bypass_required_fixes"
+    },
+    {
+      "验收条件编号": "AC-03",
+      "验收结论": "passed",
+      "实际观察结果": "作废时递归删除本轮 records 目录全部内容含子目录",
+      "证据": "机器记录 RUN-20260829T215350+0000-4d8ad92b；测试 tests/test_records.py::test_records_lifecycle_abort_deletes_and_clean_preserves"
+    },
+    {
+      "验收条件编号": "AC-04",
+      "验收结论": "passed",
+      "实际观察结果": "workflow scaffold 接受环节名参数并生成该环节表，三道门按序推进",
+      "证据": "机器记录 RUN-20260829T215350+0000-53b3dd0a；测试 tests/test_commands.py::test_three_gates_advance_in_the_required_order"
+    }
+  ],
+  "验收说明": [],
+  "填写说明": {
+    "验收结果": {
+      "验收条件编号": "与验收计划表一致，例如 AC-01",
+      "验收结论": "passed、failed 或 blocked",
+      "实际观察结果": "实际看到什么",
+      "证据": "可复核的证据说明"
+    },
+    "验收说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

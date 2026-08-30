@@ -1,0 +1,37 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "表模式不删减原有校验",
+  "生成文档哈希": "fc4049ace8976904592f6809d8486211f687e3037dd46317816d723f9bce1a3a",
+  "生成文档路径": "acceptance/表模式不删减原有校验_验收结果.md",
+  "验收结果": [
+    {
+      "验收条件编号": "AC-01",
+      "验收结论": "passed",
+      "实际观察结果": "impl 门禁按真实改动核对，承接文档模式全部校验无一跳过",
+      "证据": "机器记录 RUN-20260829T215352+0000-bb7eb0a6；测试 tests/test_stages.py::test_impl_gate_prefers_real_changes_over_existing_code_marker"
+    },
+    {
+      "验收条件编号": "AC-02",
+      "验收结论": "passed",
+      "实际观察结果": "真实改动与记录不符即报，表通过不提前 return 跳过后续检查",
+      "证据": "机器记录 RUN-20260829T215353+0000-6948a287；测试 tests/test_stages.py::test_impl_gate_reports_real_change_mismatch_even_with_existing_code_marker"
+    },
+    {
+      "验收条件编号": "AC-03",
+      "验收结论": "passed",
+      "实际观察结果": "impl 规范引用 impl_record 表路径、引导填表不手写固定部分",
+      "证据": "机器记录 RUN-20260829T215353+0000-fff073d4；测试 tests/test_stages.py::test_qa_materials_include_plan_and_result_documents_without_duplicates"
+    }
+  ],
+  "验收说明": [],
+  "填写说明": {
+    "验收结果": {
+      "验收条件编号": "与验收计划表一致，例如 AC-01",
+      "验收结论": "passed、failed 或 blocked",
+      "实际观察结果": "实际看到什么",
+      "证据": "可复核的证据说明"
+    },
+    "验收说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

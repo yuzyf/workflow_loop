@@ -1,0 +1,90 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "表模式消灭格式反复",
+  "生成文档哈希": "fe59b8d5c3afd5b5276d0035e73b61f55d2b73683caece1c49245242a3669b3b",
+  "生成文档路径": "qa/表模式消灭格式反复_测试计划.md",
+  "测试项": [
+    {
+      "测试项编号": "TC-01",
+      "命令参数数组": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_records.py::test_generate_impl_doc_and_detect_tamper"
+      ],
+      "工作目录": "",
+      "超时秒数": "600",
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "tests/test_records.py::test_generate_impl_doc_and_detect_tamper",
+      "对应验收条件": "AC-01"
+    },
+    {
+      "测试项编号": "TC-02",
+      "命令参数数组": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_records.py::test_validate_reports_category_and_all_problems"
+      ],
+      "工作目录": "",
+      "超时秒数": "600",
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "tests/test_records.py::test_validate_reports_category_and_all_problems",
+      "对应验收条件": "AC-02"
+    },
+    {
+      "测试项编号": "TC-03",
+      "命令参数数组": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_rollback.py::test_planned_code_paths_and_plan_hash_read_from_impl_record_table"
+      ],
+      "工作目录": "",
+      "超时秒数": "600",
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "tests/test_rollback.py::test_planned_code_paths_and_plan_hash_read_from_impl_record_table",
+      "对应验收条件": "AC-03"
+    },
+    {
+      "测试项编号": "TC-04",
+      "命令参数数组": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_test_mapping.py::test_test_plan_parses_method_primary_criterion_and_direct_dependencies"
+      ],
+      "工作目录": "",
+      "超时秒数": "600",
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "tests/test_test_mapping.py::test_test_plan_parses_method_primary_criterion_and_direct_dependencies",
+      "对应验收条件": "AC-04"
+    }
+  ],
+  "测试范围说明": [],
+  "填写说明": {
+    "测试项": {
+      "测试项编号": "主题内唯一，例如 TC-01",
+      "命令参数数组": "JSON 数组，例如 [\"pytest\", \"tests/test_a.py\"]",
+      "工作目录": "项目内相对路径；留空表示项目根",
+      "超时秒数": "整数，例如 600",
+      "报告适配器": "pytest-junitxml 或 vitest-junitxml",
+      "正式目标名称": "测试报告里的正式目标名",
+      "对应验收条件": "例如 AC-01"
+    },
+    "测试范围说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

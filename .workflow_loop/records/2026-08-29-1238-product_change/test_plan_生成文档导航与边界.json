@@ -1,0 +1,56 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "生成文档导航与边界",
+  "生成文档哈希": "3d123f80e4409a4d02f7e67e4fae20d6bc6367b6801630ca7fe462a05f1e85dc",
+  "生成文档路径": "qa/生成文档导航与边界_测试计划.md",
+  "测试项": [
+    {
+      "测试项编号": "TC-01",
+      "命令参数数组": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_records.py::test_regenerate_indexes_from_topic_relations"
+      ],
+      "工作目录": "",
+      "超时秒数": "600",
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "tests/test_records.py::test_regenerate_indexes_from_topic_relations",
+      "对应验收条件": "AC-01"
+    },
+    {
+      "测试项编号": "TC-02",
+      "命令参数数组": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_records.py::test_generate_impl_doc_and_detect_tamper"
+      ],
+      "工作目录": "",
+      "超时秒数": "600",
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "tests/test_records.py::test_generate_impl_doc_and_detect_tamper",
+      "对应验收条件": "AC-02"
+    }
+  ],
+  "测试范围说明": [],
+  "填写说明": {
+    "测试项": {
+      "测试项编号": "主题内唯一，例如 TC-01",
+      "命令参数数组": "JSON 数组，例如 [\"pytest\", \"tests/test_a.py\"]",
+      "工作目录": "项目内相对路径；留空表示项目根",
+      "超时秒数": "整数，例如 600",
+      "报告适配器": "pytest-junitxml 或 vitest-junitxml",
+      "正式目标名称": "测试报告里的正式目标名",
+      "对应验收条件": "例如 AC-01"
+    },
+    "测试范围说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-0852-product_change",
+  "验收主题": "索引与其余环节文档程序生成",
+  "生成文档哈希": "680900179d43916e09ad5698ac8718f5a00c117460e1e952d63a4dc80c29d66b",
+  "生成文档路径": "acceptance/索引与其余环节文档程序生成_验收结果.md",
+  "验收结果": [
+    {
+      "验收条件编号": "AC-01",
+      "验收结论": "passed",
+      "实际观察结果": "acceptance/impl/qa 三类索引由程序按主题关系表重写，列头与既有模板一致",
+      "证据": "tests/test_records.py::test_regenerate_indexes_from_topic_relations 通过；本轮三类索引实际被程序重写"
+    },
+    {
+      "验收条件编号": "AC-02",
+      "验收结论": "passed",
+      "实际观察结果": "穿刺结论文档由程序按表生成",
+      "证据": "tests/test_records.py::test_spike_bug_design_tables_generate_docs 通过"
+    },
+    {
+      "验收条件编号": "AC-03",
+      "验收结论": "passed",
+      "实际观察结果": "作废删除本轮表；收工保留；从零清场保留旧表",
+      "证据": "tests/test_records.py::test_records_lifecycle_abort_deletes_and_clean_preserves 通过"
+    },
+    {
+      "验收条件编号": "AC-04",
+      "验收结论": "passed",
+      "实际观察结果": "缺陷记录由程序按表生成并查表",
+      "证据": "tests/test_records.py::test_spike_bug_design_tables_generate_docs 通过"
+    },
+    {
+      "验收条件编号": "AC-05",
+      "验收结论": "passed",
+      "实际观察结果": "最终设计同步固定字段进表并生成结论文档",
+      "证据": "tests/test_records.py::test_spike_bug_design_tables_generate_docs 通过"
+    },
+    {
+      "验收条件编号": "AC-06",
+      "验收结论": "passed",
+      "实际观察结果": "产品总说明功能清单由程序按表写入，链接目标程序核对",
+      "证据": "tests/test_records.py::test_product_features_section_rewrite 通过"
+    }
+  ],
+  "验收说明": [
+    "验收结论基于真实执行的测试机器记录、门禁真实运行结果和本轮真实使用证据；每行证据可复核。"
+  ],
+  "填写说明": {
+    "验收结果": {
+      "验收条件编号": "与验收计划表一致，例如 AC-01",
+      "验收结论": "passed、failed 或 blocked",
+      "实际观察结果": "实际看到什么",
+      "证据": "可复核的证据说明"
+    },
+    "验收说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

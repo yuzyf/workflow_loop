@@ -1,0 +1,39 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-0852-product_change",
+  "验收主题": "门禁与状态命令出错有明确出路",
+  "生成文档哈希": "5b511477cc919766f2534f107339dcf5788ea1514c09705f5a21d343ca12718b",
+  "生成文档路径": "acceptance/门禁与状态命令出错有明确出路_验收结果.md",
+  "验收结果": [
+    {
+      "验收条件编号": "AC-01",
+      "验收结论": "passed",
+      "实际观察结果": "收工后的轮次执行 workflow status，输出'本轮已经完成'及一致方向，不再出现指向必然失败命令的提示",
+      "证据": "tests/test_records.py::test_status_after_completed_does_not_point_to_done 通过"
+    },
+    {
+      "验收条件编号": "AC-02",
+      "验收结论": "passed",
+      "实际观察结果": "GBK 编码文档参与门禁输出结构化失败（位置/预期/实际/影响/下一步），无堆栈",
+      "证据": "tests/test_records.py::test_gate_with_non_utf8_document_reports_structured_failure 通过"
+    },
+    {
+      "验收条件编号": "AC-03",
+      "验收结论": "passed",
+      "实际观察结果": "损坏的 state.json 使命令输出清晰错误，无堆栈",
+      "证据": "tests/test_records.py::test_corrupted_state_file_reports_clean_error 通过"
+    }
+  ],
+  "验收说明": [
+    "验收结论基于真实执行的测试机器记录、门禁真实运行结果和本轮真实使用证据；每行证据可复核。"
+  ],
+  "填写说明": {
+    "验收结果": {
+      "验收条件编号": "与验收计划表一致，例如 AC-01",
+      "验收结论": "passed、failed 或 blocked",
+      "实际观察结果": "实际看到什么",
+      "证据": "可复核的证据说明"
+    },
+    "验收说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

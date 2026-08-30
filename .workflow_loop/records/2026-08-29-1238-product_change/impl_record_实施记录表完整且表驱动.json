@@ -1,0 +1,83 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "实施记录表完整且表驱动",
+  "生成文档哈希": "2f9c583d35cfdd1b1a8c8947eb22cfed8c00dbe3c3edb88f892e4ac8be9ebdaf",
+  "生成文档路径": "impl/实施记录表完整且表驱动_实施记录.md",
+  "代码修改计划": [
+    {
+      "文件": "src/workflow_loop/stages/stages.py",
+      "计划修改内容": "ImplStage discussion_validate 走表路径时给 topics 赋值，后续 len(topics) 不报 UnboundLocalError（断言四）",
+      "对应验收条件": "AC-01"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "计划修改内容": "impl_record 表实际代码修改栏补对应计划步骤等模板全列、代码修改计划按模板补齐、设计项与开发检查记录为行清单由表生成不留占位句（R16/R32）",
+      "对应验收条件": "AC-02"
+    },
+    {
+      "文件": "src/workflow_loop/verification.py",
+      "计划修改内容": "compute_impl_hash 表存在时从 impl_record 表算哈希（_table_document_hash），不读生成 md（断言十三哈希部分，已完成）",
+      "对应验收条件": "AC-03"
+    }
+  ],
+  "实际代码修改": [
+    {
+      "文件": "src/workflow_loop/stages/stages.py",
+      "代码位置（最终文件）": "L769-L801",
+      "实际修改的代码逻辑": "ImplStage discussion_validate 走表路径时给 topics 赋值",
+      "数据、状态或输出的实际变化": "表模式分支后续 len(topics) 不再报 UnboundLocalError",
+      "修改理由": "断言四 ImplStage topics 赋值不崩",
+      "对应验收条件": "AC-01",
+      "测试证据": "tests/test_stages.py"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L33-L516",
+      "实际修改的代码逻辑": "impl_record 表栏目含对应计划步骤等模板全列、代码修改计划按模板补齐、设计项与开发检查记录为行清单",
+      "数据、状态或输出的实际变化": "表覆盖模板全部字段、生成器逐表渲染不留占位句",
+      "修改理由": "R16/R32 实施记录表完整且表驱动",
+      "对应验收条件": "AC-02",
+      "测试证据": "tests/test_records.py"
+    },
+    {
+      "文件": "src/workflow_loop/verification.py",
+      "代码位置（最终文件）": "L1581-L1661",
+      "实际修改的代码逻辑": "compute_impl_hash 表存在时从 impl_record 表算哈希（_table_document_hash），不读生成 md",
+      "数据、状态或输出的实际变化": "实施综合哈希从表内容算",
+      "修改理由": "断言十三计划哈希从表算（哈希部分）",
+      "对应验收条件": "AC-03",
+      "测试证据": "tests/test_verification.py"
+    },
+    {
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L1247-L1560",
+      "实际修改的代码逻辑": "planned_code_paths/_recorded_code_changes/compute_plan_hash 从 impl_record 表取文件清单和哈希",
+      "数据、状态或输出的实际变化": "门禁以表为唯一输入、不读生成 md",
+      "修改理由": "断言十三实施门禁文件清单从表取",
+      "对应验收条件": "AC-03",
+      "测试证据": "tests/test_rollback.py"
+    }
+  ],
+  "实施动作记录": [],
+  "实施中问题与处理": [],
+  "未完成状态": "状态：无",
+  "填写说明": {
+    "代码修改计划": {
+      "文件": "项目内相对路径，例如 src/cli.py",
+      "计划修改内容": "一句话写清这一处要改什么，例如 修复已完成轮次的 status 提示",
+      "对应验收条件": "本主题的验收条件编号，例如 AC-01、AC-02"
+    },
+    "实际代码修改": {
+      "文件": "实际修改文件的项目内相对路径，例如 src/cli.py",
+      "代码位置（最终文件）": "最终文件的行号范围，例如 L12-L34",
+      "实际修改的代码逻辑": "改了什么逻辑，例如 状态判断改为先看 run_status",
+      "数据、状态或输出的实际变化": "用户可见或程序可见的实际变化",
+      "修改理由": "为什么改，例如 修复提示死路",
+      "对应验收条件": "例如 AC-01",
+      "测试证据": "覆盖它的测试，例如 tests/test_records.py"
+    },
+    "实施动作记录": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "实施中问题与处理": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "表模式不删减原有校验",
+  "生成文档哈希": "d1536340038f2180bd9898a3ee50a58fa532e57d0ff795bcf28080e04c8e0627",
+  "生成文档路径": "impl/表模式不删减原有校验_实施记录.md",
+  "代码修改计划": [
+    {
+      "文件": "src/workflow_loop/stages/stages.py",
+      "计划修改内容": "表校验通过后仍执行该环节固定检查、不提前 return 跳过（断言五/六）；各环节 code_validate 调 _stage_table_sync 承接文档模式全部校验（3.3 阻断状态有、追踪表、AC 覆盖、机器字段、validate_prepared_tasks、上下游链接、纯人工标注）",
+      "对应验收条件": "AC-01、AC-02"
+    },
+    {
+      "文件": "src/workflow_loop/data/Standardized_Repository/impl/impl.md",
+      "计划修改内容": "impl 规范引用 impl_record 表路径、引导 AI 填表，不手写固定标题和表格（断言十七）",
+      "对应验收条件": "AC-03"
+    }
+  ],
+  "实际代码修改": [
+    {
+      "文件": "src/workflow_loop/stages/stages.py",
+      "代码位置（最终文件）": "L769-L900",
+      "实际修改的代码逻辑": "ImplStage/QaStage code_validate 表校验通过后仍执行该环节固定检查不提前 return；各环节调 _stage_table_sync 承接文档模式全部校验",
+      "数据、状态或输出的实际变化": "表通过不跳过后续检查；3.3 阻断状态有、追踪表、AC 覆盖、机器字段、validate_prepared_tasks、上下游链接、纯人工标注等无一跳过",
+      "修改理由": "断言五/六表通过不提前 return、R15 承接全部校验",
+      "对应验收条件": "AC-01、AC-02",
+      "测试证据": "tests/test_stages.py"
+    },
+    {
+      "文件": "src/workflow_loop/data/Standardized_Repository/impl/impl.md",
+      "代码位置（最终文件）": "L20-L24",
+      "实际修改的代码逻辑": "impl 规范引用 impl_record 表路径、引导填表不手写固定部分",
+      "数据、状态或输出的实际变化": "规范引导 AI 填表，不手写固定标题表格",
+      "修改理由": "断言十七规范模板引导表流程",
+      "对应验收条件": "AC-03",
+      "测试证据": "tests/test_stage_materials.py"
+    },
+    {
+      "文件": "src/workflow_loop/data/Standardized_Repository/acceptance/acceptance.md",
+      "代码位置（最终文件）": "L6-L8",
+      "实际修改的代码逻辑": "acceptance 规范引导按表流程",
+      "数据、状态或输出的实际变化": "规范引导填表",
+      "修改理由": "断言十七",
+      "对应验收条件": "AC-03",
+      "测试证据": "tests/test_stage_materials.py"
+    },
+    {
+      "文件": "src/workflow_loop/data/Standardized_Repository/acceptance/acceptance_plan.md",
+      "代码位置（最终文件）": "L6-L8",
+      "实际修改的代码逻辑": "acceptance_plan 规范引导按表流程",
+      "数据、状态或输出的实际变化": "规范引导填表",
+      "修改理由": "断言十七",
+      "对应验收条件": "AC-03",
+      "测试证据": "tests/test_stage_materials.py"
+    },
+    {
+      "文件": "src/workflow_loop/data/Standardized_Repository/qa/test_plan.md",
+      "代码位置（最终文件）": "L1-L5",
+      "实际修改的代码逻辑": "test_plan 规范引导按表流程",
+      "数据、状态或输出的实际变化": "规范引导填表",
+      "修改理由": "断言十七",
+      "对应验收条件": "AC-03",
+      "测试证据": "tests/test_stage_materials.py"
+    },
+    {
+      "文件": "src/workflow_loop/data/Standardized_Repository/spec/spec.md",
+      "代码位置（最终文件）": "L6-L8",
+      "实际修改的代码逻辑": "spec 规范引导按表流程",
+      "数据、状态或输出的实际变化": "规范引导填表",
+      "修改理由": "断言十七",
+      "对应验收条件": "AC-03",
+      "测试证据": "tests/test_stage_materials.py"
+    }
+  ],
+  "实施动作记录": [],
+  "实施中问题与处理": [],
+  "未完成状态": "状态：无",
+  "填写说明": {
+    "代码修改计划": {
+      "文件": "项目内相对路径，例如 src/cli.py",
+      "计划修改内容": "一句话写清这一处要改什么，例如 修复已完成轮次的 status 提示",
+      "对应验收条件": "本主题的验收条件编号，例如 AC-01、AC-02"
+    },
+    "实际代码修改": {
+      "文件": "实际修改文件的项目内相对路径，例如 src/cli.py",
+      "代码位置（最终文件）": "最终文件的行号范围，例如 L12-L34",
+      "实际修改的代码逻辑": "改了什么逻辑，例如 状态判断改为先看 run_status",
+      "数据、状态或输出的实际变化": "用户可见或程序可见的实际变化",
+      "修改理由": "为什么改，例如 修复提示死路",
+      "对应验收条件": "例如 AC-01",
+      "测试证据": "覆盖它的测试，例如 tests/test_records.py"
+    },
+    "实施动作记录": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "实施中问题与处理": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

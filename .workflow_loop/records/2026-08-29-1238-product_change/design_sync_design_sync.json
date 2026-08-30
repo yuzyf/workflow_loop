@@ -1,0 +1,29 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "",
+  "生成文档哈希": null,
+  "生成文档路径": null,
+  "核对项": [
+    {"核对项": "产品设计与真实代码", "核对结论": "一致：表模式相关产品规则（R11 不退回文档模式、R13 生成路径与哈希、R14 表为唯一输入、R29 凭据绑 records、R32 表覆盖模板全列等）与真实代码一致", "设计影响": "无需修改", "代码影响": "无需修改"},
+    {"核对项": "功能文档与真实代码", "核对结论": "一致：功能_工作记录表与正式文档生成、功能_推进并确认工作环节、功能_实施并保护项目修改等与真实代码一致", "设计影响": "无需修改", "代码影响": "无需修改"},
+    {"核对项": "代码实现", "核对结论": "一致：断言十二（凭据绑 records 内容哈希）、断言十三（门禁从表取）及 18 项修复均已实现并通过 475 测试与 23 主题测试", "设计影响": "无需修改", "代码影响": "无需修改"},
+    {"核对项": "功能到代码映射", "核对结论": "完整：records.py 工作记录表模块（validate_table/generate_document/sync_documents/regenerate_index/delete_workflow_records）、verification._stage_records_content_hash（凭据绑 records）、rollback._planned_code_changes/compute_plan_hash/_acceptance_ids（门禁从表取）、stages._stage_table_sync（不退回文档模式）、topic.current_workflow_topics（从表读主题）等真实符号可定位", "设计影响": "需要修改：架构文档补充 records.py 模块、表模式流程与凭据/门禁从表取的代码映射", "代码影响": "无需修改"},
+    {"核对项": "未处理差异", "核对结论": "暂无", "设计影响": "无需修改", "代码影响": "无需修改"}
+  ],
+  "同步说明": [
+    "本轮架构变化：新增 src/workflow_loop/records.py 工作记录表模块（table_relative_path/create_or_complete_table/load_table/validate_table/generate_document/sync_documents/regenerate_workflow_indexes/generate_test_result_document/sync_stage_tables/delete_workflow_records 等），表模式承接文档模式全部校验且任何情况不退回文档模式。",
+    "凭据绑定：verification._stage_records_content_hash 把当前环节工作记录表内容哈希（剔除生成文档哈希/路径两个程序专用键）加入 _credential_bound_state，门 2 到门 3 之间表内容变化即凭据失效；凭据规则版本升至 4。",
+    "门禁从表取：rollback 的 _planned_code_changes/planned_code_paths/compute_plan_hash/_acceptance_ids 在表模式从 impl_record/acceptance_plan 工作记录表取文件清单、计划哈希和 AC 编号，保留生成 md 回退兼容旧轮次。",
+    "最终同步结论：架构变化；产品设计核对一致；功能文档核对一致；代码实现核对一致；功能到代码映射完整；未处理差异暂无。"
+  ],
+  "填写说明": {
+    "核对项": {
+      "核对项": "例如 产品功能与真实代码映射",
+      "核对结论": "一致或不一致的说明",
+      "设计影响": "需要修改 或 无需修改",
+      "代码影响": "需要修改 或 无需修改"
+    },
+    "同步说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

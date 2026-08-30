@@ -1,0 +1,37 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "实施记录表完整且表驱动",
+  "生成文档哈希": "a11ed8fd995b5558f65b888afdc80722f564d5d44dc3f50a0af4e85508265744",
+  "生成文档路径": "acceptance/实施记录表完整且表驱动_验收结果.md",
+  "验收结果": [
+    {
+      "验收条件编号": "AC-01",
+      "验收结论": "passed",
+      "实际观察结果": "ImplStage 表路径给 topics 赋值，后续 len(topics) 不报 UnboundLocalError",
+      "证据": "机器记录 RUN-20260829T215352+0000-d3c8c708；测试 tests/test_stages.py::test_impl_discussion_requires_every_topic_plan_and_no_unresolved_question"
+    },
+    {
+      "验收条件编号": "AC-02",
+      "验收结论": "passed",
+      "实际观察结果": "impl_record 表栏目含对应计划步骤等全列、设计项与开发检查记录为行清单不留占位",
+      "证据": "机器记录 RUN-20260829T215352+0000-45a53c6a；测试 tests/test_records.py::test_spike_bug_design_tables_generate_docs"
+    },
+    {
+      "验收条件编号": "AC-03",
+      "验收结论": "passed",
+      "实际观察结果": "compute_plan_hash 从 impl_record 表算哈希，不读生成 md",
+      "证据": "机器记录 RUN-20260829T215352+0000-90302500；测试 tests/test_rollback.py::test_planned_code_paths_and_plan_hash_read_from_impl_record_table"
+    }
+  ],
+  "验收说明": [],
+  "填写说明": {
+    "验收结果": {
+      "验收条件编号": "与验收计划表一致，例如 AC-01",
+      "验收结论": "passed、failed 或 blocked",
+      "实际观察结果": "实际看到什么",
+      "证据": "可复核的证据说明"
+    },
+    "验收说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

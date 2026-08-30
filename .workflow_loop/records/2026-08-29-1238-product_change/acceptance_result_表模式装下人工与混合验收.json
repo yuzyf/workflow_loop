@@ -1,0 +1,37 @@
+{
+  "表版本": "1",
+  "工作流编号": "2026-08-29-1238-product_change",
+  "验收主题": "表模式装下人工与混合验收",
+  "生成文档哈希": "e4681d831d144708114a46d3cdd7696e1f109265e921e0b3885471d783f1e84c",
+  "生成文档路径": "acceptance/表模式装下人工与混合验收_验收结果.md",
+  "验收结果": [
+    {
+      "验收条件编号": "AC-01",
+      "验收结论": "passed",
+      "实际观察结果": "测试计划解析测试方式/主验收条件/直接依赖，人工留空不误报",
+      "证据": "机器记录 RUN-20260829T215351+0000-a08a100f；测试 tests/test_test_mapping.py::test_test_plan_parses_method_primary_criterion_and_direct_dependencies"
+    },
+    {
+      "验收条件编号": "AC-02",
+      "验收结论": "passed",
+      "实际观察结果": "验收结果逐条可 passed/failed/blocked、总览据实、人工字段在表表达",
+      "证据": "机器记录 RUN-20260829T215351+0000-d89ad32d；测试 tests/test_records.py::test_acceptance_record_rejects_criterion_not_in_table"
+    },
+    {
+      "验收条件编号": "AC-03",
+      "验收结论": "passed",
+      "实际观察结果": "登记真实 argv 和计划依赖，机器记录编号可选、执行结论据机器记录判定",
+      "证据": "机器记录 RUN-20260829T215351+0000-f6ca7679；测试 tests/test_test_execution.py::test_prepare_registers_real_argv_and_plan_dependencies"
+    }
+  ],
+  "验收说明": [],
+  "填写说明": {
+    "验收结果": {
+      "验收条件编号": "与验收计划表一致，例如 AC-01",
+      "验收结论": "passed、failed 或 blocked",
+      "实际观察结果": "实际看到什么",
+      "证据": "可复核的证据说明"
+    },
+    "验收说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}
