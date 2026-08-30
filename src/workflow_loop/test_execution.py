@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -261,7 +262,7 @@ def prepare_task(
                 criterion_name="",
                 test_id=test_id,
                 test_name=str(row.get("正式目标名称", "")).strip(),
-                test_method="自动化测试",
+                test_method=str(row.get("测试方式", "")).strip() or "自动化测试",
                 test_entry=str(row.get("正式目标名称", "")).strip(),
             )
     else:
@@ -379,7 +380,16 @@ def _validate_prepared_tasks_from_tables(
                 continue
             test_id = str(row.get("测试项编号", "")).strip()
             command = row.get("命令参数数组", [])
+            if isinstance(command, str):
+                # 表单元格按 json_array 类型存 JSON 字符串，先解析再核对
+                try:
+                    command = json.loads(command) if command.strip() else []
+                except ValueError:
+                    command = []
             command = [str(part) for part in command] if isinstance(command, list) else []
+            # 人工验收行没有机器命令，不要求登记执行；执行核对只针对自动化行
+            if not command:
+                continue
             expected[(topic, test_id)] = command
     actual = {
         (topic, test_id): task

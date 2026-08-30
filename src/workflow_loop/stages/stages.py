@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -769,8 +770,9 @@ class ImplStage(StageStrategy):
 
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
         # 第一道门只确认实施计划已经说明预期结果，不检查文件白名单或代码基线。
+        # R11：表启用以表文件存在为准（空表也走表分支报"尚未填写"），不退回文档模式。
         topics = current_workflow_topics(project_root)
-        if topics and records_mod.has_any_table(
+        if topics and records_mod.has_any_table_file(
             project_root,
             workflow_state.workflow_id,
             "impl",
@@ -781,6 +783,10 @@ class ImplStage(StageStrategy):
                 relative = records_mod.table_relative_path(
                     project_root, workflow_state.workflow_id, "impl_record", topic
                 )
+                if not records_mod.table_exists(project_root, relative):
+                    # R19 第⑤条：应启用表的主题缺表时报具体错误，不静默跳过
+                    errors.append(f"{topic} 缺少实施工作记录表（{relative}）")
+                    continue
                 table = records_mod.load_table(os.path.join(project_root, relative))
                 plan_rows = table.get("代码修改计划", [])
                 if not plan_rows:
@@ -1128,8 +1134,9 @@ class QaStage(StageStrategy):
 
     def discussion_validate(self, project_root: str, workflow_state) -> tuple[bool, str]:
         # 开始确认只检查测试范围、计划结构、实施结果和真实入口，不执行测试。
+        # R11：表启用以表文件存在为准，空表也走表分支，不退回文档模式。
         topics = list(workflow_state.topics) or current_workflow_topics(project_root)
-        if topics and records_mod.has_any_table(
+        if topics and records_mod.has_any_table_file(
             project_root,
             workflow_state.workflow_id,
             "qa",
@@ -1197,6 +1204,16 @@ class QaStage(StageStrategy):
                 table = records_mod.load_table(os.path.join(project_root, relative))
                 for row in table.get("测试项", []):
                     test_id = str(row.get("测试项编号", "")).strip()
+                    command = row.get("命令参数数组", [])
+                    if isinstance(command, str):
+                        # 表单元格按 json_array 类型存 JSON 字符串，先解析再核对
+                        try:
+                            command = json.loads(command) if command.strip() else []
+                        except ValueError:
+                            command = []
+                    if not command:
+                        # 人工验收行没有机器命令，交给主题验收，不要求登记执行
+                        continue
                     task = (state.stages.get("qa").test_tasks if state.stages.get("qa") else {}).get(topic, {}).get(test_id)
                     if task is None:
                         errors.append(f"{topic} / {test_id}：已在工作记录表但尚未登记执行任务")
@@ -1354,18 +1371,20 @@ class RegressionTestStage(StageStrategy):
         errors: list[str] = []
         if not topics:
             errors.append("当前工作流还没有确认验收主题")
-        elif records_mod.has_any_table(
+        elif records_mod.has_any_table_file(
             project_root,
             workflow_state.workflow_id,
             "topic_acceptance",
             topics,
         ):
             # 表路径：验收结论以验收工作记录表为准（topic_acceptance 第二道门已核对）
+            # R11：表启用以表文件存在为准；R19 第⑤条：主题缺表报具体错误，不静默跳过
             for topic in topics:
                 relative = records_mod.table_relative_path(
                     project_root, workflow_state.workflow_id, "acceptance_result", topic
                 )
                 if not records_mod.table_exists(project_root, relative):
+                    errors.append(f"{topic} 缺少验收结果工作记录表（{relative}）")
                     continue
                 table = records_mod.load_table(os.path.join(project_root, relative))
                 for row in table.get("验收结果", []):

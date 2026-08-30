@@ -233,6 +233,7 @@ def _test_plan_items_from_table(project_root: str, topic: str) -> list[TestPlanI
         if table_is_filled_marker(table):
             return []
         return None
+    criterion_names = _criterion_names_from_table(project_root, topic)
     items: list[TestPlanItem] = []
     for row in table["测试项"]:
         if not isinstance(row, dict):
@@ -240,6 +241,7 @@ def _test_plan_items_from_table(project_root: str, topic: str) -> list[TestPlanI
         test_id = str(row.get("测试项编号", "")).strip()
         if not test_id:
             continue
+        dependencies = _parse_dependency_ids(row.get("前置测试项"))
         criterion_cell = str(row.get("对应验收条件", "")).strip()
         criterion_ids = re.findall(r"AC-\d+", criterion_cell) or [criterion_cell]
         for criterion_id in criterion_ids:
@@ -247,14 +249,57 @@ def _test_plan_items_from_table(project_root: str, topic: str) -> list[TestPlanI
                 TestPlanItem(
                     topic=topic,
                     criterion_id=criterion_id,
-                    criterion_name="",
+                    criterion_name=criterion_names.get(criterion_id.upper(), ""),
                     test_id=test_id,
-                    test_name=str(row.get("正式目标名称", "")).strip(),
-                    test_method="自动化测试",
+                    test_name=str(row.get("直白测试名称", "")).strip(),
+                    test_method=str(row.get("测试方式", "")).strip() or "自动化测试",
+                    dependencies=tuple(dependencies),
+                    product_entry=str(row.get("产品入口", "")).strip(),
+                    code_entry=str(row.get("代码入口", "")).strip(),
                     test_entry=str(row.get("正式目标名称", "")).strip(),
+                    preparation=str(row.get("准备数据", "")).strip(),
+                    action=str(row.get("执行动作", "")).strip(),
+                    observation=str(row.get("观察位置", "")).strip(),
+                    expected_result=str(row.get("预期结果", "")).strip(),
+                    failure_behavior=str(row.get("不通过表现", "")).strip(),
+                    evidence_requirement=str(row.get("证据要求", "")).strip(),
                 )
             )
     return items
+
+
+def _criterion_names_from_table(project_root: str, topic: str) -> dict[str, str]:
+    """从验收计划工作记录表读取 AC 编号到验收条件名称的映射。"""
+    from . import records as records_mod
+
+    state = load_state(project_root)
+    workflow_id = state.workflow_id if state is not None else ""
+    relative = records_mod.table_relative_path(
+        project_root, workflow_id, "acceptance_plan", topic
+    )
+    if not records_mod.table_exists(project_root, relative):
+        return {}
+    try:
+        table = records_mod.load_table(os.path.join(project_root, relative))
+    except records_mod.RecordsError:
+        return {}
+    names: dict[str, str] = {}
+    for row in table.get("验收条件", []) or []:
+        if not isinstance(row, dict):
+            continue
+        criterion_id = str(row.get("验收条件编号", "")).strip().upper()
+        name = str(row.get("验收条件名称", "")).strip()
+        if criterion_id and name:
+            names[criterion_id] = name
+    return names
+
+
+def _parse_dependency_ids(raw: object) -> list[str]:
+    """把前置测试项单元格解析为当前主题内的直接 TC 编号清单。"""
+    text = str(raw or "").strip()
+    if not text or text in {"无", "暂无"}:
+        return []
+    return [part.strip() for part in re.split(r"[、,，;；\s]+", text) if part.strip()]
 
 
 def parse_test_plan_items(project_root: str, topic: str) -> list[TestPlanItem]:

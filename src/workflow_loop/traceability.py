@@ -597,9 +597,22 @@ def _trace_cell(value: str) -> str:
 
 
 def _source_link(basis: str) -> str:
-    """把 AC 的产品设计依据（如“工作记录表与正式文档生成 R11”）链到功能文档第 4 章。"""
-    name = basis.split(" R")[0].split("（")[0].strip()
-    if not name or name == basis or not name.replace("_", "").isalnum() and not any("\u4e00" <= ch <= "\u9fff" for ch in name):
+    """把 AC 的产品设计依据链到功能文档第 4 章。
+
+    依据已经是 Markdown 链接时原样保留；写的是 ``spec/功能_X.md R18`` 这类
+    文档路径时取 ``X`` 作为功能文档名，不再二次拼 ``功能_`` 前缀（修双重路径）。
+    """
+    if re.search(r"\[[^\]]+\]\([^)]+\)", basis):
+        # 依据已带链接：链接相对验收计划文档（../），追踪表在项目根，改写为 ./ 保持可解析
+        return _trace_cell(re.sub(r"\]\(\.\./", "](./", basis))
+    match = re.search(r"(?:\.\./|(?<![\w/]))spec/功能_(.+?)\.md", basis)
+    name = match.group(1).strip() if match else ""
+    if not name:
+        stripped = basis.split(" R")[0].split("（")[0].split("；")[0].strip()
+        if stripped.startswith("功能_"):
+            stripped = stripped[len("功能_"):]
+        name = re.sub(r"\.md$", "", stripped).strip()
+    if not name:
         return _trace_cell(basis)
     return f"[产品设计：{_trace_cell(name)}](./spec/功能_{_trace_cell(name)}.md#4-规则)"
 

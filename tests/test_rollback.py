@@ -1318,3 +1318,139 @@ def test_planned_code_paths_and_plan_hash_read_from_impl_record_table(tmp_path: 
     table["代码修改计划"][0]["计划修改内容"] = "改了计划"
     table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
     assert rollback.compute_plan_hash(str(root), ["主题A"]) != plan_hash
+
+
+def test_flow_only_marker_excluded_from_planned_paths(tmp_path: Path) -> None:
+    """R19⑥/R33：表模式下"无代码修改（流程动作）"标记行不进计划文件集合，
+    不再按路径解析报 path_invalid；真实行照常收集。"""
+    from workflow_loop import records as records_mod
+    from workflow_loop import state as state_mod
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "src").mkdir(parents=True)
+    _write(root / "src" / "a.py", "x = 1\n")
+    state = state_mod.WorkflowState(
+        workflow_id="wf-table", intent="product_change", topics=["主题A", "主题B"]
+    )
+    state.current_stage = "impl"
+    state.stages["impl"] = state_mod.StageState()
+    state_mod.save_state(str(root), state)
+
+    plan_columns = records_mod.KIND_SCHEMAS["impl_record"]["row_lists"]["代码修改计划"]["columns"]
+    for topic, file_value in (("主题A", "src/a.py"), ("主题B", records_mod.FLOW_ONLY_MARKER)):
+        relative = records_mod.create_or_complete_table(
+            str(root), "wf-table", "impl_record", topic
+        )
+        table_path = root / relative
+        table = json.loads(table_path.read_text(encoding="utf-8"))
+        row = dict.fromkeys(plan_columns, "占位")
+        row.update({
+            "顺序": "1",
+            "文件": file_value,
+            "类、函数或配置项": "流程动作" if file_value == records_mod.FLOW_ONLY_MARKER else "status_hint",
+            "当前逻辑": "已完成轮次仍提示执行 done",
+            "计划修改内容": "在 status_hint 中删除已完成提示分支" if file_value != records_mod.FLOW_ONLY_MARKER else "执行验收重做流程并核对生成文档，本轮不修改代码",
+            "数据、状态或输出变化": "完成输出不再提示旧命令",
+            "对应验收条件": "AC-01",
+            "前置步骤": "无",
+        })
+        row["顺序"] = "1"
+        table["代码修改计划"] = [row]
+        table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    paths = rollback.planned_code_paths(str(root), ["主题A", "主题B"])
+    assert paths == ["src/a.py"]
+
+    changes, diagnostics = rollback._planned_code_changes(str(root), ["主题A", "主题B"])
+    assert diagnostics == []
+    assert {change.topic for change in changes} == {"主题A"}
+
+
+def test_flow_only_topic_skips_recorded_empty_diagnostic(tmp_path: Path) -> None:
+    """R19⑥/R33：纯流程主题的 impl_record 表实际代码修改为空时，
+    三方核对不再报 table_empty，也不把标记当文件记录。
+
+Workflow-Test
+主题：门禁实质内容校验
+测试项：TC-05 纯流程主题不触发实际修改为空错误
+验收条件：AC-04 纯流程主题按标记豁免
+测试方式：自动化测试
+测试层级：单元测试
+产品入口：workflow gate impl 对纯流程主题的三方核对
+测试入口：tests/test_rollback.py::test_flow_only_topic_skips_recorded_empty_diagnostic
+代码入口：src/workflow_loop/rollback.py::_recorded_code_changes_with_diagnostics
+准备数据：构造纯流程标记主题与其实施记录表
+执行动作：执行实际改动核对
+关键断言：实际代码修改为空不产生实施记录清单为空类错误
+预期证据：pytest 结构化 junit 报告与退出码 0
+    """
+    from workflow_loop import records as records_mod
+    from workflow_loop import state as state_mod
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    state = state_mod.WorkflowState(
+        workflow_id="wf-table", intent="product_change", topics=["主题B"]
+    )
+    state.current_stage = "impl"
+    state.stages["impl"] = state_mod.StageState()
+    state_mod.save_state(str(root), state)
+
+    relative = records_mod.create_or_complete_table(
+        str(root), "wf-table", "impl_record", "主题B"
+    )
+    table_path = root / relative
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    plan_columns = records_mod.KIND_SCHEMAS["impl_record"]["row_lists"]["代码修改计划"]["columns"]
+    row = dict.fromkeys(plan_columns, "占位说明内容需要足够长以免误判")
+    row.update({
+        "顺序": "1",
+        "文件": records_mod.FLOW_ONLY_MARKER,
+        "类、函数或配置项": "workflow return 后重走环节",
+        "当前逻辑": "验收文档由旧渲染器生成缺少新栏位",
+        "计划修改内容": "实施完成后执行 return 用 v2 表重新生成验收文档并核对",
+        "数据、状态或输出变化": "验收文档全部由 v2 表重新生成",
+        "对应验收条件": "AC-01",
+        "前置步骤": "无",
+    })
+    table["代码修改计划"] = [row]
+    table["实施依据"] = [
+        {
+            "依据类型": "验收条件",
+            "依据编号": "JU-01",
+            "具体内容": "AC-01：验收文档按 v2 表重新生成并核对",
+            "文档位置": "[AC-01](../acceptance/主题B_验收计划.md#ac-01)",
+        }
+    ]
+    table["预期产品结果"] = ["用户看到按新表重新生成的验收文档，不再残留占位句"]
+    table["未决问题"] = ["暂无"]
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    changes, diagnostics = rollback._recorded_code_changes_with_diagnostics(
+        str(root), ["主题B"]
+    )
+    assert changes == []
+    assert not any(
+        item.check_id == "impl.implementation_record.table_empty"
+        for item in diagnostics
+    ), diagnostics
+    # 混合表（真实计划行 + 标记行）不享受豁免：实际代码修改为空仍报 table_empty
+    real_row = dict(row)
+    real_row.update({
+        "顺序": "2",
+        "文件": "src/a.py",
+        "类、函数或配置项": "status_hint",
+        "计划修改内容": "在 status_hint 中删除已完成轮次仍提示 done 的分支",
+        "当前逻辑": "已完成轮次仍提示执行 done",
+    })
+    real_row["文件"] = "src/a.py"
+    table["代码修改计划"].append(real_row)
+    table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+    _changes, diagnostics = rollback._recorded_code_changes_with_diagnostics(
+        str(root), ["主题B"]
+    )
+    assert any(
+        item.check_id == "impl.implementation_record.table_empty"
+        for item in diagnostics
+    ), diagnostics

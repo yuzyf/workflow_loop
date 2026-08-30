@@ -1331,6 +1331,8 @@ def cmd_start(args) -> None:
             started_at=now,
             spike_assets=inherited_spike_assets,
             light_task=state_mod.LightTaskState(),
+            # R11/R18：开工冻结表格式版本
+            table_format_version=records_mod.TABLE_FORMAT_VERSION,
         )
         state_mod.save_state(project_root, wf_state)
         journal_mod.append_entry(
@@ -1424,6 +1426,8 @@ def cmd_start(args) -> None:
             stages=stages_state,
             spike_assets=inherited_spike_assets,
             clean_confirmed=args.confirm_clean if intent == "from_scratch" else False,
+            # R11/R18：开工冻结表格式版本
+            table_format_version=records_mod.TABLE_FORMAT_VERSION,
         )
 
         # 保存 state.json
@@ -3120,7 +3124,10 @@ def _prepare_tasks_from_tables(project_root: str, wf_state) -> None:
             continue
         try:
             table = records_mod.load_table(os.path.join(project_root, relative))
-            row_problems = records_mod.validate_table("test_plan", table)
+            row_problems = records_mod.validate_table(
+                "test_plan", table,
+                records_mod._workflow_table_version(project_root, wf_state.workflow_id),
+            )
         except records_mod.RecordsError as exc:
             problems.append(str(exc))
             continue
@@ -3130,9 +3137,19 @@ def _prepare_tasks_from_tables(project_root: str, wf_state) -> None:
         for row in table.get("测试项", []):
             test_id = str(row.get("测试项编号", "")).strip()
             raw_command = row.get("命令参数数组", [])
+            if isinstance(raw_command, str):
+                # 表单元格按 json_array 类型存 JSON 字符串，先解析再登记
+                try:
+                    raw_command = json.loads(raw_command) if raw_command.strip() else []
+                except ValueError:
+                    problems.append(f"{topic} {test_id}: 命令参数数组不是合法 JSON 数组")
+                    continue
             command = [str(part) for part in raw_command] if isinstance(raw_command, list) else []
+            # 人工验收行没有机器命令，不由执行器登记，人工部分交给主题验收
+            if not command:
+                continue
             try:
-                timeout = int(row.get("超时秒数", test_execution_mod.DEFAULT_TIMEOUT_SECONDS))
+                timeout = int(row.get("超时秒数") or test_execution_mod.DEFAULT_TIMEOUT_SECONDS)
             except (TypeError, ValueError):
                 problems.append(f"{topic} {test_id}: 超时秒数必须是整数")
                 continue

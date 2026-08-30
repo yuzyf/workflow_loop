@@ -394,6 +394,9 @@ class WorkflowState:
     clean_confirmed: bool = False
     # spike 跳过标记：gate spike --skip 时置 true
     spike_skipped: bool = False
+    # 开工冻结的表格式版本（R11/R18）：本轮建表、校验、生成一律用该版本判定；
+    # 空字符串表示冻结机制上线前的旧轮次，由 records 按磁盘表的版本推断。
+    table_format_version: str = ""
     # PathComposer 在 start 时解析出的完整 stage 名顺序，固定不再变
     # 后续命令（discuss/gate）读这个列表找当前 stage 对应的策略类
     stage_path: list[str] = field(default_factory=list)
@@ -732,6 +735,7 @@ def state_from_dict(data: dict) -> WorkflowState:
         topics=topics,
         clean_confirmed=data.get("clean_confirmed", False),
         spike_skipped=data.get("spike_skipped", False),
+        table_format_version=data.get("table_format_version", ""),
         stage_path=data.get("stage_path", []),
         stage_path_version=data.get("stage_path_version", 0),
         legacy_stage_facts=data.get("legacy_stage_facts", {}),

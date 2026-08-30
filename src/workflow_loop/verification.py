@@ -1660,9 +1660,12 @@ def _table_document_hash(
     kind: str,
     topic_list: list[str],
 ) -> str | None:
-    """表启用时返回工作记录表文件的绑定哈希；未启用返回 None。
+    """表启用时返回工作记录表内容的绑定哈希；未启用返回 None。
 
     表是机器事实的唯一真本：按表生成的正式文档随表确定性再生，不参与失效绑定。
+    绑定只覆盖 AI 填写的内容，剔除程序专用键（生成文档哈希、生成文档路径）——
+    程序重新生成文档或回补下游链接会改动这两个键，但表内容没变，
+    不得因此误判上游变化并连锁失效（R7/R11）。
     """
     from . import records as records_mod
 
@@ -1682,9 +1685,23 @@ def _table_document_hash(
         full = os.path.join(project_root, *relative.split("/"))
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        with open(full, "rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        try:
+            table = records_mod.load_table(full)
+        except records_mod.RecordsError:
+            # 表解析失败时退回原始字节，坏表也必须让失效检查看见变化
+            with open(full, "rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            digest.update(b"\0")
+            continue
+        content = {
+            key: value
+            for key, value in table.items()
+            if key not in (records_mod.DOC_HASH_KEY, records_mod.GENERATED_DOC_PATH_KEY)
+        }
+        digest.update(
+            json.dumps(content, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        )
         digest.update(b"\0")
     return digest.hexdigest()
 

@@ -651,6 +651,11 @@ def _recorded_code_changes_with_diagnostics(
         if table is not None:
             rows = _impl_record_rows(table, "实际代码修改")
             if not rows:
+                # R19⑥：纯流程主题（计划行全部填标记）不要求实际代码修改行；
+                # 判定与混合表拦截由 records.validate_table 在表门禁完成。
+                from . import records as records_mod
+                if records_mod.impl_table_exempts_code_result_lists(table):
+                    continue
                 diagnostics.append(
                     diagnostics_mod.Diagnostic(
                         kind="error",
@@ -1397,6 +1402,11 @@ def _planned_code_changes(
             line = section_start_line + local_line - 1
             raw_path = row["文件"]
             prefix = f"{relative_path}:{line}"
+            # R19⑥：表模式的纯流程标记行不是文件路径，不参与三方文件集合；
+            # 全标记/混合判定由 records.validate_table 负责，这里只跳过合法标记行。
+            from . import records as records_mod
+            if table is not None and records_mod.is_flow_only_plan_row(row):
+                continue
             try:
                 path = _normalized_relative_path(project_root, raw_path)
             except ValueError as exc:
