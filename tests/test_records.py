@@ -943,6 +943,37 @@ def test_test_plan_columns_match_coverage_table() -> None:
     for column in machine:
         assert column in manual_optional or column in definition.get("optional_columns", [])
 
+    table = {
+        "表版本": "2",
+        "工作流编号": "wf-1",
+        "验收主题": "主题A",
+        "测试项": [
+            {
+                "测试项编号": "TC-01",
+                "直白测试名称": "样例用例",
+                "前置测试项": "无",
+                "测试方式": "自动化测试",
+                "产品入口": "样例入口",
+                "代码入口": "src/a.py::func_a",
+                "测试入口": "tests/test_sample.py::test_a",
+                "准备数据": "样例数据",
+                "执行动作": "执行样例动作",
+                "观察位置": "样例观察点",
+                "预期结果": "样例预期",
+                "不通过表现": "样例不通过表现",
+                "证据要求": "junit 报告与退出码 0",
+                "对应验收条件": "AC-01",
+            }
+        ],
+    }
+    document = records_mod.generate_document("test_plan", table, project_root="")
+    doc_header = next(
+        line for line in document.splitlines() if line.startswith("| 验收条件链接")
+    )
+    rendered_columns = [cell.strip() for cell in doc_header.strip().strip("|").split("|")]
+    assert rendered_columns == doc_columns
+    assert "直白测试名称" not in rendered_columns
+
 
 def test_table_mode_items_carry_plan_fields_and_skip_manual_rows(tmp_path: Path) -> None:
     """Workflow-Test
@@ -1081,6 +1112,9 @@ def test_table_mode_items_carry_plan_fields_and_skip_manual_rows(tmp_path: Path)
     )
     ok, detail = test_mapping_mod.validate_workflow_test_markers(str(root), ["主题A"])
     assert ok, detail
+
+    reference_map = records_mod._document_reference_map(str(root), "wf-1", "主题A")
+    assert ("impl_record", "主题A") in reference_map["qa/主题A_测试结果.md"]
 
     loaded = state_mod.load_state(str(root))
     tasks_ok, tasks_detail = test_execution_mod.validate_prepared_tasks(str(root), loaded)

@@ -1630,8 +1630,8 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
     if kind == "test_plan":
         rl = schema["row_lists"]
         columns = rl["测试项"]["columns"]
-        # 模板 13 列覆盖表：验收条件链接 + 测试项 + 其余设计语义列；机器执行列由程序登记时从表读取。
-        header_columns = ["验收条件链接", "测试项", "直白测试名称", "前置测试项", "测试方式",
+        # 模板 13 列覆盖表：验收条件链接 + 测试项（锚点+TC 编号+直白名称）+ 其余设计语义列；机器执行列由程序登记时从表读取。
+        header_columns = ["验收条件链接", "测试项", "前置测试项", "测试方式",
                           "产品入口", "代码入口", "测试入口", "准备数据", "执行动作",
                           "观察位置", "预期结果", "不通过表现", "证据要求"]
         lines += [
@@ -1666,7 +1666,6 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
             view = {
                 "验收条件链接": "、".join(ac_refs),
                 "测试项": f'<a id="{anchor_id}"></a>[{tc_id} {cells.get("直白测试名称", "")}](#{anchor_id})',
-                "直白测试名称": _inline(cells.get("直白测试名称", "")),
                 "前置测试项": _inline(cells.get("前置测试项", "")),
                 "测试方式": _inline(cells.get("测试方式", "")),
                 "产品入口": _inline(cells.get("产品入口", "")),
@@ -2635,6 +2634,11 @@ def sync_stage_tables(
             table[DOC_HASH_KEY] = _file_sha256(doc_full)
             table[GENERATED_DOC_PATH_KEY] = doc_relative
             _atomic_write(os.path.join(project_root, relative), table)
+            if kind == "bug_record":
+                # 模板要求缺陷记录落在 bug/ 目录（缺陷_<标识>.md + 索引.md），按表内容同步生成
+                for bug_rel, bug_content in _bug_defect_documents(table, project_root):
+                    _write_text(os.path.join(project_root, bug_rel), bug_content)
+                    documents.append(bug_rel)
             if not existed_before:
                 # 本环节首次真实生成的下游文档，触发上游引用回补
                 written_docs.add(doc_relative)
@@ -2657,6 +2661,76 @@ def sync_stage_tables(
     return problems, documents
 
 
+def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str]]:
+    """按 bug_record 表生成模板结构的缺陷记录文档与索引条目（bug/ 目录）。"""
+    topic_name = str(table.get("验收主题", "")).strip() or "缺陷记录"
+    workflow_id = str(table.get("工作流编号", ""))
+    file_key = topic_file_key(project_root, topic_name)
+    rows = [row for row in table.get("缺陷信息", []) if isinstance(row, dict)]
+    lines: list[str] = [
+        f"# 【缺陷】{topic_name}",
+        "",
+        f"- 工作流编号：{workflow_id}",
+        "- 复现状态：已复现",
+        "- 根因状态：已确认",
+        f"- 验收主题：{topic_name}",
+        "",
+        "## 1. 缺陷现象",
+        "",
+    ]
+    lines += [f"- {row.get('现象', '')}".rstrip() for row in rows]
+    lines += ["", "## 2. 真实复现条件", ""]
+    lines += [f"- {item}".rstrip() for item in table.get("真实复现条件", []) if str(item).strip()]
+    lines += ["", "## 3. 复现步骤", ""]
+    lines += [f"- {row.get('复现步骤', '')}".rstrip() for row in rows]
+    lines += ["", "## 4. 实际结果", ""]
+    lines += [f"- {row.get('实际结果', '')}".rstrip() for row in rows]
+    lines += ["", "## 5. 期望结果", ""]
+    lines += [f"- {row.get('期望结果', '')}".rstrip() for row in rows]
+    lines += ["", "## 6. 根因", ""]
+    root_cause_labels = ("根因说明：", "根因位置：", "根因证据：")
+    for row in rows:
+        lines += [f"**{row.get('缺陷编号', '')}**", ""]
+        root_cause = str(row.get("根因", "")).strip()
+        segments = re.split(r"(?=根因说明：|根因位置：|根因证据：)", root_cause)
+        for segment in segments:
+            segment = segment.strip()
+            if segment:
+                lines.append(f"- {segment}")
+        lines.append("")
+    lines += ["## 7. 修复仍存在的不确定性", ""]
+    uncertainty = [str(x).strip() for x in table.get("修复仍存在的不确定性", []) if str(x).strip()]
+    lines += [f"- {item}" for item in uncertainty] or ["暂无"]
+    lines += ["", "## 8. 修复与验收结果", ""]
+    lines += [f"- {item}".rstrip() for item in table.get("修复与验收结果", []) if str(item).strip()]
+    defect_rel = f"bug/缺陷_{file_key}.md"
+    documents: list[tuple[str, str]] = [(defect_rel, "\n".join(lines).rstrip() + "\n")]
+
+    index_path = os.path.join(project_root, "bug", "索引.md")
+    first_row = rows[0] if rows else {}
+    index_row = (
+        f"| [{topic_name}](./缺陷_{file_key}.md) "
+        f"| {_inline_cell(first_row.get('现象', ''))} "
+        f"| {_inline_cell(first_row.get('根因', ''))} | 根因已确认 |"
+    )
+    if os.path.isfile(index_path):
+        with open(index_path, "r", encoding="utf-8") as stream:
+            index_content = stream.read()
+        if f"(./缺陷_{file_key}.md)" not in index_content:
+            index_content = index_content.rstrip() + "\n" + index_row + "\n"
+    else:
+        index_content = (
+            "# Bug 索引\n\n"
+            "| Bug 记录 | 现象 | 根因 | 状态 |\n|---|---|---|---|\n" + index_row + "\n"
+        )
+    documents.append(("bug/索引.md", index_content))
+    return documents
+
+
+def _inline_cell(value: object) -> str:
+    return re.sub(r"\s*\r?\n\s*", " ", str(value)).strip()
+
+
 def _document_reference_map(project_root: str, workflow_id: str, topic: str) -> dict[str, list[tuple[str, str]]]:
     """某主题工作流内文档的下游引用登记：生成 X 时需要回补哪些引用了 X 的表文档。
 
@@ -2669,10 +2743,16 @@ def _document_reference_map(project_root: str, workflow_id: str, topic: str) -> 
         for generator_path in (
             f"impl/{file_key}_实施记录.md",
             f"qa/{file_key}_测试计划.md",
-            f"qa/{file_key}_测试结果.md",
             f"acceptance/{file_key}_验收结果.md",
         ):
             refs.setdefault(generator_path, []).append(("acceptance_plan", topic))
+        # 测试结果文档生成后，验收计划与实施记录中的结果引用都要回补为真实链接
+        refs.setdefault(f"qa/{file_key}_测试结果.md", []).append(
+            ("acceptance_plan", topic)
+        )
+        refs.setdefault(f"qa/{file_key}_测试结果.md", []).append(
+            ("impl_record", topic)
+        )
     return refs
 
 
