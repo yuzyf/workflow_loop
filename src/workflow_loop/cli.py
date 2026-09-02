@@ -6312,7 +6312,20 @@ def main() -> None:
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001
-        print(f"错误：命令执行失败（{type(exc).__name__}: {exc}）")
+        # 异常自带结构化诊断时按统一格式逐项展示，不把已经取得的位置、预期、
+        # 实际、证据、影响和改法压成一行文字（R22）。
+        carried = getattr(exc, "diagnostics", None)
+        if carried:
+            print(f"错误：命令执行失败（{type(exc).__name__}）")
+            print(
+                diagnostics_mod.ValidationReport(
+                    stage=getattr(args, "stage", "") or args.command,
+                    gate="命令执行中断",
+                    diagnostics=list(carried),
+                ).render()
+            )
+        else:
+            print(f"错误：命令执行失败（{type(exc).__name__}: {exc}）")
         print("工作流状态没有被本次失败修改；先处理上面指出的原因。")
         print_next_step("由 AI 执行 `workflow status` 查看当前状态；问题无法自行恢复时如实报告用户")
 

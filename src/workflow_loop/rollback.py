@@ -1444,10 +1444,23 @@ def _planned_code_changes(
     return changes, diagnostics
 
 
+class PlannedPathError(ValueError):
+    """计划路径无法解析；携带事实产生处已经构造好的完整诊断。
+
+    继承 ``ValueError`` 使现有按该类型捕获的调用方行为不变；需要把问题写进门禁
+    报告的调用方改从 ``diagnostics`` 取位置、预期、实际、证据、影响和下一动作，
+    不必再从异常文字里反推。
+    """
+
+    def __init__(self, diagnostics: list[diagnostics_mod.Diagnostic]) -> None:
+        super().__init__("\n".join(item.evidence for item in diagnostics))
+        self.diagnostics = list(diagnostics)
+
+
 def planned_code_paths(project_root: str, topics: list[str]) -> list[str]:
     changes, diagnostics = _planned_code_changes(project_root, topics)
     if diagnostics:
-        raise ValueError("\n".join(item.evidence for item in diagnostics))
+        raise PlannedPathError(diagnostics)
     return sorted({change.path for change in changes})
 
 
@@ -1609,6 +1622,13 @@ def validate_actual_implementation_changes_report(
         stage="impl",
         gate="实际改动与实施记录核对",
     )
+    # 计划一侧的路径问题过去只能以异常形式冒出来，既丢掉定位字段，也让同一次
+    # 检查的其它问题无法一起报出。这里和实际改动一侧一样并入本次报告。
+    _planned_changes, plan_diagnostics = _planned_code_changes(
+        project_root,
+        wf_state.topics,
+    )
+    report.extend(plan_diagnostics)
     recorded_changes, record_diagnostics = _recorded_code_changes_with_diagnostics(
         project_root,
         wf_state.topics,
