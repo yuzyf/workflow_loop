@@ -635,21 +635,185 @@ def _current_requirement_text(project_root: str, workflow_id: str) -> str:
     return f"详见 spec/产品总说明.md 第 9 章工作流 {workflow_id} 的修改记录。"
 
 
+def _topic_row_lines(
+    project_root: str,
+    workflow_id: str,
+    topic: str,
+    headers: list[str],
+    spike_initial: str = SPIKE_SKIPPED_TEXT,
+) -> list[str]:
+    """按主题的验收计划记录表生成追踪表行，单元格初值与新建章节完全一致。
+
+    spike_initial 只在补行路径由调用方按当前穿刺事实传入待复核文本；
+    建章节路径保持修复前的固定跳过初值，保证首轮行为逐字节不变。
+    """
+    from . import records as records_mod
+
+    rel = records_mod.table_relative_path(project_root, workflow_id, "acceptance_plan", topic)
+    if not records_mod.table_exists(project_root, rel):
+        return []
+    table = records_mod.load_table(os.path.join(project_root, rel))
+    plan_path = topic_paths(project_root, topic)["acceptance_plan"]
+    plan_link = f"[{_trace_cell(topic)}](./{_trace_cell(plan_path)})"
+    rows: list[str] = []
+    for ac in table.get("验收条件", []):
+        ac_id = str(ac.get("验收条件编号", "")).strip()
+        cond = str(ac.get("通过标准", "")).strip()
+        basis = str(ac.get("产品设计依据", "")).strip()
+        cond_cell = _trace_cell(f"{ac_id}：{cond}") if ac_id and cond else _trace_cell(ac_id or cond)
+        cells_by_header = {
+            "需求来源与设计依据": _source_link(basis),
+            "验收主题": plan_link,
+            "验收条件": cond_cell,
+            "穿刺结论与可复用内容": spike_initial,
+            **_INITIAL_VALUES_BY_HEADER,
+        }
+        try:
+            row = [cells_by_header.get(header, "") for header in headers]
+        except TypeError:
+            return rows
+        rows.append(_format_table_line(row))
+    return rows
+
+
+def _topic_row_lines_with_ids(
+    project_root: str,
+    workflow_id: str,
+    topic: str,
+    headers: list[str],
+    spike_initial: str = SPIKE_SKIPPED_TEXT,
+) -> list[tuple[str, str]]:
+    """与 _topic_row_lines 同行序，返回每条生成行的 AC 编号，供按 AC 粒度补行。"""
+    from . import records as records_mod
+
+    rel = records_mod.table_relative_path(project_root, workflow_id, "acceptance_plan", topic)
+    if not records_mod.table_exists(project_root, rel):
+        return []
+    table = records_mod.load_table(os.path.join(project_root, rel))
+    ac_ids = [
+        str(ac.get("验收条件编号", "")).strip()
+        for ac in table.get("验收条件", [])
+    ]
+    lines = _topic_row_lines(
+        project_root, workflow_id, topic, headers, spike_initial=spike_initial
+    )
+    return list(zip(ac_ids, lines))
+
+
+def _is_table_separator(line: str) -> bool:
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return False
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r"[-:]+", cell) for cell in cells)
+
+
+def _delivery_table_bounds(section: str) -> tuple[int, int, list[str]] | None:
+    """返回章节内最后一个追踪表头块的（表头行下标、数据末尾行下标、表头列）。"""
+    lines = section.splitlines()
+    bounds: tuple[int, int, list[str]] | None = None
+    i = 0
+    while i < len(lines):
+        cells = _split_table_line(lines[i])
+        if cells is not None and any(cells == h for h in SUPPORTED_HEADERS):
+            headers = next(h for h in SUPPORTED_HEADERS if h == cells)
+            j = i + 1
+            end = i
+            if j < len(lines) and _is_table_separator(lines[j]):
+                end = j
+                j += 1
+            while j < len(lines):
+                next_cells = _split_table_line(lines[j])
+                if next_cells is None or len(next_cells) != len(headers):
+                    break
+                end = j
+                j += 1
+            bounds = (i, end, headers)
+            i = j
+            continue
+        i += 1
+    return bounds
+
+
+def _append_missing_topic_rows(
+    project_root: str,
+    relative: str,
+    content: str,
+    heading_match: re.Match[str],
+    workflow_id: str,
+    topics: list[str],
+) -> bool:
+    """章节已存在时为表内无行的主题在交付链路表末尾补行；有追加才写文件。"""
+    section = heading_match.group(1)
+    bounds = _delivery_table_bounds(section)
+    if bounds is None:
+        return False
+    _, last_row_index, headers = bounds
+    # 补行只发生在退回重走路径：本轮已确认跳过穿刺时新行直接写跳过文本；
+    # 尚未重新确认（spike 未跑/未跳过）时写待复核文本，与旧行重置状态一致。
+    spike_initial = SPIKE_RECHECK_TEXT
+    try:
+        state = load_state(project_root)
+        if state is not None and state.workflow_id == workflow_id and state.spike_skipped:
+            spike_initial = SPIKE_SKIPPED_TEXT
+    except Exception:
+        pass
+    appended: list[str] = []
+    for topic in topics:
+        existing_ids = set()
+        for _line_index, cells in _topic_rows(project_root, section, topic):
+            try:
+                criterion_cell = _cell(cells, "验收条件")
+            except ValueError:
+                continue
+            match = _CRITERION_ID_RE.search(criterion_cell)
+            if match:
+                existing_ids.add(match.group(1))
+        # 粒度到验收条件：主题已有旧行时，表里新增的 AC 仍要补行；已有 AC 的行不动。
+        rows = [
+            line
+            for ac_id, line in _topic_row_lines_with_ids(
+                project_root, workflow_id, topic, headers, spike_initial=spike_initial
+            )
+            if ac_id not in existing_ids
+        ]
+        if rows:
+            appended.extend(rows)
+    if not appended:
+        return False
+    section_lines = section.split("\n")
+    merged = (
+        section_lines[: last_row_index + 1]
+        + appended
+        + section_lines[last_row_index + 1 :]
+    )
+    new_section = "\n".join(merged)
+    content = content[: heading_match.start(1)] + new_section + content[heading_match.end(1) :]
+    _write_traceability(project_root, relative, content)
+    return True
+
+
 def ensure_workflow_section(
     project_root: str,
     workflow_id: str,
     topics: list[str],
 ) -> bool:
-    """追踪表没有当前工作流章节时，按模板生成本轮章节并追加（断言三：表流程生成全部文档）。"""
+    """追踪表没有当前工作流章节时按模板生成；章节已存在时为缺行主题补交付行。
+
+    断言三：表流程生成全部文档。退回 acceptance_plan 后向索引追加新主题时，
+    旧章节保留，新主题必须按建章节同一初值规则自动补行，不能要求手工添加。
+    """
     relative = _trace_relative_path(project_root)
     full = os.path.join(project_root, relative)
     if os.path.isfile(full):
         content = Path(full).read_text(encoding="utf-8")
     else:
         content = "# 需求交付追踪表\n"
-    if _workflow_heading_pattern(workflow_id).search(content):
-        return False
-    from . import records as records_mod
+    heading_match = _workflow_heading_pattern(workflow_id).search(content)
+    if heading_match is not None:
+        return _append_missing_topic_rows(
+            project_root, relative, content, heading_match, workflow_id, topics
+        )
     lines = [
         "## " + workflow_id,
         "",
@@ -663,30 +827,7 @@ def ensure_workflow_section(
         "|" + "---|" * len(TRACEABILITY_HEADERS),
     ]
     for topic in topics:
-        rel = records_mod.table_relative_path(project_root, workflow_id, "acceptance_plan", topic)
-        if not records_mod.table_exists(project_root, rel):
-            continue
-        table = records_mod.load_table(os.path.join(project_root, rel))
-        plan_path = topic_paths(project_root, topic)["acceptance_plan"]
-        plan_link = f"[{_trace_cell(topic)}](./{_trace_cell(plan_path)})"
-        for ac in table.get("验收条件", []):
-            ac_id = str(ac.get("验收条件编号", "")).strip()
-            cond = str(ac.get("通过标准", "")).strip()
-            basis = str(ac.get("产品设计依据", "")).strip()
-            cond_cell = _trace_cell(f"{ac_id}：{cond}") if ac_id and cond else _trace_cell(ac_id or cond)
-            row = [
-                _source_link(basis),
-                plan_link,
-                cond_cell,
-                "本轮未执行穿刺，无可复用资产",
-                "待制定",
-                "待制定",
-                "待执行",
-                "待执行",
-                "待执行",
-                "待更新",
-            ]
-            lines.append("| " + " | ".join(row) + " |")
+        lines += _topic_row_lines(project_root, workflow_id, topic, TRACEABILITY_HEADERS)
     lines += [
         "",
         "### 阻塞和退回记录",
@@ -833,6 +974,42 @@ _RETURN_REMOVE_CONCLUSIONS: dict[
         ("验收结果", _OVERALL_ACCEPTANCE_CONCLUSION_RE, "待执行"),
     ),
 }
+
+
+def resolve_spike_recheck_for_skip(project_root: str, workflow_id: str) -> str:
+    """本轮确认跳过穿刺后，把当前工作流待复核的穿刺列回补为跳过文本。
+
+    退回会把穿刺列重置为“待重新确认；已登记资产保留”；第二遍 spike --skip 之后
+    校验要求无资产引用的行精确写跳过文本。    引用了穿刺资产路径的行不动，
+    交给穿刺关联校验处理。"""
+    content, relative_path = _read_traceability(project_root)
+    match = _workflow_heading_pattern(workflow_id).search(content)
+    if match is None:
+        # 本轮追踪表章节尚未创建（新轮次 spike 先于 acceptance_plan），无需回补。
+        return f"{TRACEABILITY_PATH} 尚无当前工作流章节，无需回补穿刺列"
+    section_lines = match.group(1).splitlines(keepends=True)
+    updated_rows = 0
+    for line_index, line in enumerate(section_lines):
+        cells = _split_table_line(line)
+        if cells is None or cells in SUPPORTED_HEADERS:
+            continue
+        try:
+            headers = _headers_for_row(cells)
+        except ValueError:
+            continue
+        if "穿刺结论与可复用内容" not in headers:
+            continue
+        if _cell(cells, "穿刺结论与可复用内容").strip() != SPIKE_RECHECK_TEXT:
+            continue
+        original_line = section_lines[line_index]
+        line_ending = original_line[len(original_line.rstrip("\r\n")) :]
+        _set_cell(cells, "穿刺结论与可复用内容", SPIKE_SKIPPED_TEXT)
+        section_lines[line_index] = _format_table_line(cells) + line_ending
+        updated_rows += 1
+    updated = _replace_workflow_section(content, workflow_id, "".join(section_lines))
+    if updated != content:
+        _write_traceability(project_root, relative_path, updated)
+    return f"已回补 {TRACEABILITY_PATH} 穿刺列 {updated_rows} 行为跳过文本"
 
 
 def reset_topics_for_return(

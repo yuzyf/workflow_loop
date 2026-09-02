@@ -36,7 +36,7 @@ from ..test_mapping import (
     validate_workflow_test_markers,
 )
 from ..topic import (
-    candidate_topics,
+    acceptance_topics,
     current_workflow_topics,
     missing_topic_documents,
     topic_paths,
@@ -80,7 +80,13 @@ def _stage_table_sync(
     返回 None 表示当前环节没有启用表（旧轮次走原有检查）；否则返回
     (通过, 详情)。表有问题时详情带 [格式问题]/[内容问题] 类别标注。
     """
-    topics = list(workflow_state.topics) or current_workflow_topics(project_root)
+    try:
+        topics = acceptance_topics(
+            project_root, workflow_state.intent, stage_name, list(workflow_state.topics)
+        )
+    except ValueError:
+        # 索引格式错误由本阶段校验报告为「验收主题索引」问题；表同步回退 state 主题，不中断。
+        topics = list(workflow_state.topics) or current_workflow_topics(project_root)
     enabled = records_mod.has_any_table_file(project_root, workflow_state.workflow_id, stage_name, topics)
     if not enabled:
         return None
@@ -329,8 +335,9 @@ class AcceptancePlanStage(StageStrategy):
                 if not topics:
                     errors.append("修 bug 的验收主题必须先在缺陷复现阶段确定")
             else:
-                # 当前 Run 已记录主题时复核这些主题；否则从历史中排除旧主题，找本次新增主题。
-                topics = current_workflow_topics(project_root) or candidate_topics(project_root)
+                # 校验集 = state 已记录主题 ∪ 索引中未使用过的新主题（退回后追加主题
+                # 时不能钉死在旧主题）；索引无可用主题时回退 state 主题。
+                topics = acceptance_topics(project_root, state.intent, "acceptance_plan")
         except ValueError as exc:
             topics = []
             topic_index_error = str(exc)

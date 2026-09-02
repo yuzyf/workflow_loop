@@ -111,6 +111,15 @@ _RECORD_PLACEHOLDERS = {
 }
 IMPL_CODE_BASELINE_SNAPSHOT_KEY = "impl_code_baseline_snapshot"
 IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY = "impl_complete_baseline_snapshot"
+# 同一 Run 退回后重进 impl 的入场锚点：首次冻结的基线在项目 meta 中永久保留，
+# 第二次入场继承它，让第一次实施的改动始终处于“入场以来”的观察范围内。
+IMPL_ENTRY_BASELINE_META_KEY = "impl_entry_baseline"
+# 复用既有实现豁免：报错文案承诺“补充复用说明”即可，代码必须真正识别该说明。
+# 要求出现“复用”和“既有实现/既有代码”两类词，避免单字“复用”误豁免无关记录。
+_REUSE_EXEMPTION_RE = re.compile(
+    r"复用[^。\n]{0,20}(既有实现|既有代码|已有实现|已有代码)"
+    r"|(?:既有实现|既有代码|已有实现|已有代码)[^。\n]{0,20}复用"
+)
 IMPL_COMPLETE_INVENTORY_MANIFEST_KEY = "implementation_inventory_before"
 _FINAL_LINE_RANGE_PATTERN = re.compile(
     r"^L(?P<start>[1-9][0-9]*)[ \t]*-[ \t]*L(?P<end>[1-9][0-9]*)$"
@@ -1629,9 +1638,15 @@ def validate_actual_implementation_changes_report(
             impact="后续测试和验收无法判断该文件为何属于本轮实现",
             next_action="在实施结果中补充该文件的实际逻辑、修改理由、AC 编号和测试证据",
         )
-    # 记录中出现了没有真实变化的文件时，只要求说明“复用”或修正文档。
+    # 记录中出现了没有真实变化的文件时，检查是否明确说明这是复用的既有实现；
+    # 只有豁免文本都不出现才报错（BUG-05：报错文案承诺的豁免必须真实生效）。
     for path in sorted(recorded_paths - actual):
         change = next(item for item in recorded_changes if item.path == path)
+        explanation = " ".join(
+            [change.change_reason, change.observable_change, change.logic]
+        )
+        if _REUSE_EXEMPTION_RE.search(explanation):
+            continue
         report.add_error(
             check_id=f"impl.actual_changes.recorded_without_change:{path}",
             location=f"{change.document_path}:{change.line}",

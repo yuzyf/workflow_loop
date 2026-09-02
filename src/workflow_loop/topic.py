@@ -124,6 +124,28 @@ def candidate_topics(project_root: str) -> list[str]:
     ]
 
 
+def acceptance_topics(
+    project_root: str,
+    intent: str,
+    stage: str,
+    state_topics: list[str] | None = None,
+) -> list[str]:
+    """返回当前环节应使用的验收主题集。
+
+    验收计划环节（非修 bug）用 candidate_topics：保留 state 已记录主题，并接纳
+    acceptance/索引.md 中未使用过的新主题——退回后往索引追加主题时校验集不能钉死
+    在旧主题；candidate_topics 为空时回退 state 主题。其他环节主题已在验收计划
+    第三道门写入 state，直接取 state_topics（未传入时读磁盘 state）。
+
+    state_topics 供调用方传入内存中的 wf_state.topics，避免依赖磁盘 state 的写入时机。
+    """
+    if state_topics is None:
+        state_topics = current_workflow_topics(project_root)
+    if stage == "acceptance_plan" and intent != "bugfix":
+        return candidate_topics(project_root) or list(state_topics)
+    return list(state_topics) or current_workflow_topics(project_root)
+
+
 def missing_topic_documents(
     project_root: str,
     kind: str,

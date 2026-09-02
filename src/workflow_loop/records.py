@@ -2085,13 +2085,13 @@ def _topic_relations_rows(project_root: str, workflow_id: str) -> list[dict]:
 
 def ensure_stage_tables(project_root: str, wf_state: state_mod.WorkflowState) -> list[str]:
     """在环节加载材料时为当前环节生成缺失的工作记录表；返回创建的表路径。"""
-    from .topic import current_workflow_topics
+    from .topic import acceptance_topics
 
     stage = wf_state.current_stage
     kinds = stage_table_kinds(stage)
     if not kinds:
         return []
-    topics = current_workflow_topics(project_root)
+    topics = acceptance_topics(project_root, wf_state.intent, stage, list(wf_state.topics))
     created: list[str] = []
     for kind in kinds:
         if kind in {"acceptance_plan", "acceptance_result", "impl_record", "test_plan", "test_result"}:
@@ -2536,13 +2536,19 @@ def sync_stage_tables(
     wf_state: state_mod.WorkflowState,
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """第二道门前同步当前环节的工作记录表：校验、按表生成文档、检测手改。"""
-    from .topic import current_workflow_topics
+    from .topic import acceptance_topics
 
     stage = wf_state.current_stage
     kinds = stage_table_kinds(stage)
     if not kinds:
         return [], []
-    topics = list(wf_state.topics) or current_workflow_topics(project_root)
+    try:
+        topics = acceptance_topics(
+            project_root, wf_state.intent, stage, list(wf_state.topics)
+        )
+    except ValueError:
+        # 索引格式错误由各阶段校验报告；此处回退 state 主题，不中断同步。
+        topics = list(wf_state.topics) or []
     if not topics:
         # 主题尚未写入 state.topics 时，从 topic_relations 工作记录表读（断言三：表为唯一输入，不靠 state.topics）
         _rel = table_relative_path(project_root, wf_state.workflow_id, "topic_relations", "")
@@ -2821,7 +2827,20 @@ def _refresh_stage_document(
     if (current_hash is not None and table.get(DOC_HASH_KEY) is not None
             and current_hash != table.get(DOC_HASH_KEY)):
         return []  # 手改检测已在本环节报告，不重复处理
-    content = generate_document(kind, table, project_root=project_root)
+    # 回补必须与主生成路径使用同一台机器事实来源：test_result 文档渲染依赖
+    # qa 阶段 test_tasks，缺少 wf_state 时空任务集会覆盖已通过结果（BUG-09）。
+    wf_state = None
+    if kind == "test_result":
+        wf_state = state_mod.load_state(project_root)
+        if (
+            wf_state is None
+            or wf_state.workflow_id != workflow_id
+            or wf_state.stages.get("qa") is None
+            or not wf_state.stages["qa"].test_tasks.get(topic)
+        ):
+            # 拿不到当前机器任务集时不重写，保留磁盘上已有的正式结果文档。
+            return []
+    content = generate_document(kind, table, project_root=project_root, wf_state=wf_state)
     if current_hash is not None and content == _read_document(doc_full):
         return [doc_relative]
     _write_text(doc_full, content)

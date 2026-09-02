@@ -1,0 +1,573 @@
+{
+  "表版本": "2",
+  "工作流编号": "2026-09-01-1141-bugfix",
+  "验收主题": "退回验收计划后新增主题能走通门禁与追踪表",
+  "生成文档哈希": "db0af22b1dd342800fc2bd1340f1bf4f308bd93c67546f622a7e74150dd6871a",
+  "生成文档路径": "impl/退回验收计划后新增主题能走通门禁与追踪表_2_实施记录.md",
+  "实施依据": [
+    {
+      "依据类型": "产品设计",
+      "具体内容": "acceptance/索引.md 首次保存本轮主题关系；第二道门要求索引主题与校验集一致；修复缺陷复用复现环节已确认主题",
+      "文档位置": "[制定验收与测试计划 R2/R5/R7](../spec/功能_制定验收与测试计划.md#4-规则)",
+      "依据编号": "SPEC-R2/R5/R7"
+    },
+    {
+      "依据类型": "验收条件",
+      "具体内容": "AC-01 至 AC-05 全部五条",
+      "文档位置": "[验收计划](../acceptance/退回验收计划后新增主题能走通门禁与追踪表_2_验收计划.md#ac-01)",
+      "依据编号": "AC-01..AC-05"
+    },
+    {
+      "依据类型": "现有代码设计",
+      "具体内容": "主题事实源集中在 topic.py：current_workflow_topics 读当前 Run state，candidate_topics 读索引并保留当前主题、接纳未使用过的新主题；本轮只调整调用侧口径与追踪表补行，不改两个函数本身的语义",
+      "文档位置": "[代码架构设计](../spec/代码架构设计.md)",
+      "依据编号": "ARCH-topic"
+    },
+    {
+      "依据类型": "穿刺结论",
+      "具体内容": "本轮未执行穿刺（spike 环节经用户确认跳过），无可复用的穿刺结论或资产；实施反馈全部来自沙盒真实函数链验证与既有测试子集。",
+      "文档位置": "暂无",
+      "依据编号": "无"
+    },
+    {
+      "依据类型": "验收条件",
+      "具体内容": "AC-06 入场基线继承、AC-07 复用豁免生效、AC-08 重走 reproduce 确认幂等",
+      "文档位置": "[验收计划](../acceptance/退回验收计划后新增主题能走通门禁与追踪表_2_验收计划.md#ac-06)",
+      "依据编号": "AC-06..AC-08"
+    },
+    {
+      "依据类型": "验收条件",
+      "具体内容": "AC-09 引用回补不覆盖已生成的机器事实：回补只改链接占位，机器字段与回补前逐项一致；拿不到当前机器任务集时程序不重写该文档",
+      "文档位置": "[验收计划](../acceptance/退回验收计划后新增主题能走通门禁与追踪表_2_验收计划.md#ac-09)",
+      "依据编号": "AC-09"
+    },
+    {
+      "依据类型": "验收条件",
+      "具体内容": "AC-10 登记快照基线用登记范围比较不误报：基线为登记快照时当前值同范围计算；只有基线是入场完整观察快照时才用完整范围比较",
+      "文档位置": "[验收计划](../acceptance/退回验收计划后新增主题能走通门禁与追踪表_2_验收计划.md#ac-10)",
+      "依据编号": "AC-10"
+    }
+  ],
+  "最低实现设计": [
+    {
+      "设计项": "模块与职责",
+      "已确认做法": "topic.py 新增一个薄函数 acceptance_topics(project_root, intent, stage)：验收计划阶段且非修 bug 时返回 candidate_topics or current_workflow_topics，其他情况返回 current_workflow_topics；stages.py、records.py、cli.py 各主题来源调用点统一改为经它取集。不改 candidate_topics/current_workflow_topics 本身。",
+      "选择理由": "同一口径只在一处定义（同一条规则只在一个负责模块中定义），四个调用点复用；修 bug 分支与首轮/复核场景走原集合，行为不变。",
+      "对应验收条件": "AC-01、AC-03、AC-04、AC-05"
+    },
+    {
+      "设计项": "接口与调用顺序",
+      "已确认做法": "acceptance_topics 输入项目根、意图、环节名，返回列表，无副作用；调用顺序不变：门禁第二道门读校验集、ensure_stage_tables 建表、sync_stage_tables 逐主题校验时各调一次。",
+      "选择理由": "纯查询函数，调用方不需要知道合并规则。",
+      "对应验收条件": "AC-01、AC-03"
+    },
+    {
+      "设计项": "数据、状态与副作用",
+      "已确认做法": "traceability.ensure_workflow_section 拆出按主题生成行列表的内部函数；新增分支：当前工作流章节已存在时，用 _topic_rows 找出索引/参数主题中表内无行的主题，按该表现有表头列集和 _INITIAL_VALUES_BY_HEADER 初值在「交付链路」表末尾追加行，有追加返回 True。",
+      "选择理由": "补行与建章节共用同一行生成规则，初值一致；幂等：重复门禁时新主题已有行则不再追加。",
+      "对应验收条件": "AC-02"
+    },
+    {
+      "设计项": "错误与边界",
+      "已确认做法": "章节存在但「交付链路」表缺验收主题列或列数与已知表头不符时不猜测，交由 validate_structure 按既有格式错误报告；无待补主题时返回 False 不改文件；旧主题行与「阻塞和退回记录」小节原样保留。",
+      "选择理由": "边界来自缺陷复现记录的真实场景，不新增产品规则。",
+      "对应验收条件": "AC-02、AC-04"
+    }
+  ],
+  "代码修改计划": [
+    {
+      "顺序": "1",
+      "文件": "src/workflow_loop/topic.py",
+      "类、函数或配置项": "acceptance_topics（新增）",
+      "当前逻辑": "无此函数；candidate_topics 与 current_workflow_topics 已存在",
+      "数据、状态或输出变化": "提供统一主题校验集，无状态写入",
+      "对应验收条件": "AC-01、AC-03、AC-04、AC-05",
+      "前置步骤": "无",
+      "计划修改内容": "新增函数：stage==acceptance_plan 且 intent!=bugfix 时返回 candidate_topics(project_root) or current_workflow_topics(project_root)，否则返回 current_workflow_topics(project_root)"
+    },
+    {
+      "顺序": "2",
+      "文件": "src/workflow_loop/stages/stages.py",
+      "类、函数或配置项": "AcceptancePlanStage.code_validate 第 331-333 行非 bugfix 分支",
+      "当前逻辑": "topics = current_workflow_topics(project_root) or candidate_topics(project_root)：state 已有主题时 or 短路，candidate_topics 永不执行，校验集钉死在旧主题",
+      "数据、状态或输出变化": "退回后索引加新主题时校验集变为 state 主题 ∪ 索引新主题",
+      "对应验收条件": "AC-01、AC-04、AC-05",
+      "前置步骤": "1",
+      "计划修改内容": "改为 topics = acceptance_topics(project_root, state.intent, \"acceptance_plan\")，同步更新第 332 行注释说明合并口径"
+    },
+    {
+      "顺序": "3",
+      "文件": "src/workflow_loop/records.py",
+      "类、函数或配置项": "ensure_stage_tables（约 2086-2104 行）与 sync_stage_tables（约 2539-2556 行）",
+      "当前逻辑": "两处主题集均取 current_workflow_topics（即 state.topics），索引新主题无表可建、无表可校验",
+      "数据、状态或输出变化": "scaffold/discuss/门禁前同步在 acceptance_plan 环节为新主题建表并校验其表",
+      "对应验收条件": "AC-03",
+      "前置步骤": "1",
+      "计划修改内容": "两处改用 acceptance_topics(project_root, wf_state.intent, stage)；ensure_stage_tables 保留 topic_relations 等工作流级表逻辑不变"
+    },
+    {
+      "顺序": "4",
+      "文件": "src/workflow_loop/stages/stages.py",
+      "类、函数或配置项": "_sync_tables_before_gate（第 83 行）",
+      "当前逻辑": "topics = list(workflow_state.topics) or current_workflow_topics(project_root)",
+      "数据、状态或输出变化": "第二道门前表同步与校验集使用同一主题口径",
+      "对应验收条件": "AC-01、AC-03",
+      "前置步骤": "1",
+      "计划修改内容": "改为 acceptance_topics(project_root, workflow_state.intent, stage_name)"
+    },
+    {
+      "顺序": "5",
+      "文件": "src/workflow_loop/cli.py",
+      "类、函数或配置项": "cmd_scaffold 非当前环节分支（约 5139 行）",
+      "当前逻辑": "topics = topic_mod.current_workflow_topics(project_root)",
+      "数据、状态或输出变化": "scaffold --stage acceptance_plan 显式指定时同样为新主题建表",
+      "对应验收条件": "AC-03",
+      "前置步骤": "1",
+      "计划修改内容": "改为 topic_mod.acceptance_topics(project_root, wf_state.intent, stage)，与当前环节分支口径一致"
+    },
+    {
+      "顺序": "6",
+      "文件": "src/workflow_loop/traceability.py",
+      "类、函数或配置项": "ensure_workflow_section（638-702 行）",
+      "当前逻辑": "章节已存在即 return False，不检查主题行是否齐全",
+      "数据、状态或输出变化": "需求交付追踪表当前章节为新主题自动补交付行，幂等",
+      "对应验收条件": "AC-02",
+      "前置步骤": "无",
+      "计划修改内容": "抽出按主题从 acceptance_plan 表生成十列行的内部函数 _trace_topic_lines；章节存在时新增补行分支：对参数 topics 中 _topic_rows 无匹配行的主题生成行，插入该章节「交付链路」表最后一行之后，有追加返回 True，无追加返回 False；建章节路径复用同一行生成函数"
+    },
+    {
+      "顺序": "7",
+      "文件": "src/workflow_loop/rollback.py",
+      "类、函数或配置项": "模块常量区（IMPL_ENTRY_BASELINE_META_KEY、_REUSE_EXEMPTION_RE）与 validate_actual_implementation_changes_report 的 recorded_paths-actual 循环",
+      "当前逻辑": "recorded_without_change 循环对每个「登记但入场观察无变化」的文件无条件 add_error，报错文案承诺的复用说明豁免没有任何代码分支；无入场锚点常量",
+      "数据、状态或输出变化": "门禁报告新增按豁免文本放行的路径；meta 新增 impl_entry_baseline 键",
+      "对应验收条件": "AC-07",
+      "前置步骤": "无",
+      "计划修改内容": "新增 IMPL_ENTRY_BASELINE_META_KEY 常量与 _REUSE_EXEMPTION_RE（要求同句出现「复用」与「既有实现/既有代码/已有实现/已有代码」）；循环中先拼 change_reason+observable_change+logic 匹配豁免，命中则 continue 不报错"
+    },
+    {
+      "顺序": "8",
+      "文件": "src/workflow_loop/cli.py",
+      "类、函数或配置项": "_freeze_impl_code_baseline（第 463 行）",
+      "当前逻辑": "每次调用无条件重算三件套（code_baseline_hash、产品快照、完整快照）并覆盖 meta：同一 Run 退回重进 impl 时，快照 B 包含第一次实施的改动，actual diff 把旧改动判为无变化（57 项误报根源）",
+      "数据、状态或输出变化": "第二次入场读到与首次相同的入场哈希与快照；stage.code_baseline_hash 恢复为首次值",
+      "对应验收条件": "AC-06",
+      "前置步骤": "7",
+      "计划修改内容": "冻结前检查 meta[IMPL_ENTRY_BASELINE_META_KEY]：存在且完整（哈希+两快照均为 dict）时继承写回（不改快照内容），不重算不覆盖；首次冻结时把三件套同一对象写入 entry 锚点（甲方案：入场锚点一经冻结该 Run 不再改写）"
+    },
+    {
+      "顺序": "9",
+      "文件": "src/workflow_loop/cli.py",
+      "类、函数或配置项": "cmd_gate reproduce --confirmed 的 bugfix 分支（约 4645 行）",
+      "当前逻辑": "reproduce 第三道门把 list_reproduce_topics 全量结果直接传 register_topics；同一 Run 退回重走时主题已在 topic_history，抛「主题名称已经使用过」，第二遍确认永远无法通过",
+      "数据、状态或输出变化": "第二遍 reproduce --confirmed 成功推进到 spike；topic_history 不新增重复条目",
+      "对应验收条件": "AC-08",
+      "前置步骤": "无",
+      "计划修改内容": "与验收计划分支同一规则：previous_topics 取 wf_state.topics，new_topics 过滤后才传 register_topics；state.topics 仍赋全量 topics（BUG-06）"
+    },
+    {
+      "顺序": "10",
+      "文件": "src/workflow_loop/traceability.py",
+      "类、函数或配置项": "_append_missing_topic_rows（第 743 行）与 _topic_row_lines 初值（第 638 行），新增 _topic_row_lines_with_ids（第 687 行）",
+      "当前逻辑": "补行以主题为单位（主题有任何行即 continue），退回后为已有主题新增 AC 不补行；补行初值穿刺列固定写跳过文本，退回待复核状态下与校验期望不符",
+      "数据、状态或输出变化": "追踪表按 AC 粒度补行（AC-06~08 三行自动出现）；待复核状态下新行穿刺列写待复核文本",
+      "对应验收条件": "AC-02、AC-06（回归口径下覆盖 BUG-07）",
+      "前置步骤": "无",
+      "计划修改内容": "补行判断改为按 AC 编号集合差（_topic_row_lines_with_ids 返回 (编号,行)）；_topic_row_lines 的穿刺初值按 state.spike_skipped 动态取跳过/待复核文本（BUG-07）"
+    },
+    {
+      "顺序": "11",
+      "文件": "src/workflow_loop/cli.py",
+      "类、函数或配置项": "cmd_gate 的 args.skip 分支（约 3824 行）+ traceability.py 新增 resolve_spike_recheck_for_skip（第 975 行）",
+      "当前逻辑": "spike --skip 只清临时目录并推进阶段；退回把穿刺列重置为「待重新确认；已登记资产保留」后第二遍 skip 不回补，acceptance_plan 第二道门按跳过文本精确校验必失败且用户无路可走",
+      "数据、状态或输出变化": "skip 后当前工作流章节所有待复核穿刺列变为跳过文本；引用资产路径的行不动",
+      "对应验收条件": "AC-01（退回重走全链路）、BUG-08 期望",
+      "前置步骤": "10",
+      "计划修改内容": "新增 resolve_spike_recheck_for_skip：遍历当前工作流章节数据行，穿刺列恰为 SPIKE_RECHECK_TEXT 的行改写为 SPIKE_SKIPPED_TEXT，有变化才落盘；章节不存在时直接返回；cmd_gate skip 分支标记 spike_skipped 后调用它（BUG-08）"
+    },
+    {
+      "顺序": "12",
+      "文件": "src/workflow_loop/records.py",
+      "类、函数或配置项": "_refresh_stage_document（约 2811-2852 行）",
+      "当前逻辑": "引用回补刷新文档时调用 generate_document 不传 wf_state；test_result 渲染分支在 wf_state 为 None 时把机器任务集静默当作空字典，把已按真实机器记录生成的通过结果文档重刷成全部未执行并覆盖表内生成文档哈希（整体验收 460 项报错根源）",
+      "数据、状态或输出变化": "回补后的测试结果文档保留全部机器字段或保持原文件不动",
+      "对应验收条件": "AC-09",
+      "前置步骤": "无",
+      "计划修改内容": "kind==test_result 时先 load_state：state 缺失、workflow_id 不匹配、无 qa 阶段或本主题任务集为空时直接返回不重写；可用时 generate_document 透传 wf_state，与主生成路径同一机器事实来源（BUG-09）"
+    },
+    {
+      "顺序": "13",
+      "文件": "src/workflow_loop/verification.py",
+      "类、函数或配置项": "inspect_invalidation 的 impl 绑定失效分支（约 2598-2620 行）",
+      "当前逻辑": "stored.get(impl_actual) or stored.get(impl) 永远回退拿登记快照当基线，却无条件用 compare_complete_implementation_file_snapshot（完整观察 43 文件范围）计算当前值，登记集变化即幻影报 added 且无法归属主题",
+      "数据、状态或输出变化": "失效报告的核心代码差异只含登记责任范围内真实变化的路径",
+      "对应验收条件": "AC-10",
+      "前置步骤": "无",
+      "计划修改内容": "只有 impl_actual 键真实存在且结构完整时才用完整观察范围比较；基线为登记快照时当前值同样按 compute_registered_file_snapshot 登记范围计算（BUG-10）"
+    }
+  ],
+  "开发检查计划": [
+    {
+      "检查命令或方法": "python -m pytest tests/ -x -q（项目统一测试入口）",
+      "检查范围": "全部既有单元测试，重点 test_stages、test_traceability、test_records、test_topic_relations",
+      "预期观察结果": "全部通过，无因主题口径变化引入的失败"
+    },
+    {
+      "检查命令或方法": "在 /tmp/wf_repro_deadlock 沙盒重跑 workflow gate acceptance_plan --discuss-done 与 workflow gate acceptance_plan，再执行 workflow scaffold",
+      "检查范围": "退回后索引含新主题的真实死锁场景",
+      "预期观察结果": "第二道门通过（校验集 3 主题）；scaffold 输出含新主题表路径；追踪表出现新主题 1 行十列记录"
+    },
+    {
+      "检查命令或方法": "沙盒执行 workflow gate acceptance_plan --confirmed 后读取 state.json",
+      "检查范围": "第三道门主题确定副作用",
+      "预期观察结果": "state.topics 变为 3 个主题，进入 impl，无需外部干预"
+    },
+    {
+      "检查命令或方法": "对照复现前的门禁报错记录（报告哈希 d2148601/06382352 等）复核 test_stages 既有断言场景",
+      "检查范围": "复核旧轮次与首轮场景",
+      "预期观察结果": "既有测试断言的通过/报错结论不变"
+    },
+    {
+      "检查命令或方法": "cd /tmp/wf_repro_impl2 && 用真实函数链跑同一 Run 两次进 impl：第一次 ensure_impl_recovery_baseline 冻结后改文件、第二次（回退 code_baseline_hash 模拟退回）再入场，调 rollback.actual_implementation_paths_since_entry",
+      "检查范围": "cli._freeze_impl_code_baseline 继承分支与 diff 结果",
+      "预期观察结果": "第二次入场哈希与首次一致；第一次实施的改动仍出现在 diff 中"
+    },
+    {
+      "检查命令或方法": "python -c 直接调用 rollback.validate_actual_implementation_changes_report 构造带「复用的是既有实现说明」的登记行（沙盒或内存 state）",
+      "检查范围": "recorded_without_change 豁免分支",
+      "预期观察结果": "带豁免文本不报错、不带文本仍报错"
+    },
+    {
+      "检查命令或方法": "workflow gate reproduce --confirmed（本 Run 第二遍真实执行）与 workflow gate acceptance_plan（第二遍真实执行）",
+      "检查范围": "BUG-06/07/08 修复在真实门禁路径",
+      "预期观察结果": "第二遍 reproduce --confirmed 通过进入 spike；追踪表为 AC-06~08 自动补 3 行且穿刺列为跳过文本"
+    },
+    {
+      "检查命令或方法": "env -u PYTHONPATH -u CODEBUDDY_* .venv/bin/python -m pytest tests/test_return_rework_flow.py（含新增 TC-18/19）",
+      "检查范围": "_refresh_stage_document 两种场景：任务集可用保留机器字段、不可用拒绝重写",
+      "预期观察结果": "19 条全部通过；场景A文档含 RUN-TEST-1 与通过结论、场景B返回空且文件逐字节不变"
+    },
+    {
+      "检查命令或方法": "env -u PYTHONPATH -u CODEBUDDY_* .venv/bin/python -m pytest tests/test_return_rework_flow.py（含 TC-20/21）",
+      "检查范围": "登记集合法扩大后幻影 added 消除、真实修改/新登记变化仍上报",
+      "预期观察结果": "21 条全部通过；失效事实不含未登记既有文件"
+    }
+  ],
+  "实施动作记录": [
+    {
+      "实施顺序": "1",
+      "对应计划步骤": "1",
+      "文件": "src/workflow_loop/topic.py",
+      "代码位置（最终文件）": "L127-L148",
+      "实际执行的动作": "新增 acceptance_topics(project_root, intent, stage, state_topics=None)：acceptance_plan 且非 bugfix 时返回 candidate_topics ∪ state 主题，其余返回 state 主题",
+      "当步反馈": "compileall 通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "2",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/stages/stages.py",
+      "代码位置（最终文件）": "L39-L39",
+      "实际执行的动作": "from ..topic import 增加 acceptance_topics",
+      "当步反馈": "导入解析正常",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "3",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/stages/stages.py",
+      "代码位置（最终文件）": "L338-L340",
+      "实际执行的动作": "AcceptancePlanStage.code_validate 非 bugfix 分支改为 topics = acceptance_topics(...) 并更新注释",
+      "当步反馈": "沙盒死锁复现报错消除",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "4",
+      "对应计划步骤": "3",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L2088-L2551",
+      "实际执行的动作": "ensure_stage_tables 与 sync_stage_tables 主题源改为 acceptance_topics(..., list(wf_state.topics))，sync 处带 ValueError 回退",
+      "当步反馈": "sync_stage_tables 手工调用 problems=[] documents=3",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "5",
+      "对应计划步骤": "4",
+      "文件": "src/workflow_loop/stages/stages.py",
+      "代码位置（最终文件）": "L83-L89",
+      "实际执行的动作": "_stage_table_sync 主题源改 acceptance_topics 并带 ValueError 回退 state 主题",
+      "当步反馈": "本 Run 各遍门禁表同步通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "6",
+      "对应计划步骤": "5",
+      "文件": "src/workflow_loop/cli.py",
+      "代码位置（最终文件）": "L5169-L5169",
+      "实际执行的动作": "cmd_scaffold 非当前环节分支主题源改为 topic_mod.acceptance_topics",
+      "当步反馈": "沙盒 scaffold 为新主题建出 acceptance_plan 表",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "7",
+      "对应计划步骤": "6",
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L796-L843",
+      "实际执行的动作": "ensure_workflow_section 章节存在时转补行分支；抽出建章节与补行共用的行生成",
+      "当步反馈": "沙盒补行从 False 变为自动追加",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "8",
+      "对应计划步骤": "6",
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L703-L793",
+      "实际执行的动作": "新增 _is_table_separator、_delivery_table_bounds、_append_missing_topic_rows（章节存在时补行）",
+      "当步反馈": "本 Run 第一遍真实补 5 行",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "9",
+      "对应计划步骤": "7",
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L114-L122",
+      "实际执行的动作": "新增 IMPL_ENTRY_BASELINE_META_KEY 与 _REUSE_EXEMPTION_RE 常量",
+      "当步反馈": "导入无冲突",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "10",
+      "对应计划步骤": "7",
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L1641-L1649",
+      "实际执行的动作": "recorded_without_change 循环先拼 change_reason+observable_change+logic 匹配豁免文本，命中 continue",
+      "当步反馈": "沙盒：带复用说明豁免、不带仍报错",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "11",
+      "对应计划步骤": "8",
+      "文件": "src/workflow_loop/cli.py",
+      "代码位置（最终文件）": "L464-L500",
+      "实际执行的动作": "_freeze_impl_code_baseline 检查 meta[impl_entry_baseline]，完整则继承三件套不重算；首次冻结写入 entry 锚点",
+      "当步反馈": "沙盒 freeze#2 哈希与首次一致；本 Run 恢复后 diff=6 文件",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "12",
+      "对应计划步骤": "9",
+      "文件": "src/workflow_loop/cli.py",
+      "代码位置（最终文件）": "L4651-L4656",
+      "实际执行的动作": "reproduce --confirmed bugfix 分支过滤 new_topics 后才 register_topics",
+      "当步反馈": "本 Run 第二遍 reproduce --confirmed 真实通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "13",
+      "对应计划步骤": "10",
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L638-L700",
+      "实际执行的动作": "补行判断改为 AC 编号集合差；新增 _topic_row_lines_with_ids；_topic_row_lines 穿刺初值按 spike_skipped 动态取文本",
+      "当步反馈": "本 Run 追踪表自动补 AC-06~08 三行",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "14",
+      "对应计划步骤": "11",
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L979-L1012",
+      "实际执行的动作": "新增 resolve_spike_recheck_for_skip：当前章节待复核穿刺列回补为跳过文本，引用资产行不动，章节缺失直接返回",
+      "当步反馈": "真实 Run 执行返回「已回补 5 行」",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "15",
+      "对应计划步骤": "11",
+      "文件": "src/workflow_loop/cli.py",
+      "代码位置（最终文件）": "L3825-L3832",
+      "实际执行的动作": "cmd_gate spike --skip 分支标记 spike_skipped 后调用回补函数",
+      "当步反馈": "acceptance_plan 第二道门 5 项穿刺报错消除",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "16",
+      "对应计划步骤": "12",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L2830-L2843",
+      "实际执行的动作": "_refresh_stage_document 对 test_result 先加载 state 并校验 workflow_id/qa 阶段/主题任务集，缺失即返回不重写；可用时 generate_document 透传 wf_state",
+      "当步反馈": "冒烟：场景A回补保留机器事实（含 RUN-TEST-1、通过、无未执行），场景B任务集不可用时返回空且文档逐字节不变",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "17",
+      "对应计划步骤": "13",
+      "文件": "src/workflow_loop/verification.py",
+      "代码位置（最终文件）": "L2602-L2620",
+      "实际执行的动作": "比较器改为按基线来源选择：stored[impl_actual] 存在且 files 列表完整才走完整观察范围，否则走登记责任范围",
+      "当步反馈": "失效检查直跑 changed=False 无幻影；pytest 21 条全过",
+      "状态": "已完成"
+    }
+  ],
+  "实际代码修改": [
+    {
+      "文件": "src/workflow_loop/topic.py",
+      "代码位置（最终文件）": "L127-L148",
+      "实际修改的代码逻辑": "新增 acceptance_topics：intent!=bugfix 且 stage==acceptance_plan 时返回 candidate_topics(project_root) or list(state_topics)，否则返回 state 主题；candidate_topics 保留原语义",
+      "数据、状态或输出的实际变化": "门禁与表同步读取的主题集合从「state 或 索引」二选一变为按环节合并",
+      "修改理由": "缺陷1死锁根因：stages.py or 短路使 candidate_topics 永不执行；集中一个函数供四处消费方共用（BUG-01）",
+      "对应验收条件": "AC-01、AC-04、AC-05",
+      "测试证据": "沙盒 /tmp/wf_repro_deadlock 真实 gate acceptance_plan 死锁报错消除；本 Run 第二道门通过"
+    },
+    {
+      "文件": "src/workflow_loop/stages/stages.py",
+      "代码位置（最终文件）": "L39-L340",
+      "实际修改的代码逻辑": "导入 acceptance_topics；AcceptancePlanStage.code_validate 非 bugfix 分支 L338-L340 改用它；_stage_table_sync L83-L89 主题源改 acceptance_topics 带 ValueError 回退",
+      "数据、状态或输出的实际变化": "第二道门校验集与表模式启用判定均覆盖索引新主题",
+      "修改理由": "替换 or 短路调用点并统一表侧主题口径（BUG-01/03）",
+      "对应验收条件": "AC-01、AC-03、AC-04、AC-05",
+      "测试证据": "沙盒复现闭环 + 本 Run 各遍门禁真实通过"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L2088-L2843",
+      "实际修改的代码逻辑": "ensure_stage_tables（L2088/L2094）与 sync_stage_tables（L2539/L2545-L2551）主题源改为 acceptance_topics(..., list(wf_state.topics))，后者带 except ValueError 回退；_refresh_stage_document（L2830-L2843）对 test_result 回补校验 state.workflow_id、qa 阶段与本主题任务集，缺失时返回不重写，可用时透传 wf_state 生成",
+      "修改理由": "缺陷3：表生成主题源钉死 state.topics，索引新主题无表（BUG-03）；BUG-09：回补路径缺 wf_state 抹掉机器事实",
+      "对应验收条件": "AC-03、AC-09",
+      "测试证据": "沙盒 scaffold+gate 验证；本 Run 第二遍 acceptance_plan 表同步真实执行；tests/test_return_rework_flow.py::test_reference_backfill_keeps_machine_facts 与 ::test_reference_backfill_refuses_empty_task_set 真实通过",
+      "数据、状态或输出的实际变化": "新主题的工作记录表被自动创建/同步；回补路径不再用空机器任务集覆盖测试结果文档"
+    },
+    {
+      "文件": "src/workflow_loop/cli.py",
+      "代码位置（最终文件）": "L464-L5174",
+      "实际修改的代码逻辑": "_freeze_impl_code_baseline（L464-L500）：meta[impl_entry_baseline] 三件套完整且锚点 workflow_id 等于当前 Run 时继承写回、首次冻结写入锚点；cmd_gate spike --skip 分支（L3825-L3832）try 包裹调用 resolve_spike_recheck_for_skip；reproduce --confirmed bugfix 分支（L4651-L4656）过滤 new_topics 后注册；cmd_scaffold（L5174）主题源改 acceptance_topics",
+      "数据、状态或输出的实际变化": "第二次入场哈希不变；skip 后穿刺列回补；第二遍确认幂等；scaffold 建全主题表",
+      "修改理由": "缺陷4 基线重冻抹平第一次实施（BUG-04）、BUG-06 全量重注册卡死、BUG-08 skip 不回补、BUG-03 scaffold 缺表",
+      "对应验收条件": "AC-01、AC-03、AC-06、AC-08",
+      "测试证据": "沙盒 freeze#2 继承验证；本 Run 真实 reproduce --confirmed/acceptance_plan 通过；actual diff 检出 6 文件"
+    },
+    {
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L638-L1012",
+      "实际修改的代码逻辑": "_topic_row_lines（L638-L676）按 acceptance_plan 表生成行、穿刺初值由参数 spike_initial 传入（默认跳过文本，与修复前建章节初值逐字节一致）；_topic_row_lines_with_ids（L679-L700）返回 (AC编号,行)；_is_table_separator/_delivery_table_bounds（L703-L735）定位表块；_append_missing_topic_rows（L738-L793）按 AC 编号集合差补行并按 state.spike_skipped 传跳过/待复核初值；ensure_workflow_section（L796-L843）章节存在时转补行；resolve_spike_recheck_for_skip（L979-L1012）回补待复核穿刺列",
+      "数据、状态或输出的实际变化": "追踪表缺主题行或缺 AC 行时自动按初值补行；skip 后穿刺列回到跳过文本",
+      "修改理由": "缺陷2 ensure_workflow_section 不为新主题补行（BUG-02）、BUG-07 主题级补行吞掉新 AC、BUG-08 校验期望文本无生成路径",
+      "对应验收条件": "AC-01、AC-02",
+      "测试证据": "沙盒补行验证；本 Run 真实补 5+3 行且第二道门全过"
+    },
+    {
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L114-L1649",
+      "实际修改的代码逻辑": "常量区（L114-L122）新增 IMPL_ENTRY_BASELINE_META_KEY 与 _REUSE_EXEMPTION_RE（复用与既有/已有实现|代码同句共现）；validate_actual_implementation_changes_report（L1641-L1649）recorded_without_change 循环先按 change_reason+observable_change+logic 匹配豁免，命中 continue",
+      "数据、状态或输出的实际变化": "带复用说明的登记条目不再产生门禁错误；无说明的仍报错",
+      "修改理由": "缺陷5：豁免承诺只写在 next_action 文案、代码无条件 add_error（BUG-05）",
+      "对应验收条件": "AC-07",
+      "测试证据": "沙盒双文件对照：helper 带说明豁免、core 不带说明仍报 impl.actual_changes.recorded_without_change"
+    },
+    {
+      "文件": "src/workflow_loop/verification.py",
+      "代码位置（最终文件）": "L2602-L2620",
+      "实际修改的代码逻辑": "inspect_invalidation impl 绑定失效分支：删除对不存在键 impl_actual 的无条件完整范围比较回退，基线为登记快照时当前值按 compute_registered_file_snapshot 同范围计算",
+      "数据、状态或输出的实际变化": "核心代码差异集合从 43 文件观察范围收窄为登记责任范围；登记外既有文件不再报 added",
+      "修改理由": "BUG-10：登记快照基线配完整观察当前值交叉比较，架构文档一更新即幻影误报并卡死收工",
+      "对应验收条件": "AC-10",
+      "测试证据": "tests/test_return_rework_flow.py::test_invalidation_no_phantom_added_after_registry_expands 与 ::test_invalidation_attributes_newly_registered_change 真实通过；本 Run 修复后 inspect_invalidation 直跑 changed=False"
+    }
+  ],
+  "开发检查记录": [
+    {
+      "检查命令或方法": "沙盒 /tmp/wf_repro_impl2 真实函数链：freeze#1→改 core.py→clear_stage_gates→freeze#2→actual_implementation_paths_since_entry",
+      "检查范围": "cli._freeze_impl_code_baseline 继承分支与 diff",
+      "实际反馈": "freeze#2 哈希与首次一致（True）；diff#2 仍含 ['src/demo/core.py']",
+      "是否需要继续修改": "否"
+    },
+    {
+      "检查命令或方法": "沙盒构造登记：helper.py（无变化+复用既有实现说明）与 core.py（无变化+无说明）同时登记，调 rollback.validate_actual_implementation_changes_report",
+      "检查范围": "recorded_without_change 豁免分支",
+      "实际反馈": "helper 被豁免不报错；core 仍报错 impl.actual_changes.recorded_without_change",
+      "是否需要继续修改": "否"
+    },
+    {
+      "检查命令或方法": "本 Run 真实命令链：workflow gate reproduce --confirmed（第二遍）、workflow gate acceptance_plan（第二遍补 AC-06~08 后）",
+      "检查范围": "BUG-06 幂等注册、BUG-07 AC 粒度补行、BUG-08 穿刺列回补",
+      "实际反馈": "reproduce --confirmed 通过进入 spike；追踪表自动补 3 行且第二道门报的 8 项消除 5 项穿刺类报错（回补函数补齐后全过）",
+      "是否需要继续修改": "否"
+    },
+    {
+      "检查命令或方法": "importlib 全模块导入 + 既有测试子集（阶段/门禁相关 tests）",
+      "检查范围": "改动模块的导入正确性与旧行为回归",
+      "实际反馈": "6 模块导入通过；测试子集结果见 qa 环节正式执行",
+      "是否需要继续修改": "否"
+    }
+  ],
+  "预期产品结果": [
+    "退回 acceptance_plan 后向 acceptance/索引.md 追加未使用过的新主题：第二道门校验集变为「state 已有主题 ∪ 索引新主题」，门禁一次放行；第三道门 --confirmed 无需外部干预把全部主题写入 state。",
+    "同场景下 workflow scaffold 自动为新主题生成 acceptance_plan 记录表；需求交付追踪表按建章节同一初值规则为新主题的每条验收条件补十列行；旧主题已填表和已生成行不被改写。",
+    "首轮（state 空）与复核旧轮次（索引与 state 一致）两种既有场景门禁结论不变。"
+  ],
+  "实施中问题与处理": [
+    "第二遍 reproduce 门禁的产物基线时序问题：清理孤儿缺陷文档动作发生在旧基线采集之后，从 journal 找回第一遍讨论完成时点的真实基线（11:50:51）恢复后门禁按真实变化放行；未修改校验代码绕过。",
+    "repair-links 按表重新生成缺陷文档会冲掉已补锚点：每次表驱动重生成后再跑一次 repair-links 并同步表内生成文档哈希，全部走程序生成路径，未手改正式文档。",
+    "同一 Run 状态数据（被错误覆盖的第二入场基线）按 journal f4328fab 与 manifest implementation_inventory_before 恢复为首次入场快照，恢复说明写入 meta.restored_note。",
+    "impl 确认后的两轮对抗性审查各产生一处防御性微调：cli.py _freeze_impl_code_baseline 继承分支增加锚点 workflow_id 与当前 Run 一致的校验（数据错乱时不继承他人基线）；traceability.py 把补行初值的动态取值从 _topic_row_lines 移到 _append_missing_topic_rows 调用方传参（恢复首轮建章节初值与修复前逐字节一致，退回重走补行仍写待复核文本）。两处均记录入表并随本环节重新确认。"
+  ],
+  "未决问题": [
+    "暂无。索引删除 state 已有主题行时改按索引口径静默通过，已经用户确认（本主题验收范围含此边界）。"
+  ],
+  "未完成状态": "状态：无",
+  "填写说明": {
+    "实施依据": {
+      "依据类型": "产品设计、验收条件、现有代码设计或穿刺结论四选一；与实施记录模板第 1 章表格的“依据类型”列一致",
+      "依据编号": "该行在表内的唯一编号，例如 JU-01；生成文档用于锚点命名",
+      "具体内容": "这条依据规定的产品行为或规则的一句话概括，取自上游文档原文；不写代码实现细节",
+      "文档位置": "指向上游文档具体章节或 AC 锚点的 Markdown 链接，例如 [AC-01](../acceptance/主题_验收计划.md#ac-01)；从本主题实施记录出发可解析；现有代码设计没有时写“暂无现有代码设计”"
+    },
+    "最低实现设计": {
+      "设计项": "模块与职责、接口与调用顺序、数据、状态与副作用、错误与边界之一（与实施模板 2.2 表一致），或本轮新增的设计主题名",
+      "已确认做法": "这个设计项本轮确定怎么做，写到能指导编码；修改产品时只写本轮新增或改变的决定",
+      "选择理由": "为什么这样划分或处理足以完成当前验收条件；不写“最佳实践”这类无依据概括",
+      "对应验收条件": "本设计支撑的 AC 编号，多个用顿号连接；取自本主题验收计划表"
+    },
+    "代码修改计划": {
+      "顺序": "从 1 开始的连续整数，表示计划执行顺序；生成文档 2.3 表按本列排序",
+      "文件": "项目内相对路径，例如 src/workflow_loop/records.py；与计划实际要改的文件一致",
+      "类、函数或配置项": "该文件内要改的具体符号名；新增位置写“新增”；取自真实代码调查，不写模块泛称",
+      "当前逻辑": "该符号现在的实际行为一句话；从零项目写“暂无现有逻辑”；必须看过真实代码后填写",
+      "计划修改内容": "一句话写清这一处增加、删除或改变什么处理逻辑，例如 表启用判定从按已填内容改为按文件存在",
+      "数据、状态或输出变化": "改完后程序或用户可检查到的具体变化，例如 空表主题门禁报“尚未填写”而非跳过",
+      "对应验收条件": "本步骤服务的 AC 编号，多个用顿号连接；取自本主题验收计划表",
+      "前置步骤": "必须先完成的本表其他行顺序号；无依赖写“无”；只写直接前置，不重复间接依赖"
+    },
+    "开发检查计划": {
+      "检查命令或方法": "实施期间将实际运行的命令或检查方法，例如 uv run python -m pytest tests/test_records.py -q；不写正式测试结论",
+      "检查范围": "这条检查覆盖哪些代码行为，例如 表启用判定三处修改后的门禁行为",
+      "预期观察结果": "运行后应当看到什么（退出码、报错文字、生成内容），看到即说明实施按预期生效；与计划修改内容逐项对应"
+    },
+    "实施动作记录": {
+      "实施顺序": "从 1 开始的连续整数，按实际执行先后登记",
+      "对应计划步骤": "本动作对应的代码修改计划“顺序”号；计划外额外文件写“额外”并在修改理由说明",
+      "文件": "实际修改的项目内相对路径",
+      "代码位置（最终文件）": "最终文件行号范围，例如 L12-L34；局部删除写“基线 L18-L31”；整文件删除写“删除整个文件”",
+      "实际执行的动作": "这一步实际增加、删除或修改了什么；写事实，不复制计划文字",
+      "当步反馈": "该步完成后的语法、静态检查或局部运行真实反馈；尚未检查时写“待检查”，不写“正式测试通过”",
+      "状态": "已完成 或 进行中；全部行完成前不能过第二道门"
+    },
+    "实际代码修改": {
+      "文件": "实际修改文件的项目内相对路径；与 git 真实差异一致，覆盖本轮全部差异文件",
+      "代码位置（最终文件）": "最终文件的行号范围，例如 L12-L34；每个不连续差异块都要被至少一行覆盖",
+      "实际修改的代码逻辑": "根据最终代码写清具体判断、调用和错误处理；不能复制“计划修改内容”代替事实",
+      "数据、状态或输出的实际变化": "根据最终代码写可检查的状态、数据、文件或输出变化",
+      "修改理由": "该文件为什么属于本轮已确认行为；计划外文件必须在这里说明理由",
+      "对应验收条件": "例如 AC-01；取自本主题验收计划表，与代码修改计划的 AC 关联一致",
+      "测试证据": "覆盖它的测试或检查，例如 tests/test_records.py::test_xxx 及实际结果；正式测试事实留给 qa 环节"
+    },
+    "开发检查记录": {
+      "检查命令或方法": "与开发检查计划一致的实际命令或方法",
+      "检查范围": "该检查实际覆盖的代码行为",
+      "实际反馈": "真实观察到的输出摘要（退出码、失败项、报错位置）；不写“正常”“符合预期”",
+      "是否需要继续修改": "是 或 否；为“是”时先回到实施动作继续处理，不能直接过门"
+    },
+    "预期产品结果": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "实施中问题与处理": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "未决问题": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

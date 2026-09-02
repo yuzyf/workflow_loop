@@ -461,7 +461,24 @@ def clear_completed_material_recovery(project_root: str, wf_state) -> bool:
 
 
 def _freeze_impl_code_baseline(project_root: str, wf_state, stage_state) -> str:
-    """同时冻结登记产品快照和不受计划范围收窄的完整实施快照。"""
+    """同时冻结登记产品快照和不受计划范围收窄的完整实施快照。
+
+    同一 Run 退回后重进 impl 时继承首次入场基线（meta 的 impl_entry_baseline）：
+    第一次实施产生的改动必须继续出现在「入场以来实际改动」里，不能因为
+    第二次入场重新冻结快照而被语义上抹平（BUG-04）。
+    """
+    entry = wf_state.meta.get(rollback_mod.IMPL_ENTRY_BASELINE_META_KEY)
+    if (
+        isinstance(entry, dict)
+        and entry.get("workflow_id") == wf_state.workflow_id
+        and entry.get("code_baseline_hash")
+        and isinstance(entry.get("product_snapshot"), dict)
+        and isinstance(entry.get("complete_snapshot"), dict)
+    ):
+        stage_state.code_baseline_hash = str(entry["code_baseline_hash"])
+        wf_state.meta[rollback_mod.IMPL_CODE_BASELINE_SNAPSHOT_KEY] = entry["product_snapshot"]
+        wf_state.meta[rollback_mod.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY] = entry["complete_snapshot"]
+        return stage_state.code_baseline_hash
     snapshot = verification_mod.compute_registered_file_snapshot(
         project_root,
         scope="product",
@@ -474,6 +491,12 @@ def _freeze_impl_code_baseline(project_root: str, wf_state, stage_state) -> str:
     stage_state.code_baseline_hash = code_hash
     wf_state.meta[rollback_mod.IMPL_CODE_BASELINE_SNAPSHOT_KEY] = snapshot
     wf_state.meta[rollback_mod.IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY] = complete_snapshot
+    wf_state.meta[rollback_mod.IMPL_ENTRY_BASELINE_META_KEY] = {
+        "code_baseline_hash": code_hash,
+        "product_snapshot": snapshot,
+        "complete_snapshot": complete_snapshot,
+        "workflow_id": wf_state.workflow_id,
+    }
     return code_hash
 
 
@@ -3799,6 +3822,14 @@ def cmd_gate(args) -> None:
 
         # 清理成功后再标记 spike 跳过并推进，失败时始终停留在当前阶段。
         wf_state.spike_skipped = True
+        # 退回重走路径：回溯重置过的穿刺列停在待复核文本，本轮确认跳过后回补为跳过文本。
+        # 首轮 spike 早于 acceptance_plan、追踪表还不存在时静默跳过回补。
+        try:
+            traceability_mod.resolve_spike_recheck_for_skip(
+                project_root, wf_state.workflow_id
+            )
+        except ValueError:
+            pass
         # 绕过三道门（全设 True）
         wf_state.stages[stage_name].gate.discussion_complete = True
         wf_state.stages[stage_name].gate.code_validated = True
@@ -4617,8 +4648,12 @@ def cmd_gate(args) -> None:
             print("错误：缺陷复现记录没有验收主题")
             print_next_step("在 bug/<缺陷记录>.md 中补充验收主题后重新执行缺陷复现门禁")
             return
+        # 同一 Run 退回后重走 reproduce 确认时，本 Run 已登记的主题不再重复注册；
+        # 与验收计划分支同一规则：只登记 state.topics 之外的新主题，跨 Run 重名仍拒绝。
+        previous_topics = set(wf_state.topics or ([wf_state.topic] if wf_state.topic else []))
+        new_topics = [topic for topic in topics if topic not in previous_topics]
         try:
-            project_mod.register_topics(project_root, topics)
+            project_mod.register_topics(project_root, new_topics)
         except ValueError as exc:
             print(f"错误：{exc}")
             print_next_step("修改重复的主题名称后重新执行缺陷复现门禁")
@@ -5136,7 +5171,7 @@ def cmd_scaffold(args) -> None:
         elif stage == wf_state.current_stage:
             created = records_mod.ensure_stage_tables(project_root, wf_state)
         else:
-            topics = topic_mod.current_workflow_topics(project_root)
+            topics = topic_mod.acceptance_topics(project_root, wf_state.intent, stage)
             created = []
             for kind in records_mod.stage_table_kinds(stage):
                 if kind in records_mod.WORKFLOW_LEVEL_KINDS:

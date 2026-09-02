@@ -2600,10 +2600,14 @@ def inspect_invalidation(state: WorkflowState, project_root: str) -> Invalidatio
         current = compute_impl_hash(project_root, topics)
         if current != expected:
             try:
+                # 精确失效按登记责任范围比较：基线是登记快照时，当前值也必须按
+                # 同一登记范围计算。只有轮次确实另存了入场完整观察基线
+                # （impl_actual，当前无写入方）时才用完整范围比较；把登记基线
+                # 和完整观察当前值交叉比较会把登记集合外的既有文件报成新增（BUG-10）。
                 impl_snapshot = stored.get("impl_actual") or stored.get("impl")
-                if isinstance(impl_snapshot, dict) and isinstance(
-                    impl_snapshot.get("files"), list
-                ):
+                if stored.get("impl_actual") is not None and isinstance(
+                    impl_snapshot, dict
+                ) and isinstance(impl_snapshot.get("files"), list):
                     code_differences = compare_complete_implementation_file_snapshot(
                         project_root,
                         impl_snapshot,
