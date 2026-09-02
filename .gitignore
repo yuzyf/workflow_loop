@@ -7,8 +7,10 @@ __pycache__/
 .workflow_loop/journal.jsonl
 .workflow_loop/test_reports/
 
-# spike stage 的 throwaway 代码（不提交）
-.workflow_loop/spike_tmp/
+# spike stage：已登记的可复用资产随仓库保存（需求交付追踪表按路径引用并要求重跑），
+# 只忽略重新运行会再生成的字节码缓存和纯结果输出
+.workflow_loop/spike_tmp/**/__pycache__/
+.workflow_loop/spike_tmp/**/out/
 
 # 项目产物（spec/plan/qa/acceptance/impl/bug/ 由 workflow 管理，按需提交或忽略）
 # 这些目录下是设计文档，通常应该提交到 git

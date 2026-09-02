@@ -82,15 +82,23 @@ def resolve_file_key(
     saved_keys: dict[str, str],
     all_used_keys: set[str],
     display_name: str,
+    keys_by_name_all: dict[str, str] | None = None,
 ) -> str:
     """在一个分类内解析显示名称的文件标识。
 
     saved_keys 是该分类已保存的 显示名称→文件标识 映射；all_used_keys 是全部
-    分类已占用的标识（大小写不敏感比较，避免只在大小写上不同的路径冲突）。
+    分类已占用的标识（大小写不敏感比较，避免只在大小写上不同的路径冲突）；
+    keys_by_name_all 是全部分类的 显示名称→文件标识 映射。
     已保存的名称直接返回旧标识；新名称生成标识，冲突时依次追加 `_2`、`_3`。
+
+    同一显示名称在不同分类表示同一件事（缺陷名与验收主题名相同是常态），
+    因此先在全部分类中按名称复用同一标识；否则第二个分类必然被迫追加 `_2`，
+    使生成路径与登记路径分叉。不同名称之间仍不允许共用标识。
     """
     if display_name in saved_keys:
         return saved_keys[display_name]
+    if keys_by_name_all is not None and display_name in keys_by_name_all:
+        return keys_by_name_all[display_name]
     base_key = make_file_key(display_name)
     used_lower = {key.lower() for key in all_used_keys}
     candidate = base_key
@@ -115,12 +123,13 @@ def register_file_keys(project, category: str, display_names: list[str]) -> dict
         for mapping in project.artifact_file_keys.values()
         for key in mapping.values()
     }
+    keys_by_name_all = _keys_by_name(project)
     reverse = {key: name for name, key in keys.items()}
     added: dict[str, str] = {}
     for display_name in display_names:
         if display_name in keys:
             continue
-        key = resolve_file_key(keys, all_used, display_name)
+        key = resolve_file_key(keys, all_used, display_name, keys_by_name_all)
         owner = reverse.get(key)
         if owner is not None and owner != display_name:
             raise ValueError(
@@ -129,8 +138,19 @@ def register_file_keys(project, category: str, display_names: list[str]) -> dict
         keys[display_name] = key
         reverse[key] = display_name
         all_used.add(key)
+        keys_by_name_all[display_name] = key
         added[display_name] = key
     return added
+
+
+def _keys_by_name(project) -> dict[str, str]:
+    """全部分类的 显示名称→文件标识 映射，供同名跨分类复用同一标识。"""
+    if project is None:
+        return {}
+    merged: dict[str, str] = {}
+    for mapping in project.artifact_file_keys.values():
+        merged.update(mapping)
+    return merged
 
 
 def lookup_file_key(project, category: str, display_name: str) -> str | None:
@@ -152,7 +172,7 @@ def resolve_key_for(project, category: str, display_name: str) -> str:
         if project is not None
         else set()
     )
-    return resolve_file_key(saved, all_used, display_name)
+    return resolve_file_key(saved, all_used, display_name, _keys_by_name(project))
 
 
 # ─── 按文件标识生成动态正式产物路径 ───

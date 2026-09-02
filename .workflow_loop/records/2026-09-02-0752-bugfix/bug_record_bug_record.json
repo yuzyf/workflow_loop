@@ -1,0 +1,156 @@
+{
+  "表版本": "2",
+  "工作流编号": "2026-09-02-0752-bugfix",
+  "验收主题": "退回重走后门禁不再无故反复失败",
+  "生成文档哈希": "f6601f8a88c5470eb509353cee391af342205d051ad7af8f8a872ee6c83a4055",
+  "生成文档路径": ".workflow_loop/records/2026-09-02-0752-bugfix/bug_record_bug_record.md",
+  "缺陷信息": [
+    {
+      "缺陷编号": "BUG-01",
+      "现象": "第二道门第一次报一屏“目标不是现有普通文件”的链接错误；不修改任何文件原样再执行同一条门禁命令，第二次直接通过。历史 journal 中只含链接错误的 22 次失败里有 18 次紧接着被原样重跑通过，多数发生在同一分钟内。",
+      "复现步骤": "在隔离项目建 impl 环节状态并填好实施记录工作记录表；先创建 qa/样例主题甲_测试结果.md 后调用 records.sync_stage_tables 生成实施记录文档，此时文档写成指向测试结果的真实链接；删除该测试结果文件；连续两次调用 markdown_links.validate_managed_markdown_links，中间只插入一次 records.sync_stage_tables（模拟第二道门内部 code_validate 才做的按表生成）",
+      "实际结果": "第一次链接检查返回 False，报 impl/样例主题甲_实施记录.md:79 链接 ../qa/样例主题甲_测试结果.md 目标不是现有普通文件；插入一次按表生成后文档改回“（待生成）”，第二次链接检查返回 True。两次之间没有修改任何输入。",
+      "期望结果": "第二道门先按当前工作记录表重新生成正式文档，再执行包括链接在内的固定检查；同一状态下重复执行同一条门禁命令返回相同的问题清单和相同的报告哈希。",
+      "根因": "根因说明：第二道门的执行顺序与产品规则相反。cli.py::validate_stage_output 先调用 markdown_links.validate_managed_markdown_links 做链接检查，之后才调用 stage.code_validate，而按当前表重新生成正式文档发生在 code_validate 内部的 stages.py::_stage_table_sync 里。于是第一次执行检查的是尚未重新生成的旧文档，这一次执行顺带把文档生成好，第二次执行才检查到新文档。根因位置：src/workflow_loop/cli.py::validate_stage_output 第 2146 至 2165 行，链接检查调用在 stage.code_validate 调用之前。根因证据：沙盒真实运行显示同一输入下两次链接检查结论从 False 翻转为 True；仓库 journal.jsonl 统计到 18 次“只有链接错误的失败紧接着被原样重跑通过”。"
+    },
+    {
+      "缺陷编号": "BUG-02",
+      "现象": "执行 workflow return 退回后，程序删除本主题的测试结果和验收结果文档，但此前由程序自己写进缺陷记录、实施记录和索引的指向这两个文件的链接不回退，下一次门禁把它们全部报成坏链接。历史 journal 中“目标不是现有普通文件”累计 215 条。",
+      "复现步骤": "在隔离项目创建测试结果、验收结果和实施记录三个文档与缺陷记录、缺陷索引；调用 bug_record.record_topic_acceptance_pass 让程序把三条真实链接写进缺陷记录第 8 节；调用 verification._remove_topic_result_files 删除测试结果和验收结果（退回命令删除的正是这两类文件）；再调用 markdown_links.validate_managed_markdown_links",
+      "实际结果": "缺陷记录第 15、16 行仍保留 ../qa/样例主题甲_测试结果.md 和 ../acceptance/样例主题甲_验收结果.md 两条链接；链接检查返回 False，逐条报“目标不是现有普通文件”。程序给出的下一步命令是 workflow repair-links，而该命令只修历史标题定位写法，修不了目标文件不存在，AI 执行它没有任何效果。",
+      "期望结果": "退回删除结果文件的同一次动作里，把引用这些文件的上游文档和索引按“文件不存在就写普通路径加（待生成）”重新生成，退回后第一次门禁不出现由程序自己制造的坏链接。",
+      "根因": "根因说明：删除结果文件与回补引用分别写在两条互不调用的路径上。删除发生在 verification.py::_remove_topic_result_files（第 3055 至 3065 行）、verification.py 第 2003 至 2008 行和 cli.py::_clear_topic_test_state 第 3515 至 3526 行；把引用改回“（待生成）”和重写索引只发生在 records.py::sync_stage_tables 内部的 regenerate_workflow_indexes 与 _backfill_referencing_documents（第 2663 至 2678 行），而 cli.py::cmd_return 与 verification.py::apply_invalidation 都不调用 sync_stage_tables。根因位置：src/workflow_loop/cli.py::cmd_return 第 3694 至 3706 行的清理段落缺少引用回补调用；src/workflow_loop/verification.py::apply_invalidation 同理。根因证据：沙盒真实运行显示删除后缺陷记录链接原样保留、链接检查失败；本仓库 2026-09-02 15:14 第四次退回后缺陷复现第一次门禁的前两条错误就是缺陷记录第 134、135 行指向刚被删除的测试结果和验收结果。"
+    },
+    {
+      "缺陷编号": "BUG-03",
+      "现象": "缺陷复现、产品设计、最终代码设计同步和项目设计初始化四个环节的第二道门要求正式文档与执行讨论完成那一刻不同。正式文档现在由程序按工作记录表生成，表没改时生成结果一字不差，门禁必然失败，AI 只能做一次无意义修改才能过。历史 journal 中此项失败：缺陷复现 12 次、最终代码设计同步 10 次、产品设计 5 次。",
+      "复现步骤": "在隔离项目建缺陷复现环节状态；写入 bug/索引.md 与 bug/缺陷_样例.md；用 verification.compute_file_hashes 把这两个文件的当前哈希写进 stage_state.artifact_baseline_hashes 并设置 artifact_baseline_captured_at（等价于执行 workflow gate reproduce --discuss-done）；不修改任何文件，直接调用 artifact_validation.changed_stage_paths",
+      "实际结果": "changed_stage_paths 返回 False，输出“相关文件与讨论完成时相同，不能证明本阶段已经生成或修改产物”，并连带把依赖它的缺陷记录内容检查标为未检查。",
+      "期望结果": "启用工作记录表的环节按表内容判断本环节是否有实质产出；表内容与讨论完成时相同、正式文档由程序生成结果相同时不判失败，不要求 AI 制造无意义的文件变化。",
+      "根因": "根因说明：该检查比较的是正式文档的字节哈希，而不是工作记录表内容。表模式下正式文档是程序按表的确定性输出，表不变则文档字节必然不变，于是“内容没变”被判成“本阶段没有产出”。根因位置：src/workflow_loop/artifact_validation.py::changed_stage_paths 第 621 至 631 行按 compute_file_hashes 比较文档哈希并在无差异时返回失败；调用方为 stages.py 的 SpecStage、ProjectDesignInitStage、UpdateCodeDesignStage 和 ReproduceStage 的 code_validate。根因证据：沙盒真实运行返回上述失败文字；本仓库 journal.jsonl 中该失败文字在三个环节共出现 27 次，其中 2026-09-02 当天缺陷复现连挂 10 次。"
+    },
+    {
+      "缺陷编号": "BUG-04",
+      "现象": "缺陷复现环节除 BUG-03 外还额外要求 bug/索引.md 必须出现在本阶段变化清单里。索引由程序按表生成、内容已经正确且不需要再改时，门禁仍报“bug/索引.md 没有在本阶段更新”。",
+      "复现步骤": "在隔离项目写入内容正确且已链接本次缺陷记录的 bug/索引.md 与结构完整的 bug/缺陷_样例.md；调用 artifact_validation.validate_reproduce_documents，changed_paths 只传缺陷记录本身（索引内容正确因而未变化）",
+      "实际结果": "返回 False，第一条失败为“1. bug/索引.md 没有在本阶段更新”。索引实际已经链接本次缺陷记录，内容没有任何问题。",
+      "期望结果": "只检查 bug/索引.md 是否存在并链接本次缺陷记录；内容已经正确时不因为“这一轮没有改过它”判失败。",
+      "根因": "根因说明：校验把“索引出现在本阶段变化清单”当成必要条件，与“索引内容是否正确”混为一谈。根因位置：src/workflow_loop/artifact_validation.py::validate_reproduce_documents 第 1416 至 1417 行，index_path not in normalized_changed 即追加失败。根因证据：沙盒真实运行返回该失败文字；本仓库 journal.jsonl 中 2026-09-02 09:37 至 15:59 期间该文字出现 5 次，另有 4 次“bug/索引.md 没有链接本次缺陷记录”由 BUG-05 的文件名不一致引起。"
+    },
+    {
+      "缺陷编号": "BUG-05",
+      "现象": "修缺陷轮次里缺陷名与验收主题同名时，程序生成的缺陷记录文件名和程序登记的缺陷记录文件名不是同一个，索引与生成文件对不上，门禁报“bug/索引.md 没有链接本次缺陷记录”并给出带 _2 后缀的文件名。",
+      "复现步骤": "在隔离项目对同一个名称先后调用 artifact_paths.register_file_keys 登记 topic 分类和 bug 分类；再用同名的 bug_record 表调用 records._bug_defect_documents 取得生成路径，与 artifact_paths.bug_doc(bug 标识) 取得的登记路径比较",
+      "实际结果": "同一个名称在 topic 分类得到标识 样例主题甲，在 bug 分类得到 样例主题甲_2；生成器写出 bug/缺陷_样例主题甲.md，登记侧要求 bug/缺陷_样例主题甲_2.md，两者不一致。本仓库 project.json 中三轮 bugfix 的主题标识都带 _2 后缀。",
+      "期望结果": "缺陷记录的生成路径与登记路径使用同一个文件标识；主题与缺陷同名时不产生 _2 后缀，也不产生指向不存在文件的索引行。",
+      "根因": "根因说明：文件标识在四个分类间全局唯一，同一名称第二次登记必然追加 _2；而缺陷记录的生成路径取的是 topic 分类标识，登记路径取的是 bug 分类标识，两条路径必然分叉。根因位置：src/workflow_loop/records.py::_bug_defect_documents 第 2686 行用 topic_file_key 取主题标识拼缺陷记录路径；src/workflow_loop/cli.py::_register_stage_file_keys 第 1798 至 1831 行按 bug 分类登记并要求实际路径等于 artifact_paths.bug_doc(bug 标识)；唯一性由 src/workflow_loop/artifact_paths.py::register_file_keys 第 113 至 117 行跨分类合并 all_used 造成。根因证据：沙盒真实运行输出两个不同标识与两条不同路径；本仓库 journal.jsonl 第 7300 行显示本缺陷首次登记为无后缀标识，退回缺陷复现重新生成后变为 _2；因此产生 4 次“没有链接本次缺陷记录”失败。"
+    },
+    {
+      "缺陷编号": "BUG-06",
+      "现象": "程序生成的缺陷记录没有章节锚点，上游验收计划链接 ...#6-根因 时门禁报“缺少完全一致的显式 HTML id”；AI 手工把锚点补进缺陷记录后，下一次进入缺陷复现环节生成又把锚点整份抹掉，同一个错误反复出现。历史 journal 中该错误出现 4 次，“缺少完全一致的显式 HTML id”累计 72 条。",
+      "复现步骤": "用 bug_record 表调用 records._bug_defect_documents 取得生成内容，检查是否含 id 值为 6-根因 的 HTML 锚点标记；把该锚点手工写进磁盘文件后再次调用同一函数，比较新内容",
+      "实际结果": "生成内容不含任何章节锚点；手工补锚点后再次生成的内容仍不含锚点，且该函数不比对磁盘现有内容、没有手改检测，写回即覆盖手工锚点。",
+      "期望结果": "缺陷记录八个固定章节由程序产出稳定锚点，上游可以直接链接到具体章节；生成前比对磁盘内容，检出手改时报告并保留，不悄悄覆盖。",
+      "根因": "根因说明：缺陷记录走的是与其它环节文档不同的一条生成路径，既没有加锚点，也没有接入手改检测。其它环节文档在 sync_stage_tables 主循环里先比对 生成文档哈希 再决定是否写入，而缺陷记录由 _bug_defect_documents 返回内容后被 sync_stage_tables 第 2655 至 2659 行无条件写盘。根因位置：src/workflow_loop/records.py::_bug_defect_documents 第 2696 至 2723 行逐节写出八个标题但不产出 HTML 锚点标记；src/workflow_loop/records.py::sync_stage_tables 第 2655 至 2659 行对该返回值直接 _write_text。根因证据：沙盒真实运行显示两次生成内容均无锚点、手工锚点被覆盖；本仓库 bug/缺陷_退回验收计划后新增主题能走通门禁与追踪表_2.md 在 2026-09-02 14:58 存在手工补的第 66 行锚点，15:15 退回重生成后该锚点消失。"
+    },
+    {
+      "缺陷编号": "BUG-07",
+      "现象": "某个主题的工作记录表缺失、为空或解析失败时，测试验证环节改回旧的正式文档逐字检查方式，对程序自己生成的文档报“缺少章节”“缺少上下游链接”等大批错误。",
+      "复现步骤": "在隔离项目建测试验证环节状态并把 state.table_format_version 冻结为 2（表示本轮启用表模式），两个主题中只为其中一个创建测试计划表，调用 artifact_validation._table_mode_qa；再把该表文件写成非法 JSON 后重复调用",
+      "实际结果": "state 已冻结表版本 2，但只有一个主题建表时 _table_mode_qa 返回 False；表文件解析失败时同样返回 False。返回 False 即改用旧文档检查方式。",
+      "期望结果": "是否走表模式只看开工时在 state 冻结的标记；表未填、为空、缺失、栏目不匹配或解析失败时报具体错误并停留当前环节，任何情况都不退回文档模式。",
+      "根因": "根因说明：模式判定读的是磁盘上表文件的存在性与内容，而不是开工时冻结在 state 的标记。state.table_format_version 只在 records._workflow_table_version 里用于校验版本号，没有参与模式判定。根因位置：src/workflow_loop/artifact_validation.py::_table_mode_qa 第 1876 至 1894 行三处 return False；src/workflow_loop/records.py::has_any_table_file 第 2046 至 2057 行按文件存在性判定，被 stages.py::_stage_table_sync 第 90 至 92 行和 records.py::sync_stage_tables 第 2562 至 2566 行用作模式开关。根因证据：沙盒真实运行三次调用均返回 False；本仓库 journal.jsonl 中整体验收环节历史累计 1613 条阶段产出诊断，多数为文档模式对程序生成文档报出的章节与链接缺失。"
+    },
+    {
+      "缺陷编号": "BUG-08",
+      "现象": "门禁校验的 journal 记录没有写工作流编号，无法按轮次统计各类失败占比，产品要求的失败分类统计做不到。",
+      "复现步骤": "读取本仓库 .workflow_loop/journal.jsonl，筛出 action 为“门禁代码校验”的记录，统计其中带 workflow_id 字段的条数",
+      "实际结果": "877 条门禁校验记录中只有 2 条带 workflow_id，其余全部缺失；失败记录虽然带 categories 分类字段（100 条），但无法归属到具体轮次。",
+      "期望结果": "门禁校验记录与同文件其它记录一样写入 workflow_id，使失败分类可以按轮次统计和比较。",
+      "根因": "根因说明：写日志时漏传 workflow_id 关键字参数。同一文件里“门禁讨论完毕”“流程退回”等记录都显式传了该参数，唯独门禁校验的两处调用没有传。根因位置：src/workflow_loop/cli.py 第 4449 至 4457 行（失败分支）与第 4528 至 4537 行（通过分支）的 journal_mod.append_entry 调用缺少 workflow_id 参数。根因证据：真实统计输出 877 条中仅 2 条带该字段；对照第 4244 行“门禁讨论完毕”调用同样缺失、而第 3707 至 3719 行“流程退回”调用带该字段。"
+    },
+    {
+      "缺陷编号": "BUG-09",
+      "现象": "安装和更新写入项目的 AGENTS.md 与本仓库自己的 AGENTS.md 内容不同：本仓库版有“工作记录表”一节而安装版没有，安装版有“无需开发任务”一节而本仓库版没有。在本仓库执行一次 workflow update 会用安装版整份覆盖，工作记录表这一节的约定丢失。",
+      "复现步骤": "读取本仓库 AGENTS.md 与 workflow_loop.installer.AGENTS_MD_CONTENT 两份内容并逐节比较",
+      "实际结果": "两份内容不同；仓库版含“## 工作记录表”而安装版不含，安装版含“## 无需开发任务”而仓库版不含。更新逻辑对 AGENTS.md 是整份覆盖，不做合并。",
+      "期望结果": "安装写入的契约正文与本仓库自己使用的契约保持同一份内容，更新覆盖后不丢失任何一节约定。",
+      "根因": "根因说明：本仓库的 AGENTS.md 被单独手工编辑过，没有同步回安装器常量，二者从此各自演化。根因位置：src/workflow_loop/installer.py::AGENTS_MD_CONTENT 第 31 至 66 行与仓库根 AGENTS.md 第 1 至 17 行内容不同；覆盖动作在 installer.py 第 697 行按该常量整份写入。根因证据：真实比较输出“两份是否相同：False”和两节各自缺失的判定结果。"
+    },
+    {
+      "缺陷编号": "BUG-10",
+      "现象": "需求交付追踪表用 19 行链接 .workflow_loop/spike_tmp/ 下的可复用穿刺资产，并要求后续复用时重新运行；但 .gitignore 忽略了整个 spike_tmp 目录，换电脑克隆仓库后这些资产全部不存在。",
+      "复现步骤": "在本仓库执行 git check-ignore -v .workflow_loop/spike_tmp/x/y.py；统计 需求交付追踪表.md 中引用 spike_tmp 的行数",
+      "实际结果": "git check-ignore 命中 .gitignore 第 11 行规则 .workflow_loop/spike_tmp/；需求交付追踪表中有 19 行引用该目录下的资产路径和运行方法。该行注释写的是“spike stage 的 throwaway 代码（不提交）”。",
+      "期望结果": "已登记的可复用穿刺资产随仓库一起保存；未登记的临时输出仍可忽略。",
+      "根因": "根因说明：忽略规则是按“穿刺代码用完即弃”的旧约定写的，后来产品改为“已登记资产永久保留并进入追踪表”，忽略规则没有跟着改。根因位置：仓库根 .gitignore 第 10 至 11 行。根因证据：git check-ignore 真实输出命中该行；追踪表 19 行引用该目录。"
+    },
+    {
+      "缺陷编号": "BUG-11",
+      "现象": "包内规范源文件与项目运行副本内容不同：项目副本的工作流生命周期规范多一个 id 值为 文档链接要求 的 HTML 锚点标记，而包内源文件没有；测试验证规范的两份也不同。已有验收计划链接该锚点，一次 workflow update 覆盖后该链接会失效并使链接门禁失败。",
+      "复现步骤": "用 filecmp.cmp 逐文件比较 src/workflow_loop/data/Standardized_Repository 与 .workflow_loop/Standardized_Repository 下的同名文件；检查两份 global/workflow_lifecycle.md 是否含 id 值为 文档链接要求 的 HTML 锚点标记",
+      "实际结果": "global/workflow_lifecycle.md 与 qa/test_plan.md 两组内容均不同；项目副本含该锚点、包内源文件不含。acceptance/生成表格列数一致且结果引用全环节回补_2_验收计划.md 第 51 行链接了该锚点。",
+      "期望结果": "包内源文件与项目运行副本保持一致；被正式文档链接的锚点存在于包内源文件，更新覆盖后链接仍然可用。",
+      "根因": "根因说明：上一轮为修链接直接改了项目运行副本，没有同步改包内源文件。更新是从包内资源逐文件覆盖项目副本，所以下一次更新会把这次修改抹掉。根因位置：src/workflow_loop/data/Standardized_Repository/global/workflow_lifecycle.md 缺少第 113 行锚点；同目录 qa/test_plan.md 首行多一段只适用于旧写法的说明。根因证据：filecmp 真实比较输出两处不同；锚点存在性判定为项目副本 True、包内源文件 False。"
+    },
+    {
+      "缺陷编号": "BUG-12",
+      "现象": "章节里只要出现一个半角小于号，整段就被判成未填写，门禁报“缺少具体内容”。本轮缺陷复现第二道门把三个各有上千字、十余条内容的章节全部报成缺少内容，报错文字既不说明真实原因，也不给出出现在哪一行，AI 无法从报错定位问题。",
+      "复现步骤": "在本轮真实执行 workflow gate reproduce；缺陷记录的“1. 缺陷现象”“3. 复现步骤”“6. 根因”三节内容里各含一处半角小于号（分别出现在文件名占位写法、路径占位写法和 HTML 锚点写法中）；再调用 artifact_validation._section 取出这三节并调用 _has_real_text 判定",
+      "实际结果": "门禁输出三条错误，文字为“缺陷记录内容：第 N 项 缺陷_退回重走后门禁不再无故反复失败.md 的某章节缺少具体内容”，报告哈希 044e164d。直接判定显示：1. 缺陷现象长度 1292 字判定为无内容，3. 复现步骤长度 1713 字判定为无内容，6. 根因长度 4373 字判定为无内容，三节共同点是都含半角小于号。",
+      "期望结果": "只把整体形如模板占位的值判成未填写；正文中合法出现的半角小于号不影响判定。确实判为未填写时，报错要写明真实原因和出现位置，不能对上千字的章节输出“缺少具体内容”。",
+      "根因": "根因说明：占位内容判定用了一条过宽的启发式规则——值里只要含半角小于号就整体判为未填写。该规则本是为文档模式的尖括号占位写法准备的，表模式下正文由程序按表生成，正文完全可能合法包含半角小于号（文件名占位写法、路径占位写法、HTML 锚点写法）。判定为假后，调用方统一输出“缺少具体内容”，不区分是真的空、还是命中了这条规则。根因位置：src/workflow_loop/artifact_validation.py::_has_real_text 第 245 至 249 行返回表达式中判断半角小于号是否出现在值里的那个分支；调用方为同文件 validate_reproduce_documents 第 1486 至 1488 行等处，输出统一文字“缺少具体内容”。根因证据：本轮真实门禁输出三条错误（报告哈希 044e164d53f566dabe82f78a15e27383862010769ba7ed605b945923b34d8314）；随后对同一文档直接调用 _section 与 _has_real_text，三节长度分别为 1292、1713、4373 字，判定均为 False，且三节都含半角小于号。"
+    }
+  ],
+  "缺陷说明": [
+    "十一个缺陷指向同一个用户结果：一旦在后续环节发现问题并执行退回，重走上游环节时门禁会连续报出与本次修改无关的失败，AI 只能反复重跑或做无意义修改，消耗大量对话额度。",
+    "其中 BUG-01 至 BUG-07 和 BUG-12 直接造成门禁反复：BUG-01 是检查顺序与规则相反，BUG-02 是删结果不回补引用，BUG-03 和 BUG-04 是表模式下仍按文档字节变化判定产出，BUG-05 和 BUG-06 是缺陷记录的生成路径与其它环节不一致，BUG-07 是模式判定不看开工冻结标记，BUG-12 是占位判定规则过宽且报错文字不说明真实原因。",
+    "BUG-08 至 BUG-11 不直接造成反复，但同属“程序自己写下的事实与产品规则不一致”：门禁日志缺轮次编号使失败分类无法统计，安装契约、忽略规则和包内规范副本三处漂移会在下一次更新或换机器时产生新的坏链接和丢失约定。",
+    "本轮只处理上述十一条，不修改产品设计文档中的版本文字，也不改变任何环节的用户可见流程顺序。"
+  ],
+  "真实复现条件": [
+    "运行环境：macOS 26.4.1，Python 3.13.12（仓库 .venv），workflow-loop 0.3.7 以 editable 方式安装并加载本仓库 src/workflow_loop 真实源码。",
+    "代码基线：本仓库提交 b4c0149（release: prepare workflow-loop 0.3.7），工作区无与本轮相关的未提交源码修改。",
+    "复现脚本：/tmp/wf_repro_2026_09_02/repro.py，逐条调用真实模块函数（records.sync_stage_tables、markdown_links.validate_managed_markdown_links、artifact_validation.changed_stage_paths 与 validate_reproduce_documents、artifact_paths.register_file_keys、records._bug_defect_documents、artifact_validation._table_mode_qa、bug_record.record_topic_acceptance_pass、verification._remove_topic_result_files），每条在独立临时项目中执行，互不影响。",
+    "真实输入：每个临时项目由 project.create_project 建立完整骨架，工作记录表由 records.create_or_complete_table 生成后按真实栏目填写，不使用手写的假文档。",
+    "历史证据来源：本仓库 .workflow_loop/journal.jsonl 共 7743 条记录，其中门禁代码校验 877 条、失败 272 条，是程序自己在过去 40 天真实运行中写下的记录，不是重新构造的数据。",
+    "复现输出全文保存在 /tmp/wf_repro_2026_09_02/evidence.txt，共 90 行。",
+    "BUG-12 的复现输入不是构造的样本，而是本轮缺陷记录本身：本轮第一次执行 workflow gate reproduce 时真实触发，报告哈希 044e164d53f566dabe82f78a15e27383862010769ba7ed605b945923b34d8314。"
+  ],
+  "根因证据": [
+    "BUG-01：沙盒同一输入两次链接检查结论由 False 翻转为 True，中间只插入一次按表生成；journal.jsonl 中 22 次纯链接失败有 18 次紧接着被原样重跑通过。",
+    "BUG-02：沙盒中 bug_record.record_topic_acceptance_pass 写入三条真实链接后删除结果文件，缺陷记录链接原样保留，链接检查逐条报“目标不是现有普通文件”；本仓库 2026-09-02 15:14 第四次退回后缺陷复现首次门禁前两条错误与此完全一致。",
+    "BUG-03：沙盒中 changed_stage_paths 在文档一字未改时返回“相关文件与讨论完成时相同，不能证明本阶段已经生成或修改产物”；journal.jsonl 中该文字在缺陷复现 12 次、最终代码设计同步 10 次、产品设计 5 次。",
+    "BUG-04：沙盒中索引内容正确且已链接本次缺陷记录，validate_reproduce_documents 仍返回“bug/索引.md 没有在本阶段更新”；journal.jsonl 中该文字出现 5 次。",
+    "BUG-05：沙盒中同一名称在 topic 与 bug 两个分类得到不同标识，生成路径 bug/缺陷_样例主题甲.md 与登记路径 bug/缺陷_样例主题甲_2.md 不一致；project.json 中三轮 bugfix 的主题标识均带 _2。",
+    "BUG-06：沙盒中两次生成的缺陷记录均不含 id 值为 6-根因 的 HTML 锚点标记，手工补入后再次生成仍不含且直接覆盖；本仓库缺陷记录的手工锚点在 15:15 重生成后消失。",
+    "BUG-07：沙盒中 state.table_format_version 已冻结为 2，_table_mode_qa 在缺表和解析失败两种情况下均返回 False。",
+    "BUG-08：本仓库 877 条门禁校验记录中只有 2 条带 workflow_id。",
+    "BUG-09：installer.AGENTS_MD_CONTENT 与仓库 AGENTS.md 内容不同，两节各自缺失。",
+    "BUG-10：git check-ignore -v 命中 .gitignore 第 11 行；追踪表 19 行引用被忽略目录。",
+    "BUG-11：filecmp 比较显示两个规范文件内容不同，锚点只存在于项目副本。",
+    "BUG-12：本轮 workflow gate reproduce 真实输出三条“缺少具体内容”（报告哈希 044e164d）；对同一文档直接判定显示三节长度 1292、1713、4373 字均被判为无内容，共同点是都含半角小于号。"
+  ],
+  "修复仍存在的不确定性": [
+    "BUG-05 的修复会改变缺陷记录的文件命名结果。本仓库已有三份带 _2 后缀的历史缺陷记录和对应索引行，修复后新轮次不再产生该后缀，但历史文件是否重命名需要在代码计划阶段单独决定，本阶段不预设结论。",
+    "BUG-10 取消忽略规则后，历史上已经产生但从未提交的 spike_tmp 内容会一次性进入版本控制候选。这些内容是否全部适合提交，需要在实施前逐项确认，本阶段未确认。"
+  ],
+  "修复与验收结果": [
+    "本节由主题验收、最终全量回归和整体验收三个阶段按实际结果由程序追加；缺陷复现阶段不填写任何结论。"
+  ],
+  "填写说明": {
+    "缺陷信息": {
+      "缺陷编号": "例如 BUG-01；一份缺陷记录一个编号",
+      "现象": "用户在什么操作中看到了什么问题",
+      "复现步骤": "从真实入口开始、到缺陷出现的可重复操作，一步一句用分号连接",
+      "实际结果": "实际输出、状态、日志、界面或错误；写观察到的事实",
+      "期望结果": "根据已确认产品设计本来应该得到什么；与产品设计文档一致",
+      "根因": "导致缺陷的具体判断、状态、数据、配置或外部行为，写到具体位置"
+    },
+    "缺陷说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "真实复现条件": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "根因证据": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "修复仍存在的不确定性": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "修复与验收结果": "叙述一段存一条；每条一句话到几句话，写给人看的内容"
+  }
+}

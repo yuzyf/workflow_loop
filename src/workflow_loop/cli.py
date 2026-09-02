@@ -2129,6 +2129,28 @@ def _stage_failure_diagnostics(
     return legacy_diagnostics + list(structured_report.diagnostics)
 
 
+def _sync_stage_tables_before_checks(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    stage_name: str,
+) -> None:
+    """在本阶段全部固定检查之前，按当前工作记录表重新生成正式文档。
+
+    只负责生成；表本身的问题由阶段校验统一报告，这里不产出诊断，也不因表有问题
+    而中断——那样会掩盖同一次输出中其它可独立确认的问题。
+    """
+    if stage_name != wf_state.current_stage:
+        return
+    if not records_mod.stage_table_kinds(stage_name):
+        return
+    if not records_mod.workflow_uses_tables(wf_state, project_root):
+        return
+    try:
+        records_mod.sync_stage_tables(project_root, wf_state)
+    except (records_mod.RecordsError, OSError, ValueError):
+        return
+
+
 def validate_stage_output(
     project_root: str,
     wf_state: state_mod.WorkflowState,
@@ -2138,6 +2160,11 @@ def validate_stage_output(
     execute_regression: bool = True,
 ) -> tuple[bool, str]:
     """汇总安全只读检查；有前置错误时不执行最终回归。"""
+    # 产品规则要求第二道门先按当前工作记录表重新生成正式文档，再执行包括链接在内的
+    # 固定检查。先查链接会读到尚未重新生成的旧文档，于是第一次报坏链接、这一次顺带
+    # 把文档生成好，第二次原样重跑就通过。阶段校验内部仍会再同步一次，内容相同时
+    # 不写盘，因此这里提前同步不改变结果，只保证检查看到的是当前表对应的文档。
+    _sync_stage_tables_before_checks(project_root, wf_state, stage_name)
     responsibility_paths = verification_mod.stage_responsibility_paths(
         project_root,
         wf_state,
@@ -3704,6 +3731,21 @@ def cmd_return(args) -> None:
         wf_state.regression_test = state_mod.RegressionTestState()
     # 返回整体验收或最终设计同步：不删除已经通过的回归记录
 
+    # 删除下游结果文件后立即回补引用：指向已删文件的链接是程序自己写进上游文档和
+    # 索引的，不在同一次动作里改回“（待生成）”，退回后第一次门禁就会把它们报成坏链接。
+    reference_detail = ""
+    refreshed = records_mod.refresh_references_after_removal(
+        project_root, wf_state, affected_topics
+    )
+    if refreshed:
+        reference_detail = f"已按当前文件存在情况回补 {len(refreshed)} 份文档的下游引用"
+    bug_detail = bug_record_mod.reset_status_for_return(
+        project_root,
+        wf_state.workflow_id,
+        affected_topics,
+        args.to,
+    )
+
     journal_mod.append_entry(
         project_root,
         "流程退回",
@@ -3711,6 +3753,8 @@ def cmd_return(args) -> None:
         workflow_id=wf_state.workflow_id,
         from_stage=previous_stage,
         to_stage=args.to,
+        references_refreshed=refreshed,
+        bug_status_reset=bug_detail,
         topics=affected_topics,
         reason=args.reason.strip(),
         traceability=trace_detail,
@@ -3725,6 +3769,10 @@ def cmd_return(args) -> None:
     print(f"原因: {args.reason.strip()}")
     if trace_detail:
         print(trace_detail)
+    if reference_detail:
+        print(reference_detail)
+    if bug_detail:
+        print(bug_detail)
     print("未列出的独立主题保留当前测试和验收记录。")
     print_recovery_details(wf_state)
     print_next_step(current_stage_next_instruction(wf_state))
@@ -4242,6 +4290,7 @@ def cmd_gate(args) -> None:
                 stage_state.internal_step = "test_code"
             # 写 journal：门禁讨论完毕
             journal_mod.append_entry(project_root, "门禁讨论完毕", "user",
+                                    workflow_id=wf_state.workflow_id,
                                     stage=stage_name, passed=True,
                                     plan_confirmed_hash=stage_state.plan_confirmed_hash
                                     if stage_name == "impl" else None,
@@ -4450,6 +4499,7 @@ def cmd_gate(args) -> None:
                 project_root,
                 "门禁代码校验",
                 "workflow.py",
+                workflow_id=wf_state.workflow_id,
                 stage=stage_name,
                 passed=False,
                 details=details,
@@ -4529,6 +4579,7 @@ def cmd_gate(args) -> None:
             project_root,
             "门禁代码校验",
             "workflow.py",
+            workflow_id=wf_state.workflow_id,
             stage=stage_name,
             passed=True,
             details=details,
@@ -4996,6 +5047,7 @@ def cmd_gate(args) -> None:
 
     # 写 journal：门禁用户确认
     journal_mod.append_entry(project_root, "门禁用户确认", "user",
+                            workflow_id=wf_state.workflow_id,
                             stage=stage_name, passed=True)
 
     # 找下一个 stage

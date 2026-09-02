@@ -136,6 +136,69 @@ def update_status(
     return f"已更新缺陷状态“{status}”: {updated}"
 
 
+# 各阶段追加到第 8 节的结论块标题，按流程顺序排列。退回时清除目标环节之后的块。
+_RESULT_STAGE_LABELS = ("主题验收结果", "最终全量回归结果", "整体验收确认")
+# 退回目标 → 该目标之后失效的结论块起点下标
+_RETURN_TARGET_FIRST_INVALID = {
+    "spec": 0,
+    "reproduce": 0,
+    "spike": 0,
+    "acceptance_plan": 0,
+    "impl": 0,
+    "qa": 0,
+    "test_plan": 0,
+    "test_code": 0,
+    "test_execution": 0,
+    "topic_acceptance": 0,
+    "regression_test": 1,
+    "overall_acceptance": 2,
+}
+
+
+def reset_status_for_return(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+    target_stage: str,
+) -> str:
+    """退回时清除已经失效的阶段结论块，并把缺陷索引状态改回复现阶段状态。
+
+    这些结论块由程序追加，块内链接指向测试结果和验收结果文档。退回会删除那些
+    文档，块留在缺陷记录里就成了指向不存在文件的坏链接，同时也在冒充仍然有效的
+    结论。目标环节之前已经完成的阶段结论保留不动。
+    """
+    first_invalid = _RETURN_TARGET_FIRST_INVALID.get(target_stage)
+    if first_invalid is None:
+        return ""
+    invalid_labels = _RESULT_STAGE_LABELS[first_invalid:]
+    if not invalid_labels:
+        return ""
+    try:
+        records = _records_for_workflow(project_root, workflow_id, topics)
+    except ValueError:
+        # 本轮没有缺陷记录（非修缺陷轮次）时无需处理，不把它当成退回失败。
+        return ""
+    updated: list[str] = []
+    for path, _topic in records:
+        content = path.read_text(encoding="utf-8")
+        new_content = content
+        for label in invalid_labels:
+            new_content = re.sub(
+                rf"^###\s+{re.escape(label)}（工作流 {re.escape(workflow_id)}）\s*$\n"
+                r".*?(?=^###\s+|\Z)",
+                "",
+                new_content,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+        if new_content != content:
+            path.write_text(new_content.rstrip() + "\n", encoding="utf-8")
+            _update_index_status(project_root, path.name, "根因已确认")
+            updated.append(path.name)
+    if not updated:
+        return ""
+    return f"已清除失效的缺陷结论块并把索引状态改回“根因已确认”: {updated}"
+
+
 def record_topic_acceptance_pass(project_root: str, workflow_id: str, topics: list[str]) -> str:
     return update_status(
         project_root,

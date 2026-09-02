@@ -87,8 +87,11 @@ def _stage_table_sync(
     except ValueError:
         # 索引格式错误由本阶段校验报告为「验收主题索引」问题；表同步回退 state 主题，不中断。
         topics = list(workflow_state.topics) or current_workflow_topics(project_root)
-    enabled = records_mod.has_any_table_file(project_root, workflow_state.workflow_id, stage_name, topics)
-    if not enabled:
+    # R11：模式由开工冻结标记决定；不看磁盘上表文件是否存在，避免缺表时退回文档模式。
+    # 本环节没有定义工作记录表时不属于表模式范围，按原有检查处理。
+    if not records_mod.stage_table_kinds(stage_name):
+        return None
+    if not records_mod.workflow_uses_tables(workflow_state, project_root):
         return None
     problems, documents = records_mod.sync_stage_tables(project_root, workflow_state)
     if not problems and not documents:

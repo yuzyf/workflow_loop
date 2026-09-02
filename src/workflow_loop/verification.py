@@ -3169,6 +3169,10 @@ def apply_invalidation(
             "regression_test",
         )
 
+    # 与主动退回同一处理：删除下游结果文件后立即把指向它们的引用改回“（待生成）”，
+    # 否则程序自己写下的链接会在下一次门禁里被报成坏链接。
+    _refresh_references_after_invalidation(project_root, state, inspection)
+
     set_recovery_context(
         state,
         applied_source,
@@ -3180,6 +3184,25 @@ def apply_invalidation(
         (finding.source_stage, _INVALIDATION_DESCRIPTIONS[finding.source_stage])
         for finding in inspection.findings
     ]
+
+
+def _refresh_references_after_invalidation(
+    project_root: str,
+    state: WorkflowState,
+    inspection: "InvalidationInspection",
+) -> None:
+    """失效删除结果文件后回补上游引用；回补失败不改变失效结论。"""
+    from . import records as records_mod
+
+    topics = list(inspection.affected_topics) or list(
+        state.topics or ([state.topic] if state.topic else [])
+    )
+    if not topics:
+        return
+    try:
+        records_mod.refresh_references_after_removal(project_root, state, topics)
+    except (OSError, ValueError, records_mod.RecordsError):
+        return
 
 
 # 兼容原调用：先只读检查，再一次应用。需要展示完整诊断的命令层应分别调用

@@ -233,20 +233,47 @@ def _markdown_tables(content: str) -> list[tuple[list[str], list[list[str]]]]:
     return tables
 
 
-def _has_real_text(value: str | None, *, allow_none: bool = False) -> bool:
+# 模板占位写法：整行被尖括号包住，例如 `<用户在什么操作中看到了什么问题。>`。
+# 只按整行判定；正文里合法出现的半角小于号（路径占位写法、HTML 锚点、比较运算）
+# 不影响判定，否则含实质内容的长章节会被整段误判为未填写。
+_TEMPLATE_PLACEHOLDER_LINE_RE = re.compile(r"^<[^<>]*>$")
+
+
+def _placeholder_lines(value: str) -> list[str]:
+    """返回值中仍是模板占位写法的行；全部非空行都命中才算整体未填写。"""
+    stripped_lines = [
+        re.sub(r"^[-*]\s+", "", line).strip()
+        for line in value.splitlines()
+        if line.strip()
+    ]
+    if not stripped_lines:
+        return []
+    hits = [line for line in stripped_lines if _TEMPLATE_PLACEHOLDER_LINE_RE.match(line)]
+    return hits if len(hits) == len(stripped_lines) else []
+
+
+def _no_real_text_reason(value: str | None, *, allow_none: bool = False) -> str | None:
+    """值不算已填写时返回具体原因和命中内容；已填写时返回 None。"""
     if value is None:
-        return False
+        return "缺少这一节"
     normalized = value.strip()
     if not normalized:
-        return False
+        return "内容为空"
     if allow_none and normalized in {"无", "暂无"}:
-        return True
-    lowered = normalized.lower()
-    return not (
-        normalized in {"无", "暂无", "待补充", "未填写"}
-        or "<" in normalized
-        or "todo" in lowered
-    )
+        return None
+    if normalized in {"无", "暂无", "待补充", "未填写"}:
+        return f"整段只写了占位词 {normalized!r}"
+    if "todo" in normalized.lower():
+        return "内容里仍留着 TODO 标记"
+    hits = _placeholder_lines(normalized)
+    if hits:
+        sample = hits[0] if len(hits[0]) <= 40 else hits[0][:40] + "…"
+        return f"整段仍是模板占位写法，例如 {sample}"
+    return None
+
+
+def _has_real_text(value: str | None, *, allow_none: bool = False) -> bool:
+    return _no_real_text_reason(value, allow_none=allow_none) is None
 
 
 def _format_validation_failures(failures: list[str]) -> str:
@@ -609,7 +636,12 @@ def changed_stage_paths(
     stage_name: str,
     current_paths: list[str],
 ) -> tuple[bool, str, list[str]]:
-    """比较讨论完成时的基线，返回本阶段新增、修改或删除的文件。"""
+    """比较讨论完成时的基线，返回本阶段新增、修改或删除的文件。
+
+    启用工作记录表的轮次里正式文档是程序按表的确定性输出：表没有变化时文档必然
+    逐字节相同，"文档没变"不等于"本阶段没有产出"。这种情况下按表判断产出，并把
+    本阶段登记的产物路径交给下游检查，不要求 AI 制造无实质内容的修改。
+    """
     state = load_state(project_root)
     if state is None or stage_name not in state.stages:
         return (False, "找不到当前工作流阶段状态，无法判断文件是否属于本次工作", [])
@@ -627,6 +659,19 @@ def changed_stage_paths(
         if baseline_hashes.get(rel_path) != current_hashes.get(rel_path)
     ]
     if not changed:
+        from . import records as records_mod
+
+        if records_mod.stage_table_kinds(stage_name) and records_mod.workflow_uses_tables(
+            state, project_root
+        ):
+            # 变化清单如实为空：确实没有文件变化。调用方要判断“本阶段的产出是哪些”时
+            # 按内容识别，不能把未变化的文件当成本阶段改过——最终设计同步正是用这份
+            # 清单确认产品文档没有被改动。
+            return (
+                True,
+                "表模式：正式文档由程序按工作记录表生成，内容与上次相同时按表判断产出",
+                [],
+            )
         return (False, "相关文件与讨论完成时相同，不能证明本阶段已经生成或修改产物", [])
     return (True, f"本阶段发生变化的文件: {changed}", changed)
 
@@ -1405,6 +1450,21 @@ def validate_final_code_design_document(
     )
 
 
+def _current_workflow_bug_documents(project_root: str, workflow_id: str) -> list[str]:
+    """按文件内的工作流编号找出本轮的缺陷记录，不依赖本阶段变化清单。"""
+    bug_dir = os.path.join(project_root, "bug")
+    if not os.path.isdir(bug_dir):
+        return []
+    found: list[str] = []
+    for filename in sorted(os.listdir(bug_dir)):
+        if not filename.endswith(".md") or filename in BUG_INDEX_FILENAMES:
+            continue
+        relative = f"bug/{filename}"
+        if _field(_read_text(project_root, relative), "工作流编号") == workflow_id:
+            found.append(relative)
+    return found
+
+
 def validate_reproduce_documents(
     project_root: str,
     changed_paths: list[str],
@@ -1413,8 +1473,8 @@ def validate_reproduce_documents(
     index_path = artifact_paths_mod.BUG_INDEX_DOC
     normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
     failures: list[str] = []
-    if index_path not in normalized_changed:
-        failures.append(f"{index_path} 没有在本阶段更新")
+    # 索引按内容判定：存在且链接本轮缺陷记录即可。索引由程序生成，内容已经正确时
+    # 本阶段不需要再改它，"这一轮没有改过"不是问题。
     index_exists = os.path.isfile(os.path.join(project_root, index_path))
     if not index_exists:
         failures.append(f"{index_path} 不存在")
@@ -1438,6 +1498,10 @@ def validate_reproduce_documents(
         for rel_path in changed_bug_candidates
         if os.path.isfile(os.path.join(project_root, rel_path))
     ]
+    if not changed_bug_docs:
+        # 表模式下缺陷记录由程序按表生成，重走本环节时内容可能与上次逐字节相同，
+        # 变化清单为空不等于本轮没有缺陷记录。按文件内的工作流编号识别本轮记录。
+        changed_bug_docs = _current_workflow_bug_documents(project_root, workflow_id)
     if not changed_bug_docs:
         failures.append("本阶段没有新增或修改缺陷记录文档")
 
@@ -1484,8 +1548,11 @@ def validate_reproduce_documents(
             topics.append(topic or "")
 
         for heading in required_sections:
-            if not _has_real_text(_section(content, heading), allow_none=heading.startswith("7.")):
-                failures.append(f"{filename} 的“{heading}”缺少具体内容")
+            allow_none = heading.startswith("7.")
+            section_text = _section(content, heading)
+            reason = _no_real_text_reason(section_text, allow_none=allow_none)
+            if reason is not None:
+                failures.append(f"{filename} 的“{heading}”缺少具体内容：{reason}")
 
         condition_section = _section(content, "2. 真实复现条件") or ""
         if not _has_real_text(_field(condition_section, "运行环境")):
@@ -1874,24 +1941,17 @@ def validate_downstream_traceability(
 
 
 def _table_mode_qa(project_root: str, workflow_id: str, topics: list[str]) -> bool:
-    """全部主题都有已填测试工作记录表时，qa 的文档校验走表核对。"""
+    """本轮是否按测试工作记录表校验测试计划。
+
+    R11：只看开工时冻结在工作流状态里的表版本。表缺失、为空或解析失败时
+    仍留在表模式，由表校验报出具体问题，不退回按文档正文逐字检查的旧方式。
+    """
     from . import records as records_mod
 
-    if not topics:
+    state = load_state(project_root)
+    if state is None or state.workflow_id != workflow_id:
         return False
-    for topic in topics:
-        relative = records_mod.table_relative_path(
-            project_root, workflow_id, "test_plan", topic
-        )
-        if not records_mod.table_exists(project_root, relative):
-            return False
-        try:
-            table = records_mod.load_table(os.path.join(project_root, relative))
-        except records_mod.RecordsError:
-            return False
-        if not (table.get("测试项") or table.get("测试范围说明")):
-            return False
-    return True
+    return records_mod.workflow_uses_tables(state, project_root)
 
 
 def _validate_test_plan_from_tables(
@@ -1910,7 +1970,18 @@ def _validate_test_plan_from_tables(
         relative = records_mod.table_relative_path(
             project_root, workflow_id, "test_plan", topic
         )
-        table = records_mod.load_table(os.path.join(project_root, relative))
+        # 表模式下缺表、空表和解析失败都在这里报具体问题；不退回文档检查（R11）。
+        if not records_mod.table_exists(project_root, relative):
+            failures.append(
+                f"主题「{topic}」缺少测试计划工作记录表（{relative}）；"
+                "请执行 workflow scaffold 补齐后填写测试项，再重新门禁"
+            )
+            continue
+        try:
+            table = records_mod.load_table(os.path.join(project_root, relative))
+        except records_mod.RecordsError as exc:
+            failures.append(f"主题「{topic}」的测试计划工作记录表无法解析（{relative}）：{exc}")
+            continue
         rows = table.get("测试项", [])
         if not rows:
             # 纯人工主题：自动化验证由最终全量回归承担，验收条件在主题验收人工核对

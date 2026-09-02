@@ -23,6 +23,9 @@ TABLE_FORMAT_VERSION = "2"
 NARRATIVE_KEY = "叙述段落"
 DOC_HASH_KEY = "生成文档哈希"
 GENERATED_DOC_PATH_KEY = "生成文档路径"
+# 缺陷记录走 bug/ 目录的独立生成路径，用单独的程序专用键保存各文件上次生成的哈希；
+# 与 DOC_HASH_KEY 一样由程序写入，AI 不填。
+BUG_DOC_HASHES_KEY = "缺陷文档哈希"
 
 LINE_RANGE_RE = re.compile(r"L\d+-L\d+")
 
@@ -1172,7 +1175,10 @@ def validate_table(kind: str, table: dict, expected_version: str | None = None) 
     schema = _schema(kind, expected_version)
     problems: list[tuple[str, str]] = []
     allowed = set(schema["row_lists"]) | set(schema["narrative"]) | set(schema["enums"])
-    allowed |= {"表版本", "工作流编号", "验收主题", "填写说明", DOC_HASH_KEY, GENERATED_DOC_PATH_KEY}
+    allowed |= {
+        "表版本", "工作流编号", "验收主题", "填写说明",
+        DOC_HASH_KEY, GENERATED_DOC_PATH_KEY, BUG_DOC_HASHES_KEY,
+    }
     unknown = sorted(set(table) - allowed)
     if unknown:
         problems.append((
@@ -2043,6 +2049,28 @@ def has_any_table(project_root: str, workflow_id: str, stage: str, topics: list[
     return False
 
 
+def workflow_uses_tables(wf_state, project_root: str | None = None) -> bool:
+    """本轮是否启用工作记录表：以开工时冻结在状态里的表版本为准（R11）。
+
+    判定不看某一张表是否存在、是否已填或能否解析——那些情况要报具体错误并停留
+    当前环节，不能因此退回按正式文档正文逐字检查的旧方式。
+
+    冻结字段是后加的：更早开工、已经建过表的轮次状态里没有它。给出 project_root
+    时按“本轮是否已经有过表文件”兜底，避免这些轮次中途换判定方式。两条都不成立
+    的才是功能上线前的旧轮次，继续走原有文档检查。
+    """
+    if getattr(wf_state, "table_format_version", "") or "":
+        return True
+    workflow_id = getattr(wf_state, "workflow_id", "") or ""
+    if not project_root or not workflow_id:
+        return False
+    run_dir = os.path.join(project_root, RECORDS_ROOT, workflow_id)
+    try:
+        return any(name.endswith(".json") for name in os.listdir(run_dir))
+    except OSError:
+        return False
+
+
 def has_any_table_file(project_root: str, workflow_id: str, stage: str, topics: list[str]) -> bool:
     """本环节是否有任何工作记录表文件（不论是否已填）。
 
@@ -2559,10 +2587,8 @@ def sync_stage_tables(
                 for r in _ttable.get("主题关系", [])
                 if str(r.get("验收主题", "")).strip()
             ]
-    # R11：表启用以表文件是否存在为准（空表也启用表流程），不以内容是否已填为准
-    if not has_any_table_file(
-        project_root, wf_state.workflow_id, stage, topics + [""]
-    ) and "topic_relations" not in kinds:
+    # R11：表启用以开工时冻结的标记为准；旧轮次没有冻结版本时才走原有文档检查。
+    if not workflow_uses_tables(wf_state, project_root):
         return [], []
     problems: list[tuple[str, str]] = []
     documents: list[str] = []
@@ -2653,10 +2679,15 @@ def sync_stage_tables(
             table[GENERATED_DOC_PATH_KEY] = doc_relative
             _atomic_write(os.path.join(project_root, relative), table)
             if kind == "bug_record":
-                # 模板要求缺陷记录落在 bug/ 目录（缺陷_<标识>.md + 索引.md），按表内容同步生成
-                for bug_rel, bug_content in _bug_defect_documents(table, project_root):
-                    _write_text(os.path.join(project_root, bug_rel), bug_content)
-                    documents.append(bug_rel)
+                # 模板要求缺陷记录落在 bug/ 目录（缺陷记录 + 索引），按表内容同步生成。
+                # 与其它环节文档一样先检出手改：命中时保留磁盘内容并报告，不覆盖。
+                bug_problems = _write_bug_documents(project_root, table)
+                problems.extend(bug_problems)
+                if not bug_problems:
+                    documents.extend(
+                        rel for rel, _ in _bug_defect_documents(table, project_root)
+                    )
+                    _atomic_write(os.path.join(project_root, relative), table)
             if not existed_before:
                 # 本环节首次真实生成的下游文档，触发上游引用回补
                 written_docs.add(doc_relative)
@@ -2679,11 +2710,66 @@ def sync_stage_tables(
     return problems, documents
 
 
+def bug_file_key(project_root: str, defect_name: str) -> str:
+    """缺陷记录的稳定文件标识：与门禁登记同取缺陷分类，避免生成路径与登记路径分叉。"""
+    from .project import load_project
+
+    return artifact_paths_mod.resolve_key_for(load_project(project_root), "bug", defect_name)
+
+
+def _anchored_heading(heading: str) -> list[str]:
+    """缺陷记录固定章节标题带稳定锚点，供上游按章节编号直接链接（R17）。"""
+    anchor = re.sub(r"[^a-z0-9\u4e00-\u9fff:-]", "-", heading.replace(". ", "-").strip().lower())
+    return [f'<a id="{anchor}"></a>', f"## {heading}", ""]
+
+
+def refresh_references_after_removal(
+    project_root: str,
+    wf_state,
+    topics: list[str],
+) -> list[str]:
+    """删除下游结果文件后，把引用它们的上游文档和索引改回“（待生成）”。
+
+    退回和自动失效都会删除测试结果、验收结果等下游文档，但指向它们的链接是程序
+    自己写进上游文档和索引的。删除时不同步回补，下一次门禁就会把这些链接报成坏
+    链接（模板规则：目标文件不存在时只写普通路径加“（待生成）”）。
+    返回实际重写的文档路径；表未启用或表缺失时安全返回空清单。
+    """
+    if not workflow_uses_tables(wf_state, project_root):
+        return []
+    refreshed: list[str] = []
+    for index_path in regenerate_workflow_indexes(project_root, wf_state.workflow_id):
+        refreshed.append(index_path)
+    referencing_kinds = (
+        "acceptance_plan",
+        "impl_record",
+        "test_plan",
+        "test_result",
+        "acceptance_result",
+    )
+    for topic in topics or []:
+        for kind in referencing_kinds:
+            try:
+                refreshed.extend(
+                    _refresh_stage_document(
+                        project_root,
+                        wf_state.workflow_id,
+                        kind,
+                        topic,
+                        only_existing=True,
+                    )
+                )
+            except RecordsError:
+                # 表损坏由所属环节的表校验报告；回补不接管它的诊断，也不中断其它主题。
+                continue
+    return list(dict.fromkeys(refreshed))
+
+
 def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str]]:
     """按 bug_record 表生成模板结构的缺陷记录文档与索引条目（bug/ 目录）。"""
     topic_name = str(table.get("验收主题", "")).strip() or "缺陷记录"
     workflow_id = str(table.get("工作流编号", ""))
-    file_key = topic_file_key(project_root, topic_name)
+    file_key = bug_file_key(project_root, topic_name)
     rows = [row for row in table.get("缺陷信息", []) if isinstance(row, dict)]
     lines: list[str] = [
         f"# 【缺陷】{topic_name}",
@@ -2693,19 +2779,18 @@ def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str
         "- 根因状态：已确认",
         f"- 验收主题：{topic_name}",
         "",
-        "## 1. 缺陷现象",
-        "",
     ]
+    lines += _anchored_heading("1. 缺陷现象")
     lines += [f"- {row.get('现象', '')}".rstrip() for row in rows]
-    lines += ["", "## 2. 真实复现条件", ""]
+    lines += [""] + _anchored_heading("2. 真实复现条件")
     lines += [f"- {item}".rstrip() for item in table.get("真实复现条件", []) if str(item).strip()]
-    lines += ["", "## 3. 复现步骤", ""]
+    lines += [""] + _anchored_heading("3. 复现步骤")
     lines += [f"- {row.get('复现步骤', '')}".rstrip() for row in rows]
-    lines += ["", "## 4. 实际结果", ""]
+    lines += [""] + _anchored_heading("4. 实际结果")
     lines += [f"- {row.get('实际结果', '')}".rstrip() for row in rows]
-    lines += ["", "## 5. 期望结果", ""]
+    lines += [""] + _anchored_heading("5. 期望结果")
     lines += [f"- {row.get('期望结果', '')}".rstrip() for row in rows]
-    lines += ["", "## 6. 根因", ""]
+    lines += [""] + _anchored_heading("6. 根因")
     root_cause_labels = ("根因说明：", "根因位置：", "根因证据：")
     for row in rows:
         lines += [f"**{row.get('缺陷编号', '')}**", ""]
@@ -2716,12 +2801,17 @@ def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str
             if segment:
                 lines.append(f"- {segment}")
         lines.append("")
-    lines += ["## 7. 修复仍存在的不确定性", ""]
+    lines += _anchored_heading("7. 修复仍存在的不确定性")
     uncertainty = [str(x).strip() for x in table.get("修复仍存在的不确定性", []) if str(x).strip()]
     lines += [f"- {item}" for item in uncertainty] or ["暂无"]
-    lines += ["", "## 8. 修复与验收结果", ""]
+    lines += [""] + _anchored_heading("8. 修复与验收结果")
     lines += [f"- {item}".rstrip() for item in table.get("修复与验收结果", []) if str(item).strip()]
     defect_rel = f"bug/缺陷_{file_key}.md"
+    # 第 8 节的阶段结论块由主题验收、全量回归和整体验收按实际结果追加，不来自本表；
+    # 重新生成时原样保留，否则重走缺陷复现会抹掉已经发生的事实。
+    preserved = _existing_bug_result_blocks(os.path.join(project_root, defect_rel))
+    if preserved:
+        lines += ["", *preserved]
     documents: list[tuple[str, str]] = [(defect_rel, "\n".join(lines).rstrip() + "\n")]
 
     index_path = os.path.join(project_root, "bug", "索引.md")
@@ -2743,6 +2833,57 @@ def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str
         )
     documents.append(("bug/索引.md", index_content))
     return documents
+
+
+_BUG_RESULT_SECTION_RE = re.compile(
+    r"^##\s+8\.\s*修复与验收结果\s*$\n(.*?)(?=^##\s+|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _existing_bug_result_blocks(full_path: str) -> list[str]:
+    """读出缺陷记录第 8 节里由后续阶段追加的结论块（以三级标题开头的段落）。"""
+    try:
+        with open(full_path, "r", encoding="utf-8") as stream:
+            content = stream.read()
+    except OSError:
+        return []
+    section = _BUG_RESULT_SECTION_RE.search(content)
+    if section is None:
+        return []
+    blocks = re.findall(r"^###\s+.*?(?=^###\s+|\Z)", section.group(1), re.MULTILINE | re.DOTALL)
+    return [block.rstrip() for block in blocks if block.strip()]
+
+
+def _write_bug_documents(project_root: str, table: dict) -> list[tuple[str, str]]:
+    """写缺陷记录与缺陷索引；文档被绕过表直接修改时报告并保留手改内容（R5）。"""
+    problems: list[tuple[str, str]] = []
+    stored = table.get(BUG_DOC_HASHES_KEY)
+    recorded = dict(stored) if isinstance(stored, dict) else {}
+    pending: list[tuple[str, str, str]] = []
+    for relative, content in _bug_defect_documents(table, project_root):
+        full = os.path.join(project_root, relative)
+        current = _file_sha256(full) if os.path.isfile(full) else None
+        expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if current == expected:
+            recorded[relative] = expected
+            continue
+        previous = recorded.get(relative)
+        if current is not None and previous is not None and current != previous:
+            problems.append((
+                CONTENT_CATEGORY,
+                f"正式文档 {relative} 与工作记录表不一致：文档被直接修改；"
+                "请把改动写回工作记录表后重新执行门禁，程序不会悄悄覆盖手改内容",
+            ))
+            continue
+        pending.append((relative, content, expected))
+    if problems:
+        return problems
+    for relative, content, expected in pending:
+        _write_text(os.path.join(project_root, relative), content)
+        recorded[relative] = expected
+    table[BUG_DOC_HASHES_KEY] = recorded
+    return problems
 
 
 def _inline_cell(value: object) -> str:
@@ -2813,8 +2954,14 @@ def _refresh_stage_document(
     workflow_id: str,
     kind: str,
     topic: str,
+    *,
+    only_existing: bool = False,
 ) -> list[str]:
-    """按当前表重新生成某主题的正式文档（检测到手改时跳过并报告）。返回生成路径。"""
+    """按当前表重新生成某主题的正式文档（检测到手改时跳过并报告）。返回生成路径。
+
+    ``only_existing`` 供删除后回补使用：只刷新磁盘上仍存在的引用方文档，不重新
+    生成刚被退回或失效删除的结果文档，否则回补会把已经作废的结论恢复回来。
+    """
     relative = table_relative_path(project_root, workflow_id, kind, topic)
     if not table_exists(project_root, relative):
         return []
@@ -2823,6 +2970,8 @@ def _refresh_stage_document(
         return []
     doc_relative = _expected_document_path(project_root, kind, topic, table)
     doc_full = os.path.join(project_root, doc_relative)
+    if only_existing and not os.path.isfile(doc_full):
+        return []
     current_hash = _file_sha256(doc_full) if os.path.isfile(doc_full) else None
     if (current_hash is not None and table.get(DOC_HASH_KEY) is not None
             and current_hash != table.get(DOC_HASH_KEY)):
