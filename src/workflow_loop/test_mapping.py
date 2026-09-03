@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, replace
 import hashlib
+import json
 import os
 import re
 
@@ -92,6 +93,9 @@ class TestPlanItem:
     product_entry: str = ""
     code_entry: str = ""
     test_entry: str = ""
+    # 表模式下一个测试项可以覆盖多个测试函数，登记入口按行解析成清单；
+    # 文档模式仍只有 test_entry 一个入口，两者由 registered_entries 统一取用。
+    test_entries: tuple[str, ...] = ()
     preparation: str = ""
     action: str = ""
     observation: str = ""
@@ -102,6 +106,12 @@ class TestPlanItem:
     @property
     def requires_test_code(self) -> bool:
         return self.test_method in AUTOMATED_TEST_METHODS
+
+    @property
+    def registered_entries(self) -> tuple[str, ...]:
+        if self.test_entries:
+            return self.test_entries
+        return (self.test_entry,) if self.test_entry else ()
 
 
 @dataclass(frozen=True)
@@ -169,15 +179,85 @@ def _table_rows(content: str) -> tuple[list[str], list[list[str]]]:
     raise ValueError("缺少验收条件覆盖表")
 
 
-def _entry_parts(value: str, label: str) -> tuple[str, str]:
-    """解析 ``项目相对文件::符号或测试标题``，不从自然语言猜路径。"""
+def _entry_shape_problem(value: str) -> str:
+    """按 ``项目相对文件::可定位标识`` 判断形状；返回不带栏目名的原因，合格时返回空串。"""
     normalized = value.strip().strip("`")
     if normalized.count("::") != 1:
-        raise ValueError(f"{label} 必须写成 `项目相对文件::可定位标识`: {value}")
+        return "必须用一个 :: 连接项目相对文件和可定位标识"
     path, target = (part.strip() for part in normalized.split("::", 1))
-    if not path or not target or any(character.isspace() for character in path):
-        raise ValueError(f"{label} 必须同时写明确文件和可定位标识: {value}")
+    if not path:
+        return ":: 左边的项目相对文件为空"
+    if any(character.isspace() for character in path):
+        return ":: 左边的项目相对文件不能含空格"
+    if not target:
+        return ":: 右边的可定位标识为空"
+    return ""
+
+
+def _entry_parts(value: str, label: str) -> tuple[str, str]:
+    """解析 ``项目相对文件::符号或测试标题``，不从自然语言猜路径。"""
+    problem = _entry_shape_problem(value)
+    if problem:
+        raise ValueError(f"{label} {problem}: {value}")
+    normalized = value.strip().strip("`")
+    path, target = (part.strip() for part in normalized.split("::", 1))
     return path.replace("\\", "/"), target
+
+
+OFFICIAL_TARGET_COLUMN = "正式目标名称"
+OFFICIAL_TARGET_SHAPE = "项目相对路径::报告里的目标名"
+OFFICIAL_TARGET_EXAMPLE = "tests/test_records.py::test_table_rejects_bad_entry"
+OFFICIAL_TARGET_MULTI_EXAMPLE = (
+    '["tests/a.test.ts::读取返回 15 组","tests/a.test.ts::升级文案存在"]'
+)
+
+
+def parse_official_target_names(value: object) -> tuple[list[str], str]:
+    """把测试计划表「正式目标名称」单元格解析成登记入口清单。
+
+    单个入口写普通字符串；一个测试项覆盖多个测试函数时写 JSON 数组。
+    返回 (入口清单, 问题说明)；问题说明非空表示这一格不能用于登记，
+    调用方决定报成表格式问题还是登记失败，判断标准只在这里定义一次。
+    """
+    def _problem(reason: str) -> tuple[list[str], str]:
+        return [], (
+            f"{OFFICIAL_TARGET_COLUMN} {reason}；正确形状是 {OFFICIAL_TARGET_SHAPE}，"
+            f"例如 {OFFICIAL_TARGET_EXAMPLE}；一个测试项覆盖多个测试函数时写 JSON 数组，"
+            f"例如 {OFFICIAL_TARGET_MULTI_EXAMPLE}"
+        )
+
+    if isinstance(value, (list, tuple)):
+        raw_entries: list[object] = list(value)
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return _problem("未填写")
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return _problem(f"以 [ 开头但不是合法 JSON 数组：{text!r}")
+            if not isinstance(parsed, list):
+                return _problem(f"里的 JSON 内容必须是数组：{text!r}")
+            raw_entries = list(parsed)
+        else:
+            raw_entries = [text]
+    if not raw_entries:
+        return _problem("是空数组，至少要有一个入口")
+
+    entries: list[str] = []
+    for raw in raw_entries:
+        if not isinstance(raw, str) or not raw.strip():
+            return _problem(f"里的 {raw!r} 是空值或不是字符串")
+        shape_problem = _entry_shape_problem(raw)
+        if shape_problem:
+            return _problem(f"里的 {raw!r} {shape_problem}")
+        path, target = _entry_parts(raw, OFFICIAL_TARGET_COLUMN)
+        entries.append(f"{path}::{target}")
+    duplicates = sorted({entry for entry in entries if entries.count(entry) > 1})
+    if duplicates:
+        return _problem(f"里重复登记了同一个入口 {duplicates}")
+    return entries, ""
 
 
 def _validate_plan_entry(
@@ -244,6 +324,8 @@ def _test_plan_items_from_table(project_root: str, topic: str) -> list[TestPlanI
         dependencies = _parse_dependency_ids(row.get("前置测试项"))
         criterion_cell = str(row.get("对应验收条件", "")).strip()
         criterion_ids = re.findall(r"AC-\d+", criterion_cell) or [criterion_cell]
+        # 形状有问题时留空，由表校验和按表登记报出具体问题，这里不猜测入口。
+        registered_entries, _ = parse_official_target_names(row.get("正式目标名称"))
         for criterion_id in criterion_ids:
             items.append(
                 TestPlanItem(
@@ -256,7 +338,8 @@ def _test_plan_items_from_table(project_root: str, topic: str) -> list[TestPlanI
                     dependencies=tuple(dependencies),
                     product_entry=str(row.get("产品入口", "")).strip(),
                     code_entry=str(row.get("代码入口", "")).strip(),
-                    test_entry=str(row.get("正式目标名称", "")).strip(),
+                    test_entry=registered_entries[0] if registered_entries else "",
+                    test_entries=tuple(registered_entries),
                     preparation=str(row.get("准备数据", "")).strip(),
                     action=str(row.get("执行动作", "")).strip(),
                     observation=str(row.get("观察位置", "")).strip(),
@@ -538,17 +621,18 @@ def planned_test_source_paths(project_root: str, topics: list[str]) -> list[str]
     paths: list[str] = []
     for item in automated_test_items(project_root, topics):
         plan_path = topic_paths(project_root, item.topic)["test_plan"]
-        paths.append(
-            _validate_plan_entry(
-                project_root,
-                item.test_entry,
-                plan_path,
-                item.test_id,
-                "测试入口",
-                allow_missing=True,
-                require_test_path=True,
+        for entry in item.registered_entries or ("",):
+            paths.append(
+                _validate_plan_entry(
+                    project_root,
+                    entry,
+                    plan_path,
+                    item.test_id,
+                    "测试入口",
+                    allow_missing=True,
+                    require_test_path=True,
+                )
             )
-        )
     return sorted(set(paths))
 
 

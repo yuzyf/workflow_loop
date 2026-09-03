@@ -370,7 +370,7 @@ COLUMN_HINTS: dict[str, dict[str, str]] = {
         "测试方式": "自动化测试、人工验收或 自动化测试 + 人工验收 三选一；能自动化判断的内容不能为省事写纯人工",
         "产品入口": "用户或调用方实际使用的入口，例如 workflow gate impl 命令；取自产品设计使用过程",
         "代码入口": "项目相对文件::可定位标识，例如 src/workflow_loop/stages/stages.py::ImplStage.discussion_validate；不接受目录或模块泛称",
-        "测试入口": "tests/文件::测试函数；测试文件可以尚未创建，但路径和目标必须明确；人工验收行可留空",
+        "测试入口": "tests/文件::测试函数；测试文件可以尚未创建，但路径和目标必须明确；本列只进入生成的测试计划文档，不是登记入口，登记入口取“正式目标名称”列；人工验收行可留空",
         "准备数据": "执行前要建立的具体数据和状态，例如 建一张空 impl_record 表；取自执行动作需要的前提",
         "执行动作": "通过产品入口执行的具体动作一句话；与验收条件“触发动作”语义一致但写到可执行粒度",
         "观察位置": "检查返回值、状态文件、生成文档或输出的具体位置；与验收条件“可检查结果”对应",
@@ -382,7 +382,15 @@ COLUMN_HINTS: dict[str, dict[str, str]] = {
         "工作目录": "项目内相对路径；留空表示项目根",
         "超时秒数": "整数，例如 600；人工验收行留空",
         "报告适配器": "pytest-junitxml 或 vitest-junit；人工验收行留空",
-        "正式目标名称": "测试报告里的正式目标名，用于精确匹配；人工验收行留空",
+        "正式目标名称": (
+            "本列是登记入口的唯一来源：必须写成 项目相对路径::报告里的目标名，"
+            "与报告适配器输出的目标名逐字一致，例如 "
+            "tests/test_records.py::test_table_rejects_bad_entry（pytest 写 nodeid，"
+            "vitest 写 测试文件路径::测试标题）。只写测试标题不带路径会被登记拒绝。"
+            "一个测试项覆盖多个测试函数时，把多个入口写成 JSON 数组，例如 "
+            '["tests/a.test.ts::读取返回 15 组","tests/a.test.ts::升级文案存在"]；'
+            "同行“测试入口”列填了也不参与登记。人工验收行留空"
+        ),
     },
     "测试结果": {
         "测试项编号": "与测试计划表一致，例如 TC-01",
@@ -790,6 +798,8 @@ _ENUM_COLUMNS: dict[str, set[str]] = {
 _TYPE_COLUMNS: dict[str, str] = {
     "命令参数数组": "json_array",
     "超时秒数": "int",
+    # 登记入口的形状与文档模式同一口径（R15）；判断标准在 test_mapping 里定义一次。
+    "正式目标名称": "test_entries",
 }
 
 # ── R19 表门禁实质内容校验（仅对表版本 2 生效；v1 冻结轮次维持旧口径）──
@@ -1217,6 +1227,7 @@ def validate_table(kind: str, table: dict, expected_version: str | None = None) 
             problems.append((FORMAT_CATEGORY, f"栏目 {key} 必须是行数组"))
             continue
         columns = definition["columns"]
+        key_column = definition["key_column"]
         seen_keys: set[str] = set()
         for index, row in enumerate(rows, 1):
             if not isinstance(row, dict) or set(row) != set(columns):
@@ -1277,6 +1288,22 @@ def validate_table(kind: str, table: dict, expected_version: str | None = None) 
                             problems.append((
                                 CONTENT_CATEGORY,
                                 f"{key} 第 {index} 行的 {column} 必须是整数，例如 600",
+                            ))
+                    elif _ttype == "test_entries" and expected_version == "2":
+                        from . import test_mapping as test_mapping_mod
+
+                        _, entry_problem = test_mapping_mod.parse_official_target_names(
+                            row.get(column)
+                        )
+                        if entry_problem:
+                            # 带上行键（测试项编号），让按表登记的失败清单能直接定位到 TC。
+                            row_key = str(row.get(key_column, "")).strip()
+                            location = f"{key} 第 {index} 行"
+                            if row_key:
+                                location += f"（{key_column} {row_key}）"
+                            problems.append((
+                                FORMAT_CATEGORY,
+                                f"{location}的 {entry_problem}",
                             ))
                 if column == definition.get("line_range_column"):
                     bare = value.removeprefix("基线").strip()

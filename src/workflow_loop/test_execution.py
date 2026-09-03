@@ -244,6 +244,7 @@ def prepare_task(
     )
     table_mode = records_mod.table_exists(project_root, plan_relative)
     item = None
+    table_entries: list[str] = []
     if table_mode:
         table = records_mod.load_table(os.path.join(project_root, plan_relative))
         row = next(
@@ -256,14 +257,20 @@ def prepare_task(
             None,
         )
         if row is not None:
+            table_entries, entry_problem = test_mapping.parse_official_target_names(
+                row.get("正式目标名称")
+            )
+            if entry_problem:
+                raise ValueError(entry_problem)
             item = test_mapping.TestPlanItem(
                 topic=topic,
                 criterion_id=str(row.get("对应验收条件", "")).strip(),
                 criterion_name="",
                 test_id=test_id,
-                test_name=str(row.get("正式目标名称", "")).strip(),
+                test_name=table_entries[0],
                 test_method=str(row.get("测试方式", "")).strip() or "自动化测试",
-                test_entry=str(row.get("正式目标名称", "")).strip(),
+                test_entry=table_entries[0],
+                test_entries=tuple(table_entries),
             )
     else:
         try:
@@ -278,7 +285,7 @@ def prepare_task(
         raise ValueError(f"{topic} / {test_id} 不是自动化或混合测试项，不需要登记自动化命令")
 
     if table_mode:
-        entries = [item.test_entry] if item.test_entry else [test_id]
+        entries = list(table_entries)
     else:
         marker_ok, marker_detail = test_mapping.validate_workflow_test_markers(
             project_root,
@@ -370,6 +377,7 @@ def _validate_prepared_tasks_from_tables(
 
     errors: list[str] = []
     expected: dict[tuple[str, str], list[str]] = {}
+    expected_entries: dict[tuple[str, str], list[str]] = {}
     for topic in topics:
         relative = records_mod.table_relative_path(
             project_root, workflow_state.workflow_id, "test_plan", topic
@@ -391,6 +399,13 @@ def _validate_prepared_tasks_from_tables(
             if not command:
                 continue
             expected[(topic, test_id)] = command
+            entries, entry_problem = test_mapping.parse_official_target_names(
+                row.get("正式目标名称")
+            )
+            if entry_problem:
+                errors.append(f"{topic} / {test_id}：{entry_problem}")
+            else:
+                expected_entries[(topic, test_id)] = entries
     actual = {
         (topic, test_id): task
         for topic, tasks in stage_state.test_tasks.items()
@@ -408,6 +423,13 @@ def _validate_prepared_tasks_from_tables(
                 f"{key[0]} / {key[1]}：登记命令与工作记录表不一致；"
                 f"表内 {' '.join(command)}，已登记 {' '.join(task.command[: len(command)])}"
             )
+        if key in expected_entries:
+            planned = sorted(set(expected_entries[key]))
+            if sorted(set(task.test_entries)) != planned:
+                errors.append(
+                    f"{key[0]} / {key[1]}：登记入口与工作记录表不一致；"
+                    f"表内 {planned}，已登记 {sorted(set(task.test_entries))}"
+                )
     if errors:
         return False, "；".join(errors)
     return True, f"全部 {len(expected)} 个测试项的登记任务与工作记录表一致"
