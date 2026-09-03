@@ -1,6 +1,6 @@
-# workflow-loop v0.3.7 正式发布任务
+# workflow-loop v0.3.8 正式发布任务
 # 手动触发只执行：版本身份核对 → 全量测试 → 构建 → 三平台安装、更新和卸载验证。
-# 标签 v0.3.7 在同一验证通过后才把原样构建包发布到 PyPI，并公开 GitHub Release。
+# 标签 v0.3.8 在同一验证通过后才把原样构建包发布到 PyPI，并公开 GitHub Release。
 # 任一步失败都不能上传未经验证的包；不保存长期 PyPI 密码或上传令牌。
 name: release
 
@@ -8,13 +8,13 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "v0.3.7"
+      - "v0.3.8"
 
 env:
-  PRODUCT_VERSION: "0.3.7"
+  PRODUCT_VERSION: "0.3.8"
 
 jobs:
-  # 版本身份核对 + 全量测试：所有位置都必须严格等于 0.3.7
+  # 版本身份核对 + 全量测试：所有位置都必须严格等于 0.3.8
   verify-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -23,21 +23,21 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          grep -q 'version = "0.3.7"' pyproject.toml || { echo "pyproject.toml 版本不是 0.3.7"; fail=1; }
-          grep -A2 'name = "workflow-loop"' uv.lock | grep -q 'version = "0.3.7"' || { echo "uv.lock 版本不是 0.3.7"; fail=1; }
-          grep -q '__version__ = "0.3.7"' src/workflow_loop/__init__.py || { echo "__init__.py 版本不是 0.3.7"; fail=1; }
-          grep -q '"installer_version": "0.3.7"' .workflow_loop/project.json || { echo "project.json 安装版本不是 0.3.7"; fail=1; }
-          grep -q '## 安装 0.3.7' README.md || { echo "README 安装版本不是 0.3.7"; fail=1; }
-          grep -q '/releases/download/v0.3.7/install.sh' README.md || { echo "README shell 安装地址不是 v0.3.7"; fail=1; }
-          grep -q '/releases/download/v0.3.7/install.ps1' README.md || { echo "README PowerShell 安装地址不是 v0.3.7"; fail=1; }
-          grep -q 'PRODUCT_VERSION="0.3.7"' install.sh || { echo "install.sh 版本不是 0.3.7"; fail=1; }
-          grep -q '\$ProductVersion = "0.3.7"' install.ps1 || { echo "install.ps1 版本不是 0.3.7"; fail=1; }
-          grep -q 'SCRIPT_VERSION="0.3.7"' update.sh || { echo "update.sh 版本不是 0.3.7"; fail=1; }
-          grep -q '\$ScriptVersion = "0.3.7"' update.ps1 || { echo "update.ps1 版本不是 0.3.7"; fail=1; }
-          grep -q 'PRODUCT_VERSION="0.3.7"' uninstall.sh || { echo "uninstall.sh 版本不是 0.3.7"; fail=1; }
-          grep -q '\$ProductVersion = "0.3.7"' uninstall.ps1 || { echo "uninstall.ps1 版本不是 0.3.7"; fail=1; }
+          grep -q 'version = "0.3.8"' pyproject.toml || { echo "pyproject.toml 版本不是 0.3.8"; fail=1; }
+          grep -A2 'name = "workflow-loop"' uv.lock | grep -q 'version = "0.3.8"' || { echo "uv.lock 版本不是 0.3.8"; fail=1; }
+          grep -q '__version__ = "0.3.8"' src/workflow_loop/__init__.py || { echo "__init__.py 版本不是 0.3.8"; fail=1; }
+          grep -q '"installer_version": "0.3.8"' .workflow_loop/project.json || { echo "project.json 安装版本不是 0.3.8"; fail=1; }
+          grep -q '## 安装 0.3.8' README.md || { echo "README 安装版本不是 0.3.8"; fail=1; }
+          grep -q '/releases/download/v0.3.8/install.sh' README.md || { echo "README shell 安装地址不是 v0.3.8"; fail=1; }
+          grep -q '/releases/download/v0.3.8/install.ps1' README.md || { echo "README PowerShell 安装地址不是 v0.3.8"; fail=1; }
+          grep -q 'PRODUCT_VERSION="0.3.8"' install.sh || { echo "install.sh 版本不是 0.3.8"; fail=1; }
+          grep -q '\$ProductVersion = "0.3.8"' install.ps1 || { echo "install.ps1 版本不是 0.3.8"; fail=1; }
+          grep -q 'SCRIPT_VERSION="0.3.8"' update.sh || { echo "update.sh 版本不是 0.3.8"; fail=1; }
+          grep -q '\$ScriptVersion = "0.3.8"' update.ps1 || { echo "update.ps1 版本不是 0.3.8"; fail=1; }
+          grep -q 'PRODUCT_VERSION="0.3.8"' uninstall.sh || { echo "uninstall.sh 版本不是 0.3.8"; fail=1; }
+          grep -q '\$ProductVersion = "0.3.8"' uninstall.ps1 || { echo "uninstall.ps1 版本不是 0.3.8"; fail=1; }
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            [ "${GITHUB_REF_NAME}" = "v0.3.7" ] || { echo "标签不是 v0.3.7"; fail=1; }
+            [ "${GITHUB_REF_NAME}" = "v0.3.8" ] || { echo "标签不是 v0.3.8"; fail=1; }
           fi
           exit $fail
       - uses: actions/setup-python@v5
@@ -66,16 +66,16 @@ jobs:
           name: dist
           path: dist/
 
-  # PyPI 可信发布：检测到 PyPI 已存在 0.3.7 时只能停止，不能删除、覆盖或重发
+  # PyPI 可信发布：检测到 PyPI 已存在 0.3.8 时只能停止，不能删除、覆盖或重发
   publish-pypi:
-    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.3.7'
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.3.8'
     needs: prepublish-smoke
     runs-on: ubuntu-latest
     permissions:
       # PyPI Trusted Publishing（可信发布）使用 OIDC 身份，不保存长期令牌
       id-token: write
     steps:
-      - name: 检查 PyPI 是否已存在 0.3.7
+      - name: 检查 PyPI 是否已存在 0.3.8
         run: |
           set -euo pipefail
           status=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/workflow-loop/${PRODUCT_VERSION}/json")
@@ -91,7 +91,7 @@ jobs:
       - name: 上传到 PyPI（Trusted Publishing）
         uses: pypa/gh-action-pypi-publish@release/v1
 
-  # 发布前三平台冒烟：安装脚本通过 UV_FIND_LINKS 使用本次构建的同一份 0.3.7 包
+  # 发布前三平台冒烟：安装脚本通过 UV_FIND_LINKS 使用本次构建的同一份 0.3.8 包
   prepublish-smoke:
     needs: build
     strategy:
@@ -214,7 +214,7 @@ jobs:
           printf 'business-sentinel' > "$proj/business.txt"
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/update.sh" --version "${PRODUCT_VERSION}" --confirmed)
-          grep -q '"installer_version": "0.3.7"' "$proj/.workflow_loop/project.json"
+          grep -q '"installer_version": "0.3.8"' "$proj/.workflow_loop/project.json"
           [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --confirmed)
           [ ! -e "$proj/.workflow_loop" ]
@@ -291,7 +291,7 @@ jobs:
           printf 'business-sentinel' > "$proj/business.txt"
           rm -rf "${UV_TOOL_DIR}" "${UV_TOOL_BIN_DIR}"
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/update.sh" --version "${PRODUCT_VERSION}" --confirmed)
-          grep -q '"installer_version": "0.3.7"' "$proj/.workflow_loop/project.json"
+          grep -q '"installer_version": "0.3.8"' "$proj/.workflow_loop/project.json"
           [ "$(cat "$proj/business.txt")" = "business-sentinel" ]
           (cd "$proj" && UV_NO_INDEX=1 bash "${GITHUB_WORKSPACE}/uninstall.sh" --confirmed)
           [ ! -e "$proj/.workflow_loop" ]
@@ -409,20 +409,20 @@ jobs:
 
   # 全部通过后才创建带安装、更新和卸载脚本的公开 GitHub Release
   github-release:
-    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.3.7'
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.3.8'
     needs: publish-pypi
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: 创建 v0.3.7 GitHub Release
+      - name: 创建 v0.3.8 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.7
-          name: Workflow Loop 0.3.7
+          tag_name: v0.3.8
+          name: Workflow Loop 0.3.8
           body: |
-            Workflow Loop 0.3.7 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。
+            Workflow Loop 0.3.8 为 AI 驱动的软件开发提供有状态、可验证、可回退的工作流管理。
 
             - 支持 macOS、Linux 和原生 Windows 使用一条命令完成安装。
             - 支持更新电脑全局命令和当前项目，并分别卸载项目或电脑全局命令。
