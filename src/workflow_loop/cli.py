@@ -3177,6 +3177,7 @@ def _prepare_tasks_from_tables(project_root: str, wf_state) -> None:
             row_problems = records_mod.validate_table(
                 "test_plan", table,
                 records_mod._workflow_table_version(project_root, wf_state.workflow_id),
+                project_root=project_root,
             )
         except records_mod.RecordsError as exc:
             problems.append(str(exc))
@@ -5141,8 +5142,8 @@ def cmd_repair_links(args) -> None:
         sys.exit(1)
 
     try:
-        current_plan = markdown_links_mod.plan_legacy_anchor_repairs(project_root)
         if args.apply_hash is None:
+            current_plan = markdown_links_mod.plan_legacy_anchor_repairs(project_root)
             repair_files = sorted({repair.target for repair in current_plan.repairs})
             print("═══ 受管正式文档链接修复预览 ═══")
             print(f"恢复检查: {recovery.detail}")
@@ -5175,7 +5176,6 @@ def cmd_repair_links(args) -> None:
             project_root,
             args.apply_hash,
         )
-        remaining = markdown_links_mod.plan_legacy_anchor_repairs(project_root)
     except (
         markdown_links_mod.LinkRepairError,
         OSError,
@@ -5192,9 +5192,9 @@ def cmd_repair_links(args) -> None:
     print(f"实际修改文件: {len(result.repaired_files)} 个")
     for relative in result.repaired_files:
         print(f"  - {relative}")
-    _print_link_issue_list("剩余不可自动修复", remaining.unresolved)
+    _print_link_issue_list("剩余不可自动修复", result.unresolved)
     print("工作流状态: 未推进阶段，未修改门禁状态")
-    if remaining.unresolved:
+    if result.unresolved:
         print_next_step("按上面的来源、目标和原因逐项修正文档，再原样执行 `workflow repair-links`")
     else:
         retry_command = _link_gate_retry_command(project_root)

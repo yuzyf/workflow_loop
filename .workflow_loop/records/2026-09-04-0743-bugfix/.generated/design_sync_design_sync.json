@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "cbf0e4dacfac9bbb92924beda353b1a0f2335002577a3336545dc0785634be19",
+    "生成文档路径": ".workflow_loop/records/2026-09-04-0743-bugfix/design_sync_design_sync.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    ".workflow_loop/records/2026-09-04-0743-bugfix/design_sync_design_sync.md": {
+      "body_hash": "77d786d9b03d14f539e7b854d5e4abec9dc75d29dbeaaba6213de508734cf324"
+    }
+  }
+}

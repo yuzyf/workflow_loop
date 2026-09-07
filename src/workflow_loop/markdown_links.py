@@ -81,6 +81,7 @@ class LinkRepairResult:
     success: bool
     repaired_files: tuple[str, ...]
     detail: str
+    unresolved: tuple[LinkIssue, ...] = ()
 
 
 class LinkRepairError(RuntimeError):
@@ -106,6 +107,48 @@ class _IdCollector(HTMLParser):
 
 def _parser() -> MarkdownIt:
     return MarkdownIt("commonmark", {"html": True})
+
+
+class _DocumentCache:
+    """一次检查内共享文件内容和解析结果；写入复查仍独立核对磁盘字节。"""
+
+    def __init__(self, project_root: str) -> None:
+        self.root = Path(project_root)
+        self.raw: dict[str, bytes] = {}
+        self.errors: dict[str, OSError] = {}
+        self.parsed: dict[str, list] = {}
+
+    def read(self, relative: str) -> bytes:
+        if relative in self.errors:
+            raise self.errors[relative]
+        if relative not in self.raw:
+            try:
+                self.raw[relative] = (self.root / relative).read_bytes()
+            except OSError as exc:
+                self.errors[relative] = exc
+                raise
+        return self.raw[relative]
+
+    def content(self, relative: str) -> str:
+        return self.read(relative).decode("utf-8")
+
+    def tokens(self, relative: str) -> list:
+        if relative not in self.parsed:
+            self.parsed[relative] = _parser().parse(self.content(relative))
+        return self.parsed[relative]
+
+    def overlay(self, contents: dict[str, str]) -> _DocumentCache:
+        result = _DocumentCache(str(self.root))
+        result.raw = self.raw.copy()
+        result.errors = self.errors.copy()
+        result.parsed = self.parsed.copy()
+        for relative, content in contents.items():
+            raw = content.encode("utf-8")
+            if result.raw.get(relative) != raw:
+                result.parsed.pop(relative, None)
+            result.errors.pop(relative, None)
+            result.raw[relative] = raw
+        return result
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -143,10 +186,10 @@ def _managed_existing_markdown(
     return sorted(set(result))
 
 
-def _token_links(content: str, source: str) -> list[MarkdownLink]:
+def _token_links(content: str, source: str, tokens: list | None = None) -> list[MarkdownLink]:
     links: list[MarkdownLink] = []
     lines = content.splitlines()
-    for token in _parser().parse(content):
+    for token in tokens if tokens is not None else _parser().parse(content):
         if token.type != "inline" or not token.children:
             continue
         start = token.map[0] if token.map else 0
@@ -178,9 +221,9 @@ def _token_links(content: str, source: str) -> list[MarkdownLink]:
     return links
 
 
-def _explicit_ids(content: str) -> tuple[str, ...]:
+def _explicit_ids(content: str, tokens: list | None = None) -> tuple[str, ...]:
     collector = _IdCollector()
-    for token in _parser().parse(content):
+    for token in tokens if tokens is not None else _parser().parse(content):
         if token.type in {"html_block", "html_inline"}:
             collector.feed(token.content)
         if token.type == "inline" and token.children:
@@ -232,14 +275,6 @@ def _local_target(
     return normalized, fragment, None
 
 
-def _read_content(
-    project_root: str, relative: str, overrides: dict[str, str] | None
-) -> str:
-    if overrides is not None and relative in overrides:
-        return overrides[relative]
-    return Path(project_root, relative).read_text(encoding="utf-8")
-
-
 def scan_managed_markdown_links(
     project_root: str,
     *,
@@ -248,17 +283,30 @@ def scan_managed_markdown_links(
 ) -> LinkScanResult:
     """扫描现有受管文档，并一次返回全部本地链接问题。"""
 
+    documents = _DocumentCache(project_root).overlay(content_overrides or {})
+    return _scan_links(project_root, documents, content_overrides, source_paths)
+
+
+def _scan_links(
+    project_root: str,
+    documents: _DocumentCache,
+    content_overrides: dict[str, str] | None = None,
+    source_paths: Iterable[str] | None = None,
+) -> LinkScanResult:
+
     links: list[MarkdownLink] = []
     issues: list[LinkIssue] = []
+    ids: dict[str, Counter] = {}
     for source in _managed_existing_markdown(project_root, source_paths):
         try:
-            content = _read_content(project_root, source, content_overrides)
+            content = documents.content(source)
+            source_tokens = documents.tokens(source)
         except (OSError, UnicodeDecodeError) as exc:
             issues.append(
                 LinkIssue(source, 1, "", source, f"受管 Markdown 文档无法读取：{exc}")
             )
             continue
-        for link in _token_links(content, source):
+        for link in _token_links(content, source, source_tokens):
             target, fragment, path_error = _local_target(project_root, link)
             if target is None and path_error is None:
                 continue
@@ -277,7 +325,9 @@ def scan_managed_markdown_links(
                 continue
             if fragment:
                 try:
-                    target_content = _read_content(project_root, target, content_overrides)
+                    if target not in ids:
+                        target_content = documents.content(target)
+                        ids[target] = Counter(_explicit_ids(target_content, documents.tokens(target)))
                 except (OSError, UnicodeDecodeError) as exc:
                     issues.append(
                         LinkIssue(
@@ -289,7 +339,7 @@ def scan_managed_markdown_links(
                         )
                     )
                     continue
-                count = _explicit_ids(target_content).count(fragment)
+                count = ids[target][fragment]
                 if count != 1:
                     reason = "缺少完全一致的显式 HTML id" if count == 0 else f"显式 HTML id 重复 {count} 次"
                     issues.append(LinkIssue(link.source, link.line, link.href, target, reason))
@@ -316,9 +366,19 @@ def validate_managed_markdown_links(
     return False, f"受管正式文档存在 {len(result.issues)} 个链接问题：\n{detail}"
 
 
-def _heading_candidates(content: str, fragment: str) -> list[int]:
+def _heading_anchor_ids(text: str) -> set[str]:
+    normalized = re.sub(r"[^\w\u3400-\u9fff -]+", "", text.lower())
+    slug = re.sub(r"[\s-]+", "-", normalized).strip("-")
+    first_id = re.match(r"([A-Za-z]+-\d+)", text)
+    candidates = {slug} if slug else set()
+    if first_id:
+        candidates.add(first_id.group(1).lower())
+    return candidates
+
+
+def _heading_candidates(content: str, fragment: str, tokens: list | None = None) -> list[int]:
     matches: list[int] = []
-    tokens = _parser().parse(content)
+    tokens = tokens if tokens is not None else _parser().parse(content)
     for index, token in enumerate(tokens[:-1]):
         if token.type != "heading_open" or token.map is None:
             continue
@@ -326,25 +386,81 @@ def _heading_candidates(content: str, fragment: str) -> list[int]:
         if inline.type != "inline":
             continue
         text = inline.content.strip()
-        normalized = re.sub(r"[^\w\u3400-\u9fff -]+", "", text.lower())
-        slug = re.sub(r"[\s-]+", "-", normalized).strip("-")
-        first_id = re.match(r"([A-Za-z]+-\d+)", text)
-        candidates = {slug}
-        if first_id:
-            candidates.add(first_id.group(1).lower())
+        candidates = _heading_anchor_ids(text)
         if fragment.lower() in candidates:
             matches.append(token.map[0] + 1)
     return matches
 
 
-def _repair_file_hashes(project_root: str, scan: LinkScanResult) -> tuple[tuple[str, str], ...]:
+def _standard_heading_anchors(content: str, tokens: list) -> dict[int, str]:
+    headings = [
+        (token.map[0], _heading_anchor_ids(tokens[index + 1].content.strip()))
+        for index, token in enumerate(tokens[:-1])
+        if token.type == "heading_open" and token.map is not None
+        and tokens[index + 1].type == "inline"
+    ]
+    counts = Counter(anchor for _, anchors in headings for anchor in anchors)
+    ids = Counter(_explicit_ids(content, tokens))
+    html_lines = {
+        line for token in tokens if token.map and (token.type == "html_block" or
+        (token.type == "inline" and any(child.type == "html_inline" for child in token.children or [])))
+        for line in range(*token.map)
+    }
+    lines = content.splitlines(keepends=True)
+    anchors: dict[int, str] = {}
+    for heading_line, candidates in headings:
+        line = heading_line - 1
+        while line >= 0:
+            match = re.fullmatch(r'[ \t]*<a id="([^"]+)"></a>[ \t]*(?:\r?\n)?', lines[line])
+            if match is None or line not in html_lines:
+                break
+            anchor = match.group(1)
+            if anchor.lower() in candidates and counts[anchor.lower()] == 1 and ids[anchor] == 1:
+                anchors[line] = anchor
+            line -= 1
+    return anchors
+
+
+def with_heading_anchors(content: str, *, previous_content: str = "") -> str:
+    """生成与历史修复同源的唯一标题定位；已有显式定位不重复插入。"""
+    tokens = _parser().parse(content)
+    headings = [
+        (token.map[0], _heading_anchor_ids(tokens[index + 1].content.strip()))
+        for index, token in enumerate(tokens[:-1])
+        if token.type == "heading_open" and token.map is not None
+        and tokens[index + 1].type == "inline"
+    ]
+    counts = Counter(anchor for _, anchors in headings for anchor in anchors)
+    existing = set(_explicit_ids(content, tokens))
+    aliases = set(_standard_heading_anchors(previous_content, _parser().parse(previous_content)).values()) if previous_content else set()
+    lines = content.splitlines(keepends=True)
+    # 文档第一个标题（正式文档标题行）不插独立锚点行：正式文件标识登记把首行当标题解析，
+    # 标题前的独立锚点行会让标识推导出错（2026-09-07 缺陷复现环节实测）。
+    body_headings = headings[1:]
+    for line, anchors in reversed(body_headings):
+        candidates = anchors | {alias for alias in aliases if alias.lower() in anchors}
+        additions = sorted(anchor for anchor in candidates if counts[anchor.lower()] == 1 and anchor not in existing)
+        if additions:
+            lines.insert(line, "".join(f'<a id="{anchor}"></a>\n' for anchor in additions))
+            existing.update(additions)
+    return "".join(lines)
+
+
+def without_generated_anchors(content: str) -> str:
+    """仅忽略能唯一对应现有标题的标准定位，正文或未知定位仍参与手改检查。"""
+    tokens = _parser().parse(content)
+    anchors = _standard_heading_anchors(content, tokens)
+    return "".join(line for index, line in enumerate(content.splitlines(keepends=True)) if index not in anchors)
+
+
+def _repair_file_hashes(project_root: str, scan: LinkScanResult, documents: _DocumentCache) -> tuple[tuple[str, str], ...]:
     paths = set(_managed_existing_markdown(project_root))
     for link in scan.links:
         target, _fragment, error = _local_target(project_root, link)
         if target is not None and error is None and Path(project_root, target).is_file():
             paths.add(target)
     return tuple(
-        (relative, _sha256_bytes(Path(project_root, relative).read_bytes()))
+        (relative, _sha256_bytes(documents.read(relative)))
         for relative in sorted(paths)
     )
 
@@ -364,16 +480,25 @@ def _plan_payload(
 def plan_legacy_anchor_repairs(project_root: str) -> RepairPlan:
     """只读规划能够唯一对应到旧式隐式标题定位的修复。"""
 
-    scan = scan_managed_markdown_links(project_root)
+    return _plan_repairs(project_root, _DocumentCache(project_root))
+
+
+def _plan_repairs(project_root: str, documents: _DocumentCache) -> RepairPlan:
+
+    scan = _scan_links(project_root, documents)
     repairs: list[AnchorRepair] = []
     unresolved: list[LinkIssue] = []
+    candidates: dict[tuple[str, str], list[int]] = {}
     for issue in scan.issues:
         if issue.reason != "缺少完全一致的显式 HTML id" or "#" not in issue.href:
             unresolved.append(issue)
             continue
         fragment = unquote(urlsplit(issue.href).fragment)
-        content = Path(project_root, issue.target).read_text(encoding="utf-8")
-        headings = _heading_candidates(content, fragment)
+        key = (issue.target, fragment.lower())
+        if key not in candidates:
+            content = documents.content(issue.target)
+            candidates[key] = _heading_candidates(content, fragment, documents.tokens(issue.target))
+        headings = candidates[key]
         if len(headings) != 1:
             unresolved.append(issue)
             continue
@@ -389,25 +514,27 @@ def plan_legacy_anchor_repairs(project_root: str) -> RepairPlan:
         )
     repair_tuple = tuple(sorted(set(repairs)))
     unresolved_tuple = tuple(sorted(set(unresolved)))
-    file_hashes = _repair_file_hashes(project_root, scan)
+    file_hashes = _repair_file_hashes(project_root, scan, documents)
     preview_hash = _canonical_hash(_plan_payload(file_hashes, repair_tuple, unresolved_tuple))
     return RepairPlan(preview_hash, file_hashes, repair_tuple, unresolved_tuple)
 
 
-def _render_repairs(project_root: str, plan: RepairPlan) -> dict[str, str]:
+def _render_repairs(project_root: str, plan: RepairPlan, documents: _DocumentCache) -> dict[str, str]:
     grouped: dict[str, list[AnchorRepair]] = {}
     for repair in plan.repairs:
         grouped.setdefault(repair.target, []).append(repair)
     rendered: dict[str, str] = {}
     for relative, repairs in sorted(grouped.items()):
-        lines = Path(project_root, relative).read_text(encoding="utf-8").splitlines(keepends=True)
+        lines = documents.content(relative).splitlines(keepends=True)
+        existing = set(_explicit_ids(documents.content(relative), documents.tokens(relative)))
         for repair in sorted(repairs, key=lambda item: (item.heading_line, item.fragment), reverse=True):
             anchor = f'<a id="{repair.fragment}"></a>\n'
             insert_at = repair.heading_line - 1
             if insert_at < 0 or insert_at >= len(lines):
                 raise LinkRepairError(f"{relative}:{repair.heading_line} 的标题位置已经失效")
-            if anchor.strip() not in {line.strip() for line in lines}:
+            if repair.fragment not in existing:
                 lines.insert(insert_at, anchor)
+                existing.add(repair.fragment)
         rendered[relative] = "".join(lines)
     return rendered
 
@@ -528,17 +655,19 @@ def apply_legacy_anchor_repairs(
     if not pending.success:
         raise LinkRepairError(pending.detail)
     expected_hash = preview.preview_hash if isinstance(preview, RepairPlan) else preview
-    current = plan_legacy_anchor_repairs(project_root)
+    documents = _DocumentCache(project_root)
+    current = _plan_repairs(project_root, documents)
     if current.preview_hash != expected_hash:
         raise LinkRepairError(
             f"修复预览已经漂移：预期 {expected_hash}，实际 {current.preview_hash}；整批零写入"
         )
     if not current.repairs:
-        return LinkRepairResult(True, (), "预览中没有可确定修复，未写入文件")
+        return LinkRepairResult(True, (), "预览中没有可确定修复，未写入文件", current.unresolved)
 
-    rendered = _render_repairs(project_root, current)
+    rendered = _render_repairs(project_root, current, documents)
     baseline_issues = _issue_counts(current.unresolved)
-    preview_scan = scan_managed_markdown_links(project_root, content_overrides=rendered)
+    preview_documents = documents.overlay(rendered)
+    preview_scan = _scan_links(project_root, preview_documents, rendered)
     if _issue_counts(preview_scan.issues) != baseline_issues:
         raise LinkRepairError("待写内容复查没有精确保留不可自动修复项；整批零写入")
 
@@ -547,7 +676,7 @@ def apply_legacy_anchor_repairs(
         relative
         for relative, expected in current.file_hashes
         if not Path(project_root, relative).is_file()
-        or Path(project_root, relative).is_symlink()
+        or _has_symlink_component(Path(project_root).absolute(), Path(project_root, relative).absolute())
         or _sha256_bytes(Path(project_root, relative).read_bytes()) != expected
     ]
     if drifted:
@@ -591,11 +720,18 @@ def apply_legacy_anchor_repairs(
             writer(target, (tx_root / "staged" / relative).read_bytes())
             if not target.is_file() or _sha256_bytes(target.read_bytes()) != entry["after_hash"]:
                 raise LinkRepairError(f"{relative} 写入后的内容哈希与预览不一致")
-        actual = scan_managed_markdown_links(project_root)
+        # 磁盘原文仍逐文件核对；只有与已检查内容完全一致时才复用解析结果。
+        for relative, original_hash in current.file_hashes:
+            target = Path(project_root, relative)
+            expected_hash = _sha256_bytes(rendered[relative].encode("utf-8")) if relative in rendered else original_hash
+            if (_has_symlink_component(Path(project_root).absolute(), target.absolute())
+                    or not target.is_file() or _sha256_bytes(target.read_bytes()) != expected_hash):
+                raise LinkRepairError(f"{relative} 在写入后复查时发生变化")
+        actual = _scan_links(project_root, preview_documents)
         if _issue_counts(actual.issues) != baseline_issues:
             raise LinkRepairError("写入后复查没有精确保留不可自动修复项")
         shutil.rmtree(tx_root)
-        return LinkRepairResult(True, tuple(sorted(rendered)), "历史标准定位已整批修复并复查通过")
+        return LinkRepairResult(True, tuple(sorted(rendered)), "历史标准定位已整批修复并复查通过", actual.issues)
     except BaseException as exc:
         if manifest_written:
             recovery = recover_pending_link_repair(project_root)

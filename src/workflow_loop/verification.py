@@ -258,7 +258,7 @@ def _stage_records_content_hash(
             content = {
                 key: value
                 for key, value in table.items()
-                if key not in (records_mod.DOC_HASH_KEY, records_mod.GENERATED_DOC_PATH_KEY)
+                if key not in (*records_mod.PROGRAM_FIELD_KEYS, "填写说明")
             }
             digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
@@ -1697,7 +1697,7 @@ def _table_document_hash(
         content = {
             key: value
             for key, value in table.items()
-            if key not in (records_mod.DOC_HASH_KEY, records_mod.GENERATED_DOC_PATH_KEY)
+            if key not in (*records_mod.PROGRAM_FIELD_KEYS, "填写说明")
         }
         digest.update(
             json.dumps(content, ensure_ascii=False, sort_keys=True).encode("utf-8")

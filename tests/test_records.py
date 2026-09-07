@@ -110,6 +110,9 @@ Workflow-Test
     """
     root = tmp_path / "proj"
     root.mkdir()
+    state = _state_with_stage("wf-1", "impl")
+    state.table_format_version = "2"
+    state_mod.save_state(str(root), state)
     relative = records_mod.create_or_complete_table(str(root), "wf-1", "impl_record", "主题A")
     full = root / relative
     table = json.loads(full.read_text(encoding="utf-8"))
@@ -759,8 +762,10 @@ def test_spike_bug_design_tables_generate_docs(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     root.mkdir()
     state = state_mod.WorkflowState(
-        workflow_id="wf-1", intent="product_change", topics=["主题A"]
+        workflow_id="wf-1", intent="product_change", topics=["主题A"],
+        table_format_version="2",
     )
+    state_mod.save_state(str(root), state)
     for stage, kind, topic in [
         ("spike", "spike_conclusion", ""),
         ("reproduce", "bug_record", ""),

@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "0c99aac8202850d7310a15998fbd46dadbf1874a8dd9df280a2ab66c2aaf9aac",
+    "生成文档路径": "acceptance/按程序指引填表和修链接都能一次过关_修复结果不被程序自己抹掉_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/按程序指引填表和修链接都能一次过关_修复结果不被程序自己抹掉_验收计划.md": {
+      "body_hash": "9abf2e1696242b91a7df8e9d2aab09b17a4ab5a29e2899b122bf687b832b77d2"
+    }
+  }
+}

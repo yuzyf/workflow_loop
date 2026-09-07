@@ -1438,7 +1438,9 @@ def validate_final_code_design_document(
                 extra_ids = sorted(actual_record_ids - required_record_ids)
                 errors.append(
                     f"{relative_path} 第 9 章“核对依据”字段必须精确列出当前机器记录编号；"
-                    f"缺少={missing_ids}，额外或拼接错误={extra_ids}"
+                    f"当前缺少={missing_ids}，不在当前有效集合中的编号={extra_ids}。"
+                    "测试或最终全量回归重跑会使旧编号失效；额外编号也可能是拼写或拼接错误，"
+                    "请从当前工作流状态重新取得有效编号集合，不要沿用历史编号"
                 )
 
     if errors:
@@ -1517,6 +1519,21 @@ def validate_reproduce_documents(
     ]
 
     topics: list[str] = []
+    from . import records as records_mod
+
+    table_relative = records_mod.table_relative_path(project_root, workflow_id, "bug_record", "")
+    fact_table = None
+    if records_mod.table_exists(project_root, table_relative):
+        try:
+            table = records_mod.load_table(os.path.join(project_root, table_relative))
+            if table.get("表版本") == "3":
+                fact_table = table
+                failures.extend(
+                    f"{table_relative}：{detail}" for _category, detail in
+                    records_mod.validate_table("bug_record", table, "3", project_root=project_root)
+                )
+        except records_mod.RecordsError as exc:
+            failures.append(str(exc))
     for rel_path in changed_bug_docs:
         filename = os.path.basename(rel_path)
         if not BUG_FILENAME_RE.match(filename):
@@ -1546,6 +1563,12 @@ def validate_reproduce_documents(
                 failures.append(f"{filename} 必须写清唯一验收主题")
         else:
             topics.append(topic or "")
+
+        if fact_table is not None and topic == fact_table.get("验收主题"):
+            for heading in required_sections:
+                if _section(content, heading) is None:
+                    failures.append(f"{filename} 缺少“{heading}”章节")
+            continue
 
         for heading in required_sections:
             allow_none = heading.startswith("7.")
