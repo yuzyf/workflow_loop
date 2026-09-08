@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "158f9d3b5fc0db7e7504018df9e663401655efa32c1ae53ba768a64d6daed803",
+    "生成文档路径": ".workflow_loop/records/2026-09-08-1207-product_change/architecture_changes_architecture_changes.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    ".workflow_loop/records/2026-09-08-1207-product_change/architecture_changes_architecture_changes.md": {
+      "body_hash": "7ce5c87e9d3d4bbe371d0e5cd101cf96726329b5642526047994a2ce31e0c7eb"
+    }
+  }
+}

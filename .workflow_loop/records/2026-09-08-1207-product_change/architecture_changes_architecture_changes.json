@@ -1,0 +1,42 @@
+{
+  "表版本": "4",
+  "工作流编号": "2026-09-08-1207-product_change",
+  "验收主题": "",
+  "生成文档哈希": "158f9d3b5fc0db7e7504018df9e663401655efa32c1ae53ba768a64d6daed803",
+  "生成文档路径": ".workflow_loop/records/2026-09-08-1207-product_change/architecture_changes_architecture_changes.md",
+  "正文变更": [
+    {
+      "章节": "4.6 实施、测试与验收层",
+      "原文": "`src/workflow_loop/machine_collect.py`（机器事实采集模块）按实施前回退副本与进场 Git 基线提交号计算差异事实（回退副本优先、其次进场提交号、无登记按新文件全部新增），`collect_implementation_changes()`（采集实施改动函数）把文件与代码位置两列写入实施记录表并记录采集指纹，`verify_collection_fingerprint()`（核对采集指纹函数）供 impl 第二道门重算比对；位置值与门禁行号格式同源（新文件写 L1-L行数，多块写覆盖全部差异的连续范围）。",
+      "新文": "`src/workflow_loop/machine_collect.py`（机器事实采集模块）按实施前回退副本与进场 Git 基线提交号计算差异事实（回退副本优先、其次进场提交号、无登记按新文件全部新增），`collect_implementation_changes()`（采集实施改动函数）把文件与代码位置两列写入实施记录表并记录采集指纹，`verify_collection_fingerprint()`（核对采集指纹函数）供 impl 第二道门重算比对；位置值与门禁行号格式同源（新文件写 L1-L行数，多块写覆盖全部差异的连续范围）。`src/workflow_loop/code_symbols.py`（代码符号索引模块）用 ast 解析 src/ 与 tests/ 全部 Python 文件建立路径到符号集合索引（模块级函数、类、类方法，单文件语法错误跳过记录），`check_reference()`（引用核对函数）对 文件::符号 引用四分支核对（真实通过、错误给相近符号建议、非 Python 查存在、不存在文件拒绝）。",
+      "依据": "src/workflow_loop/code_symbols.py::build_symbol_index 与 check_reference；tests/test_machine_collect_extension.py 符号索引与核对用例通过"
+    },
+    {
+      "章节": "6.11 【功能】验收并完成交付",
+      "原文": "执行前先由 `src/workflow_loop/test_runner.py::should_skip_final_regression`（判定是否跳过最终回归函数）做跳过判定：按实施前回退清单计算差异并排除受管文档，产品代码与测试代码差异均为空才跳过（依据与时间写入 state 的 skip_reason/skipped_at，状态 skipped-by-no-change，不产生机器执行记录；设计同步不要求 REG 编号）；仅测试代码变化不跳过；清单缺失或差异计算失败一律运行",
+      "新文": "执行前先由 `src/workflow_loop/test_runner.py::should_skip_final_regression`（判定是否跳过最终回归函数）做跳过判定：按实施前回退清单计算差异并排除受管文档，产品代码与测试代码差异均为空才跳过（依据与时间写入 state 的 skip_reason/skipped_at，状态 skipped-by-no-change，不产生机器执行记录；设计同步不要求 REG 编号）；仅测试代码变化不跳过；清单缺失或差异计算失败一律运行。测试结果表三列（测试项编号、执行结论、机器记录编号）由 `src/workflow_loop/records.py::_fill_machine_record_ids`（机器记录回填函数）在表同步时先于空表守卫自动回填：已有行按编号对齐更新、无行按当前任务追加，AI 只填实际结果说明叙述列",
+      "依据": "src/workflow_loop/records.py::_fill_machine_record_ids；src/workflow_loop/machine_collect.py::test_result_columns；本轮 qa 实测三列自动回填"
+    },
+    {
+      "章节": "6.9 【功能】实施并保护项目修改",
+      "原文": "保存计划文件原内容或“原本不存在”，同时把完整入场观察清单写入回退依据；准备前先确认入场后没有未授权变化",
+      "新文": "保存计划文件原内容或“原本不存在”，同时把完整入场观察清单写入回退依据；准备前先确认入场后没有未授权变化——入场后已修改的文件可用 Git 自证放行：进场快照等于 HEAD 版本时用 HEAD 字节补首次副本，进场快照不存在的新文件直接放行，不能自证的按文件列出原因保持拒绝（不降低回退安全性）",
+      "依据": "src/workflow_loop/rollback.py::prepare_impl 首次准备 Git 自证出口；tests/test_git_baseline_exit.py 四项通过；本轮真实触发拒绝分支（快照中间态）"
+    },
+    {
+      "章节": "6.2 【功能】开始或继续一轮工作",
+      "原文": "显式编号必须精确匹配当前轮次；无编号旧日志只有时间可解析、带时区且不早于本轮开工才参与恢复。",
+      "新文": "显式编号必须精确匹配当前轮次；无编号旧日志只有时间可解析、带时区且不早于本轮开工才参与恢复。`src/workflow_loop/topic.py::current_workflow_topics`（当前主题读取函数）把 state.topics 与 topic_relations 工作记录表主题合并去重，验收计划确认门与表同步同样合并——中途新增主题不再被索引待生成占位阻断（索引需要文档、文档需要主题解析的死循环修复）。",
+      "依据": "src/workflow_loop/topic.py::current_workflow_topics；src/workflow_loop/cli.py 确认门合并；本轮中途加第三主题全流程实测"
+    }
+  ],
+  "填写说明": {
+    "正文变更": {
+      "章节": "填写正式架构中唯一存在的完整章节标题，不带井号；不能填写最终同步结论章节",
+      "原文": "从该章节复制需变更的原事实，必须唯一匹配；多行原文保留换行；不能仅填已替换后的新文",
+      "新文": "填写已经实现并核实的新事实，不改原章节标题、表格结构或定位锚点",
+      "依据": "填写真实代码位置、核对结果或验收依据；无正文变化时正文变更留空数组"
+    },
+    "程序专用字段": "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
+  }
+}
