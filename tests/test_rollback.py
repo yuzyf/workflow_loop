@@ -775,7 +775,8 @@ def test_prepare_rejects_unregistered_change_after_impl_entry(tmp_path):
     _freeze_complete_impl_inventory(tmp_path, state)
     hidden.write_text("def hidden():\n    return 'changed too early'\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"修改=\['src/hidden.py'\]"):
+    # Git 自证出口后：非 git 环境无法自证，改为按文件列出拒绝原因（语义不变）
+    with pytest.raises(ValueError, match=r"src/hidden.py"):
         rollback.prepare_impl(str(tmp_path), state)
 
 
