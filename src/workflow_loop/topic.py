@@ -85,14 +85,13 @@ def list_reproduce_topics(project_root: str, workflow_id: str | None = None) -> 
 
 def current_workflow_topics(project_root: str) -> list[str]:
     """读取当前 Workflow Run（工作流运行）的主题，兼容旧版单主题状态。"""
+
     state = load_state(project_root)
     if state is None:
         return []
-    if state.topics:
-        return state.topics
-    if state.topic:
-        return [state.topic]
-    # 断言三：state.topics 空时，从 topic_relations 工作记录表读（表为唯一输入，不靠 state.topics）
+    topics = list(state.topics or ([state.topic] if state.topic else []))
+    # 断言三：topic_relations 表是主题的唯一输入；state.topics 非空时也合并
+    # 表内新主题（中途加主题时索引尚是"待生成"，确认门靠这里拿到新主题）。
     try:
         from . import records as records_mod
         import os
@@ -104,11 +103,10 @@ def current_workflow_topics(project_root: str) -> list[str]:
                 for r in _t.get("主题关系", [])
                 if str(r.get("验收主题", "")).strip()
             ]
-            if _topics:
-                return _topics
+            topics = list(dict.fromkeys([*topics, *_topics]))
     except Exception:
         pass
-    return []
+    return topics
 
 
 def candidate_topics(project_root: str) -> list[str]:

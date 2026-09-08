@@ -2,16 +2,41 @@
   "表版本": "4",
   "工作流编号": "2026-09-08-1207-product_change",
   "验收主题": "测试结果表机器采集三列",
-  "生成文档哈希": null,
-  "生成文档路径": null,
+  "生成文档哈希": "65e9c8bfa8d418eca3ff1ecede26e4fa78257286c6989f07e14d3d8b049cce4a",
+  "生成文档路径": "impl/测试结果表机器采集三列_实施记录.md",
   "实施依据": [
-    "验收计划 4 条 AC（回填、刷新、叙述保留、安全降级）。",
-    "machine_collect.py 已有 acceptance_result_columns（验收五列取值）与 state 读取基建可复用。"
+    {
+      "依据类型": "验收计划",
+      "依据编号": "AC-01 至 AC-04",
+      "具体内容": "三列回填、重跑刷新、叙述保留、无任务安全降级四条验收条件",
+      "文档位置": "acceptance/测试结果表机器采集三列_验收计划.md"
+    },
+    {
+      "依据类型": "上游实现",
+      "依据编号": "R26",
+      "具体内容": "machine_collect 已有 acceptance_result_columns（验收五列取值）与 state 读取基建可复用",
+      "文档位置": "src/workflow_loop/machine_collect.py"
+    }
   ],
   "最低实现设计": [
-    "在 machine_collect.py 增加 test_result_columns(topic, tasks)：从 qa 阶段测试任务取 每项的编号、当前状态、当前记录编号，生成三列行。",
-    "在 records.py 的 sync_stage_tables 对 test_result 表（v4）在生成文档前回填三列：已有行按编号更新三列（保留叙述列），无行则按当前任务追加；无任务主题跳过（留给空表守卫报未填）。",
-    "回填时机与既有 v4 回填一致：门禁同步时执行，重复执行幂等。"
+    {
+      "设计项": "三列取值函数",
+      "已确认做法": "machine_collect 新增 test_result_columns：从 qa 阶段该主题测试任务取每项编号、当前状态、当前记录编号",
+      "选择理由": "与验收五列取值同源单一实现",
+      "对应验收条件": "AC-01"
+    },
+    {
+      "设计项": "回填挂载",
+      "已确认做法": "records 的 _fill_machine_record_ids 扩展为三列回填：已有行对齐更新、无行追加、无任务跳过",
+      "选择理由": "与既有机器编号回填同一入口，幂等",
+      "对应验收条件": "AC-01、AC-02、AC-03、AC-04"
+    },
+    {
+      "设计项": "安全边界",
+      "已确认做法": "无当前记录的任务结论留空并提示待执行；无任务主题返回空由空表守卫报未填",
+      "选择理由": "没有真实机器记录时不写入通过值，防止伪造测试结论",
+      "对应验收条件": "AC-04"
+    }
   ],
   "代码修改计划": [
     {
@@ -37,18 +62,66 @@
   ],
   "开发检查计划": [
     {
-      "检查命令或方法": "pytest tests/test_machine_collect.py tests/test_empty_result_table_guard.py tests/test_records.py -q",
+      "检查命令或方法": ".venv/bin/python -m pytest tests/test_machine_collect_extension.py tests/test_machine_collect.py tests/test_empty_result_table_guard.py tests/test_records.py tests/test_workflow_guidance.py tests/test_gate_rework_stability.py -q",
       "检查范围": "三列回填行为与既有表流程回归",
-      "预期结果": "全部通过"
+      "预期观察结果": "全部通过退出码 0"
     }
   ],
-  "实施动作记录": [],
-  "实际代码修改": [],
-  "开发检查记录": [],
+  "实施动作记录": [
+    {
+      "实施顺序": "1",
+      "对应计划步骤": "1",
+      "文件": "src/workflow_loop/machine_collect.py",
+      "代码位置（最终文件）": "L551-L585",
+      "实际执行的动作": "新增 test_result_columns：从 qa 阶段该主题测试任务取每项编号、当前状态、当前记录编号生成三列行；无当前记录时结论与编号留空",
+      "当步反馈": "tests/test_machine_collect_extension.py 三列取值测试通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "2",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L3741-L3803",
+      "实际执行的动作": "重写 _fill_machine_record_ids 为三列回填：已有行按测试项编号对齐更新执行结论与机器记录编号（叙述列不动）；当前任务无行时追加新行；无任务主题返回空由空表守卫报告；幂等",
+      "当步反馈": "更新/追加/待执行提示/无任务降级/幂等五项测试通过",
+      "状态": "已完成"
+    }
+  ],
+  "实际代码修改": [
+    {
+      "文件": "src/workflow_loop/machine_collect.py",
+      "代码位置（最终文件）": "L551-L585",
+      "实际修改的代码逻辑": "test_result_columns 函数：stage 先查 qa 再查 test_execution，逐任务输出 测试项编号/执行结论/机器记录编号 三列字典；与 acceptance_result_columns 同构同源",
+      "数据、状态或输出的实际变化": "qa 表同步可程序化取得三列机器值",
+      "修改理由": "三列取值单一实现，AI 不再手抄（2026-09-08 实证第五处手抄现场根治）",
+      "对应验收条件": "AC-01、AC-02",
+      "测试证据": "test_result_columns_values 通过"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L3741-L3803",
+      "实际修改的代码逻辑": "_fill_machine_record_ids 扩展：更新已有行三列+追加缺失行+无当前记录提示+无任务安全返回+幂等；调用 machine_collect.test_result_columns 取值",
+      "数据、状态或输出的实际变化": "测试执行后三列自动出现且与当前记录一致；重跑自动刷新；AI 叙述列保留",
+      "修改理由": "回填挂载点与既有机器编号回填同一入口",
+      "对应验收条件": "AC-01、AC-02、AC-03、AC-04",
+      "测试证据": "updates_and_appends、pending_reports、no_tasks_safe、idempotent 四项通过"
+    }
+  ],
+  "开发检查记录": [
+    {
+      "检查命令或方法": ".venv/bin/python -m pytest tests/test_machine_collect_extension.py tests/test_machine_collect.py tests/test_empty_result_table_guard.py tests/test_records.py tests/test_workflow_guidance.py tests/test_gate_rework_stability.py -q --basetemp=/tmp/wf-ext",
+      "检查范围": "三列回填行为与既有表流程回归",
+      "实际反馈": "87 passed，退出码 0",
+      "是否需要继续修改": "否"
+    }
+  ],
   "预期产品结果": [
     "qa 测试执行后三列自动出现且与当前记录一致；重跑刷新；叙述保留；无任务安全降级。"
   ],
-  "实施中问题与处理": [],
+  "实施中问题与处理": [
+    "实施中发现 collect 命令要求先 prepare 回退基线（进场后无变化），而本轮代码先于 prepare 完成开发——先写代码后采集的场景没有出口，行号本次由 git diff 计算。已记 MEMORY 待下轮补：collect 对已修改文件的进场基线回溯（如用 git stash 或观察快照对比）。",
+    "git add -A 误把本轮 4 文件卷入上轮提交后，用 reset --soft 拆分，本轮文件回到工作区未提交状态。"
+  ],
   "未决问题": [
     "暂无"
   ],

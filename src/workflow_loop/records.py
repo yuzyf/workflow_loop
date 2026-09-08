@@ -19,7 +19,7 @@ from .topic import topic_file_key
 
 
 RECORDS_ROOT = ".workflow_loop/records"
-TABLE_FORMAT_VERSION = "3"
+TABLE_FORMAT_VERSION = "4"
 
 NARRATIVE_KEY = "叙述段落"
 DOC_HASH_KEY = "生成文档哈希"
@@ -293,7 +293,10 @@ KIND_SCHEMAS: dict[str, dict] = {
                 "columns": ["测试项编号", "执行结论", "机器记录编号", "实际结果说明"],
                 "optional_columns": ["机器记录编号"],
                 "key_column": "测试项编号",
-                "required_at_gate": False,
+                # R11：测试结果行是 qa 环节核心产出，空表必须报"尚未填写"，
+                # 不能静默放行（2026-09-08 实证：空表放行导致整体验收才发现
+                # 文档缺失，补填触发哈希变化被迫退回 qa 重走全流程）
+                "required_at_gate": True,
             },
         },
         "narrative": ["结果说明", "执行说明", "人工验收交接", "未通过或阻塞"],
@@ -673,7 +676,9 @@ _LEGACY_KIND_SCHEMAS: dict[str, dict] = {
                     "机器记录编号"
                 ],
                 "key_column": "测试项编号",
-                "required_at_gate": False
+                # R11：测试结果行是 qa 环节的核心产出，空表必须报"尚未填写"，
+                # 不能静默放行（否则下游整体验收才发现文档缺失，被迫退回 qa 重走）
+                "required_at_gate": True
             }
         },
         "narrative": [
@@ -1069,7 +1074,10 @@ def bug_record_tables(
 
 # 表格式版本 → schema/hints。版本 1 是历史轮次冻结使用的快照，保留用于按冻结版本
 # 校验和生成旧表（R18：版本 2 只对开工时冻结为版本 2 的轮次生效，旧轮次不迁移）。
-_SUPPORTED_TABLE_VERSIONS = {"1", "2", "3"}
+_SUPPORTED_TABLE_VERSIONS = {"1", "2", "3", "4"}
+
+# 采集指纹键（R25）：实施记录表内程序专用的机器采集记录，AI 不填写。
+COLLECTION_FINGERPRINT_KEY = "采集指纹"
 
 
 def _schema(kind: str, version: str | None = None) -> dict:
@@ -1337,6 +1345,9 @@ def validate_table(kind: str, table: dict, expected_version: str | None = None, 
         "表版本", "工作流编号", "验收主题", "填写说明",
         DOC_HASH_KEY, GENERATED_DOC_PATH_KEY, BUG_DOC_HASHES_KEY,
     }
+    # R25（v4）：实施记录表的采集指纹是程序专用键，AI 不填写。
+    if kind == "impl_record" and expected_version == "4":
+        allowed.add(COLLECTION_FINGERPRINT_KEY)
     unknown = sorted(set(table) - allowed)
     if unknown:
         problems.append((
@@ -2117,8 +2128,14 @@ def sync_documents(
         if _document_was_edited(project_root, kind, table, doc_relative, content):
             problems.append((
                 CONTENT_CATEGORY,
-                f"正式文档 {doc_relative} 与工作记录表不一致：文档被直接修改；"
-                "请把改动写回工作记录表后重新执行门禁，程序不会悄悄覆盖手改内容",
+                _table_document_conflict_facts(
+                    project_root,
+                    kind,
+                    table,
+                    doc_relative,
+                    f"{KIND_SCHEMAS[kind]['doc_name']}（按表生成的章节）",
+                    content,
+                ),
             ))
             continue
         if regenerate:
@@ -2325,6 +2342,61 @@ def _document_was_edited(project_root: str, kind: str, table: dict, relative: st
         if receipt["documents"].get(relative, {}).get("scope") != "bug-index-row":
             current_body = _body_hash(kind, relative, current)
     return receipt is None or current_body != receipt["documents"].get(relative, {}).get("body_hash")
+
+
+def _table_document_conflict_facts(
+    project_root: str,
+    kind: str,
+    table: dict,
+    relative: str,
+    section_label: str,
+    expected_content: str,
+) -> str:
+    """R46：表文档不一致类失败带差异章节块与两个指纹，并按事实区分修复路径。
+
+    表未更新（按当前表生成的内容与上次凭据一致）时提示把改动写回表；
+    表已更新（按当前表生成的内容与上次凭据不同）、仅文档被手改时提示
+    恢复文档由程序按表重写。不把两种情况笼统归为"写回表"。
+    """
+    current_hash = _file_sha256(os.path.join(project_root, relative))
+    receipt = None
+    try:
+        receipt = _load_generation_receipt(project_root, kind, table)
+    except RecordsError:
+        receipt = None
+    previous_hash = None
+    if receipt is not None:
+        document_receipt = receipt["documents"].get(relative)
+        if isinstance(document_receipt, dict):
+            previous_hash = document_receipt.get("body_hash")
+    facts = (
+        f"正式文档 {relative} 与工作记录表不一致：差异章节块：{section_label}；"
+        f"程序凭据指纹（上次生成正文摘要）：{previous_hash or '（无凭据）'}；"
+        f"当前指纹：{current_hash or '（无法读取）'}。"
+    )
+    if previous_hash is not None:
+        # 表是否已更新：按当前表生成的正文摘要是否不同于上次凭据
+        expected_body_hash = _body_hash(
+            kind, relative, expected_content, project_root=project_root, table=table
+        )
+        table_updated = expected_body_hash != previous_hash
+        if table_updated:
+            facts += (
+                "修复路径：表已更新、仅文档该章节被手改——该章节归程序生成，"
+                "把文档该章节恢复为程序上次生成的内容（或删除该章节），"
+                "重新执行门禁后程序会按表重新写入；不要再改表。"
+            )
+        else:
+            facts += (
+                "修复路径：表未更新——把文档中的改动写回工作记录表后重新执行门禁；"
+                "程序不会悄悄覆盖手改内容。"
+            )
+    else:
+        facts += (
+            "修复路径：缺少上次生成凭据，无法区分两种情况——"
+            "核对文档改动是否已写入工作记录表；已写入则把文档该章节恢复为程序生成内容。"
+        )
+    return facts
 
 
 def _file_sha256(path: str) -> str | None:
@@ -2686,8 +2758,14 @@ def _sync_product_features(project_root: str, workflow_id: str) -> tuple[list[tu
     if _document_was_edited(project_root, "product_features", table, overview_rel, new_content):
         problems.append((
             CONTENT_CATEGORY,
-            "产品总说明的功能清单与工作记录表不一致：文档被直接修改；"
-            "请把改动写回工作记录表后重新执行门禁，程序不会悄悄覆盖手改内容",
+            _table_document_conflict_facts(
+                project_root,
+                "product_features",
+                table,
+                overview_rel,
+                "产品总说明的功能清单（第 7 章）",
+                new_content,
+            ),
         ))
         return problems, documents
     if current_block_hash != expected_hash:
@@ -2954,16 +3032,26 @@ def sync_stage_tables(
     except ValueError:
         # 索引格式错误由各阶段校验报告；此处回退 state 主题，不中断同步。
         topics = list(wf_state.topics) or []
-    if not topics:
-        # 主题尚未写入 state.topics 时，从 topic_relations 工作记录表读（断言三：表为唯一输入，不靠 state.topics）
-        _rel = table_relative_path(project_root, wf_state.workflow_id, "topic_relations", "")
-        if table_exists(project_root, _rel):
-            _ttable = load_table(os.path.join(project_root, _rel))
-            topics = [
+    # 断言三（表为唯一输入）：中途新增主题时索引尚是"待生成"占位、文档未生成，
+    # 主题解析可能失败或拿不到新主题；此时从 topic_relations 表读取并合并，
+    # 使文档生成不被"索引需要文档、文档需要主题"的循环卡死。
+    _relations_rel = table_relative_path(
+        project_root, wf_state.workflow_id, "topic_relations", ""
+    )
+    if table_exists(project_root, _relations_rel):
+        try:
+            _ttable = load_table(os.path.join(project_root, _relations_rel))
+            _table_topics = [
                 str(r.get("验收主题", "")).strip()
                 for r in _ttable.get("主题关系", [])
                 if str(r.get("验收主题", "")).strip()
             ]
+        except RecordsError:
+            _table_topics = []
+        # 表内主题为准（保留 state 主题中已不在表里的历史主题，避免误删）
+        topics = list(dict.fromkeys([*topics, *_table_topics]))
+    if not topics:
+        topics = list(wf_state.topics) or []
     # R11：表启用以开工时冻结的标记为准；旧轮次没有冻结版本时才走原有文档检查。
     if not workflow_uses_tables(wf_state, project_root):
         return [], []
@@ -3058,8 +3146,14 @@ def sync_stage_tables(
             if _document_was_edited(project_root, kind, table, doc_relative, expected_content):
                 problems.append((
                     CONTENT_CATEGORY,
-                    f"正式文档 {doc_relative} 与工作记录表不一致：文档被直接修改；"
-                    "请把改动写回工作记录表后重新执行门禁，程序不会悄悄覆盖手改内容",
+                    _table_document_conflict_facts(
+                        project_root,
+                        kind,
+                        table,
+                        doc_relative,
+                        f"{KIND_SCHEMAS[kind]['doc_name']}（按表生成的章节）",
+                        expected_content,
+                    ),
                 ))
                 continue
             if kind == "test_result" and wf_state.stages.get("qa") is not None:
@@ -3112,6 +3206,46 @@ def sync_stage_tables(
     return problems, documents
 
 
+def _check_architecture_change_references(
+    project_root: str,
+    table: dict,
+) -> list[tuple[str, str]]:
+    """正文变更的代码位置引用按真实代码符号核对（机器采集延伸）。
+
+    从正文变更的 依据 与 新文 列提取 文件::符号 引用：.py 文件按符号
+    索引核对（不存在给相近符号建议）；非 Python 文件查存在；不存在的
+    文件报路径无效。返回内容问题清单。
+    """
+    changes = table.get("正文变更", [])
+    if not isinstance(changes, list) or not changes:
+        return []
+    from . import code_symbols as code_symbols_mod
+
+    index, failures = code_symbols_mod.build_symbol_index(project_root)
+    problems: list[tuple[str, str]] = []
+    if failures:
+        problems.append((
+            CONTENT_CATEGORY,
+            "代码符号索引存在解析失败文件（不影响其余核对）：" + "、".join(failures),
+        ))
+    for position, row in enumerate(changes, 1):
+        if not isinstance(row, dict):
+            continue
+        texts = [
+            str(row.get("新文", "") or ""),
+            str(row.get("依据", "") or ""),
+        ]
+        for text in texts:
+            for detail in code_symbols_mod.check_text_references(
+                project_root, index, text
+            ):
+                problems.append((
+                    CONTENT_CATEGORY,
+                    f"正文变更第 {position} 行的代码位置引用核对失败：{detail}",
+                ))
+    return problems
+
+
 def _sync_design_tables(
     project_root: str,
     wf_state: state_mod.WorkflowState,
@@ -3133,6 +3267,12 @@ def _sync_design_tables(
                 problems.append((CONTENT_CATEGORY, f"{relative} 的轮次或主题身份不正确；最终同步使用本轮轮次级表"))
                 continue
             table_problems = validate_table(kind, table, _workflow_table_version(project_root, wf_state.workflow_id), project_root=project_root)
+            # 机器采集延伸：正文变更的 文件::符号 引用按真实代码符号核对
+            if kind == "architecture_changes":
+                symbol_problems = _check_architecture_change_references(
+                    project_root, table
+                )
+                table_problems = [*table_problems, *symbol_problems]
             problems.extend((category, f"{relative}：{detail}") for category, detail in table_problems)
             if table_problems:
                 continue
@@ -3352,8 +3492,14 @@ def _write_bug_documents(project_root: str, table: dict) -> list[tuple[str, str]
         if _document_was_edited(project_root, "bug_record", table, relative, content):
             problems.append((
                 CONTENT_CATEGORY,
-                f"正式文档 {relative} 与工作记录表不一致：文档被直接修改；"
-                "请把改动写回工作记录表后重新执行门禁，程序不会悄悄覆盖手改内容",
+                _table_document_conflict_facts(
+                    project_root,
+                    "bug_record",
+                    table,
+                    relative,
+                    "缺陷记录（按表生成的章节）",
+                    content,
+                ),
             ))
             continue
         pending.append((relative, content, expected))
@@ -3561,8 +3707,15 @@ def _fill_acceptance_record_ids(
     wf_state: state_mod.WorkflowState | None,
     topic: str,
     table: dict,
+    *,
+    project_root: str = "",
 ) -> list[tuple[str, str]]:
-    """验收程序编号只取当前有效状态；缺证据时不改表或正式文档。"""
+    """验收程序编号只取当前有效状态；缺证据时不改表或正式文档。
+
+    R26（v4）：验收方式、验收结论、机器测试记录编号、用户实际回答、人工确认
+    五列由程序从当前有效验收记录直接回填，AI 不手抄；回填后校验退化为程序
+    自校验。failed/blocked 或记录失效的条目标记"待重做"，AI 叙述栏保留。
+    """
     from .acceptance_records import record_is_current
 
     if _table_version_of(table) == "1":
@@ -3578,6 +3731,7 @@ def _fill_acceptance_record_ids(
     current = stage_state.acceptance_records.get(topic, {}) if stage_state is not None else {}
     problems: list[tuple[str, str]] = []
     updates: list[tuple[dict, str]] = []
+    program_fill = _table_version_of(table) == "4"
     for row in table.get("验收结果", []):
         if not isinstance(row, dict):
             continue
@@ -3589,22 +3743,55 @@ def _fill_acceptance_record_ids(
             or record.criterion_id != criterion_id
             or not record_is_current(record, wf_state)
         ):
-            problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 缺少当前有效验收记录；程序编号不能手填"))
+            if program_fill:
+                # R26：记录缺失或失效时标记待重做，叙述列保留
+                row["验收方式"] = row.get("验收方式") or ""
+                row["验收结论"] = "待重做"
+                row["机器测试记录编号"] = row.get("机器测试记录编号") or ""
+                row["用户实际回答"] = row.get("用户实际回答") or ""
+                row["人工确认"] = row.get("人工确认") or ""
+                problems.append((
+                    CONTENT_CATEGORY,
+                    f"{topic} / {criterion_id} 缺少当前有效验收记录，已标记待重做；"
+                    "按重新验收后的记录由程序回填",
+                ))
+            else:
+                problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 缺少当前有效验收记录；程序编号不能手填"))
             continue
-        if row.get("验收方式") != record.method or row.get("验收结论") != record.result:
-            problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 的验收方式或结论与当前记录不一致"))
-        machine_ids = str(row.get("机器测试记录编号", "")).strip()
-        if record.method == "人工验收":
-            matching_evidence = machine_ids == "不适用"
+        if program_fill:
+            _fill_acceptance_row_columns(row, record)
         else:
-            matching_evidence = set(re.split(r"[、,，;；\s]+", machine_ids)) == set(record.test_record_ids)
-        if not matching_evidence:
-            problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 的机器测试记录编号与当前验收依据不一致"))
+            if row.get("验收方式") != record.method or row.get("验收结论") != record.result:
+                problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 的验收方式或结论与当前记录不一致"))
+            machine_ids = str(row.get("机器测试记录编号", "")).strip()
+            if record.method == "人工验收":
+                matching_evidence = machine_ids == "不适用"
+            else:
+                matching_evidence = set(re.split(r"[、,，;；\s]+", machine_ids)) == set(record.test_record_ids)
+            if not matching_evidence:
+                problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 的机器测试记录编号与当前验收依据不一致"))
         updates.append((row, record.record_id))
     if not problems:
         for row, record_id in updates:
             row["验收记录编号"] = record_id
     return problems
+
+
+def _fill_acceptance_row_columns(row: dict, record) -> None:
+    """R26：五列由程序从当前有效验收记录取值写入，AI 手填值被程序值覆盖。
+
+    机器测试记录编号取 record.test_record_ids（机器执行记录 RUN-xx），
+    与原校验口径一致；纯自动化条件按验收方式归并不适用字段。
+    """
+    is_automated = str(record.method) == "自动化测试"
+    machine_ids = "、".join(
+        str(identifier) for identifier in (record.test_record_ids or [])
+    ) or "不适用"
+    row["验收方式"] = str(record.method or "")
+    row["验收结论"] = str(record.result or "")
+    row["机器测试记录编号"] = machine_ids
+    row["用户实际回答"] = "不适用" if is_automated else str(record.user_answer or "")
+    row["人工确认"] = "不适用" if is_automated else "通过"
 
 
 def _fill_machine_record_ids(
@@ -3613,19 +3800,55 @@ def _fill_machine_record_ids(
     topic: str,
     table: dict,
 ) -> list[tuple[str, str]]:
-    """测试结果表：机器记录编号由程序从当前机器记录回填，不由 AI 手抄。"""
+    """测试结果表三列由程序从当前测试任务回填，不由 AI 手抄。
+
+    三列：测试项编号（行存在性）、执行结论、机器记录编号。
+    已有行按测试项编号对齐更新三列（AI 叙述列不动）；当前任务在表中
+    没有行时按任务追加新行；任务无当前记录时结论与编号留空待执行。
+    该主题没有任何测试任务时返回空（空表守卫继续报尚未填写）。
+    """
     problems: list[tuple[str, str]] = []
     stage_state = wf_state.stages.get(wf_state.current_stage)
+    if stage_state is None:
+        stage_state = wf_state.stages.get("qa")
     topic_tasks = stage_state.test_tasks.get(topic, {}) if stage_state is not None else {}
+    if not topic_tasks:
+        return problems
+    from . import machine_collect as machine_collect_mod
+
+    machine_rows = {
+        str(row.get("测试项编号", "")).strip(): row
+        for row in machine_collect_mod.test_result_columns(
+            project_root, wf_state, topic
+        )
+    }
+    # 更新已有行的三列（叙述列不动）
+    seen_ids: set[str] = set()
     for row in table.get("测试结果", []):
         if not isinstance(row, dict):
             continue
         test_id = str(row.get("测试项编号", "")).strip()
-        task = topic_tasks.get(test_id)
-        if task is not None and task.current_record is not None:
-            row["机器记录编号"] = task.current_record.record_id or ""
-        else:
-            row["机器记录编号"] = ""
+        seen_ids.add(test_id)
+        machine_row = machine_rows.get(test_id)
+        if machine_row is None:
+            continue
+        row["执行结论"] = machine_row["执行结论"]
+        row["机器记录编号"] = machine_row["机器记录编号"]
+    # 当前任务在表中没有行时追加（新行只含三列机器值，叙述留待 AI）
+    for test_id in sorted(machine_rows):
+        if test_id in seen_ids:
+            continue
+        table.setdefault("测试结果", []).append(
+            {
+                "测试项编号": test_id,
+                "执行结论": machine_rows[test_id]["执行结论"],
+                "机器记录编号": machine_rows[test_id]["机器记录编号"],
+                "实际结果说明": "",
+            }
+        )
+    # 任务无当前记录且结论为空时提示（不阻塞，等待执行）
+    for test_id, task in topic_tasks.items():
+        if getattr(task, "current_record", None) is None:
             problems.append((
                 CONTENT_CATEGORY,
                 f"{topic} 的测试项 {test_id} 还没有当前成功机器记录；机器记录编号由程序回填，不能手填",

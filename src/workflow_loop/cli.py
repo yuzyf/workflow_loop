@@ -4809,6 +4809,15 @@ def cmd_gate(args) -> None:
                 project_root,
                 wf_state.workflow_id,
             )
+            # 中途新增主题：索引的验收计划列可能仍是"待生成"占位（文档未生成），
+            # 从 topic_relations 工作记录表合并，打破"索引要文档、文档要主题"循环。
+            try:
+                topics = list(dict.fromkeys([
+                    *topics,
+                    *topic_mod.current_workflow_topics(project_root),
+                ]))
+            except Exception:
+                pass
         if not topics:
             print(f"错误：没有找到 {artifact_paths_mod.ACCEPTANCE_INDEX_DOC} 中的本次验收主题")
             print_next_step(

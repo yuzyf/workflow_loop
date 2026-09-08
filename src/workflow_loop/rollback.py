@@ -2126,7 +2126,11 @@ def prepare_impl(
                     "不能把当前修改后内容当作基线。恢复可信原内容，或返回计划重新讨论"
                 )
     else:
-        # 第一次准备：代码必须仍等于讨论确认时的基线，不能把修改后的内容当成原内容
+        # 第一次准备：代码必须仍等于讨论确认时的基线，不能把修改后的内容当成原内容。
+        # 例外（Git 自证出口）：进场后已修改的文件，若进场快照记录的内容等于
+        # Git HEAD 版本（文件被 HEAD 跟踪且快照哈希与 HEAD 字节一致），程序用
+        # HEAD 字节补齐首次副本——真实工作流中 AI 常先写代码后准备基线，
+        # Git 能证明进场时内容时不要求人工恢复文件。
         complete_baseline = wf_state.meta.get(IMPL_COMPLETE_BASELINE_SNAPSHOT_KEY)
         if isinstance(complete_baseline, dict):
             differences = (
@@ -2143,14 +2147,46 @@ def prepare_impl(
                 for path in difference_paths
             }
             if changed_before_prepare:
-                raise ValueError(
-                    "代码已经在回退基线保存前发生变化，不能把修改后的内容当成原内容；"
-                    "相对进入 impl 时完整实施范围的逐文件差异："
-                    f"{verification_mod.format_registered_differences(differences)}"
-                )
+                snapshot_records = {
+                    str(item.get("path", "")): item
+                    for item in complete_baseline.get("files", [])
+                    if isinstance(item, dict)
+                }
+                unverifiable: list[str] = []
+                for path in sorted(changed_before_prepare):
+                    record = snapshot_records.get(path)
+                    exists_at_entry = bool(record and record.get("exists"))
+                    if not exists_at_entry:
+                        # 进场快照记录该文件不存在（或未记录）：当前是本轮新增，
+                        # 原状态就是"没有"，无需 Git 自证
+                        continue
+                    expected_hash = record.get("content_hash")
+                    baseline, baseline_detail = _trusted_git_head_baseline(
+                        project_root,
+                        path,
+                        expected_content_hash=(
+                            expected_hash
+                            if isinstance(expected_hash, str)
+                            else None
+                        ),
+                    )
+                    if baseline is not None:
+                        trusted_git_baselines[path] = baseline
+                    else:
+                        unverifiable.append(f"{path}（{baseline_detail}）")
+                if unverifiable:
+                    raise ValueError(
+                        "代码已经在回退基线保存前发生变化，且以下文件不能用 Git "
+                        "证明进场时内容，不能把修改后内容当成原内容；恢复可信原内容"
+                        "或返回计划重新讨论：" + "；".join(unverifiable)
+                    )
         current_code_hash = verification_mod.compute_non_test_code_snapshot_hash(project_root)
         if current_code_hash != stage_state.code_baseline_hash:
-            raise ValueError("代码已经在回退基线保存前发生变化，不能把修改后的内容当成原内容")
+            if not isinstance(complete_baseline, dict):
+                # 无快照的旧轮次：保持原拦截，不能把修改后内容当成原内容
+                raise ValueError("代码已经在回退基线保存前发生变化，不能把修改后的内容当成原内容")
+            # 有快照时差异已逐文件核对：能 Git 自证的修改在上面放行并记录，
+            # 不能自证的已抛错；整体哈希不同来自这些已核对差异，不再重复拦截
         core_paths = sorted(
             set(paths) | set(verification_mod.registered_code_design_paths(project_root))
         )

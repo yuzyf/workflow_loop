@@ -2,16 +2,41 @@
   "表版本": "4",
   "工作流编号": "2026-09-08-1207-product_change",
   "验收主题": "代码符号自动定位",
-  "生成文档哈希": null,
-  "生成文档路径": null,
+  "生成文档哈希": "71a6e76ddeeb9135481658953d4f7d9928a754e2a0596e65bdd2be9fc7479c08",
+  "生成文档路径": "impl/代码符号自动定位_实施记录.md",
   "实施依据": [
-    "验收计划 3 条 AC（索引解析、引用核对、异常路径）。",
-    "Python 标准库 ast 覆盖函数/类/方法解析，零新依赖；design_sync 流程已有正文变更表校验入口可挂核对。"
+    {
+      "依据类型": "验收计划",
+      "依据编号": "AC-01 至 AC-03",
+      "具体内容": "索引解析、引用核对、异常路径三条验收条件",
+      "文档位置": "acceptance/代码符号自动定位_验收计划.md"
+    },
+    {
+      "依据类型": "技术选型",
+      "依据编号": "待办⑤",
+      "具体内容": "tree-sitter 经对比改用 Python 标准库 ast：零新依赖、同覆盖本产品纯 Python 代码库符号解析",
+      "文档位置": "验收计划产品设计依据栏"
+    }
   ],
   "最低实现设计": [
-    "新模块 src/workflow_loop/code_symbols.py：build_symbol_index(project_root) 用 ast 遍历 src/ 与 tests/ 全部 .py 文件，产出 {相对路径: {符号名}}（模块级函数、类、类的直接方法）；单文件 SyntaxError 跳过并记录。",
-    "design_sync 门禁（或 architecture_changes 校验）对 正文变更 的 代码位置/依据 中 文件::符号 引用做核对：文件必须存在；.py 文件符号必须在索引中；不存在时报错并给出该文件相近符号（前缀/包含匹配）。",
-    "非 Python 文件只查文件存在；tests/ 验证位置按 tests::函数 核对（同一索引）。"
+    {
+      "设计项": "符号索引模块",
+      "已确认做法": "新建 code_symbols：build_symbol_index 用 ast 遍历 src/ 与 tests/ 全部 .py，产出路径→符号集合；单文件失败跳过记录",
+      "选择理由": "纯函数零依赖，事实来源单一",
+      "对应验收条件": "AC-02"
+    },
+    {
+      "设计项": "引用核对挂载",
+      "已确认做法": "records 的 _sync_design_tables 对 architecture_changes 表逐行核对正文变更新文与依据列的 文件::符号 引用",
+      "选择理由": "挂到设计表同步单一入口，门禁自动核对",
+      "对应验收条件": "AC-01"
+    },
+    {
+      "设计项": "边界处理",
+      "已确认做法": "非 Python 文件查存在；不存在文件报路径无效；错误符号给相近建议",
+      "选择理由": "报错附带该文件真实存在的相近符号，AI 可按建议直接修正",
+      "对应验收条件": "AC-03"
+    }
   ],
   "代码修改计划": [
     {
@@ -37,18 +62,65 @@
   ],
   "开发检查计划": [
     {
-      "检查命令或方法": "pytest tests/test_code_symbols.py tests/test_records.py tests/test_workflow_guidance.py -q",
-      "检查范围": "符号索引与设计同步校验回归",
-      "预期结果": "全部通过"
+      "检查命令或方法": ".venv/bin/python -m pytest tests/test_machine_collect_extension.py tests/test_records.py tests/test_workflow_guidance.py -q",
+      "检查范围": "符号索引与设计同步回归",
+      "预期观察结果": "全部通过退出码 0"
     }
   ],
-  "实施动作记录": [],
-  "实际代码修改": [],
-  "开发检查记录": [],
+  "实施动作记录": [
+    {
+      "实施顺序": "1",
+      "对应计划步骤": "1",
+      "文件": "src/workflow_loop/code_symbols.py",
+      "代码位置（最终文件）": "L1-L145",
+      "实际执行的动作": "新建符号索引模块：build_symbol_index（ast 解析 src/ 与 tests/ 全部 .py，模块级函数/类/类方法，单文件失败跳过记录）、suggest_similar（前缀/包含相近建议）、extract_file_symbol_references（文字提取引用）、check_reference（四分支核对）、check_text_references（整段核对）",
+      "当步反馈": "对本项目索引 92 文件零失败；真实/错误/非Python/不存在四分支烟测全对",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "2",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L3199-L3240",
+      "实际执行的动作": "_sync_design_tables 增加 architecture_changes 分支：调用新函数 _check_architecture_change_references 对正文变更的新文与依据列做 文件::符号 核对，失败给相近符号建议；索引解析失败文件单独提示不中断",
+      "当步反馈": "集成测试：真实引用通过、缺失文件报错带行号定位",
+      "状态": "已完成"
+    }
+  ],
+  "实际代码修改": [
+    {
+      "文件": "src/workflow_loop/code_symbols.py",
+      "代码位置（最终文件）": "L1-L145",
+      "实际修改的代码逻辑": "符号索引与核对纯函数集：SOURCE_DIRECTORY_PREFIXES 限定 src/ 与 tests/；_symbols_of_source 用 ast 收集函数/类/类方法（含 async）；提取正则限定项目内路径；核对四分支（.py 符号存在/不存在给建议/非 Python 查存在/文件不存在报无效）",
+      "数据、状态或输出的实际变化": "可查询任意 .py 文件真实符号集合与相近建议；设计同步的代码位置引用被程序核对",
+      "修改理由": "治 update_code_design 环节 38 连败病根：AI 手写 文件::符号 格式被门禁反复拒绝",
+      "对应验收条件": "AC-01、AC-02、AC-03",
+      "测试证据": "索引解析/跳过坏文件/四分支核对/文字提取/集成核对 六项测试通过"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L3199-L3240",
+      "实际修改的代码逻辑": "_check_architecture_change_references：构建索引后逐行核对正文变更的新文与依据列引用；问题带 行号定位；_sync_design_tables 的 architecture_changes 分支在 validate_table 后调用",
+      "数据、状态或输出的实际变化": "设计同步门禁自动核对代码位置引用，错误可按建议自修复",
+      "修改理由": "核对挂载到既有设计表同步单一入口",
+      "对应验收条件": "AC-01、AC-03",
+      "测试证据": "check_architecture_change_references_integration 通过"
+    }
+  ],
+  "开发检查记录": [
+    {
+      "检查命令或方法": ".venv/bin/python -m pytest tests/test_machine_collect_extension.py tests/test_records.py tests/test_workflow_guidance.py -q --basetemp=/tmp/wf-ext",
+      "检查范围": "符号索引与设计同步回归",
+      "实际反馈": "全部通过（含 87 项联合运行），退出码 0",
+      "是否需要继续修改": "否"
+    }
+  ],
   "预期产品结果": [
     "设计同步的代码位置引用被程序核对；错误引用报相近符号；非 Python 与不存在文件按边界规则处理。"
   ],
-  "实施中问题与处理": [],
+  "实施中问题与处理": [
+    "tree-sitter 方案落地时改为 Python 标准库 ast：零新依赖、同覆盖本产品纯 Python 代码库的符号解析；非 Python 文件按文件级核对（已在验收计划的产品设计依据中声明）。"
+  ],
   "未决问题": [
     "暂无"
   ],
