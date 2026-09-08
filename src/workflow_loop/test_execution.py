@@ -221,6 +221,8 @@ def prepare_task(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     cwd: str | None = None,
     report_adapter: str | None = None,
+    *,
+    reuse_unchanged: bool = False,
 ) -> TestTaskState:
     """登记一个已经由用户确认过的测试项命令；登记不启动测试。"""
     if report_adapter not in test_report.SUPPORTED_REPORT_ADAPTERS:
@@ -269,6 +271,7 @@ def prepare_task(
                 test_id=test_id,
                 test_name=table_entries[0],
                 test_method=str(row.get("测试方式", "")).strip() or "自动化测试",
+                dependencies=tuple(test_mapping._parse_dependency_ids(row.get("前置测试项"))),
                 test_entry=table_entries[0],
                 test_entries=tuple(table_entries),
             )
@@ -314,7 +317,7 @@ def prepare_task(
     stage_state = _execution_stage_state(workflow_state)
     if stage_state is None:
         raise ValueError("当前工作流没有 qa（测试验证）或旧 test_execution 阶段")
-    stage_state.test_tasks.setdefault(topic, {})[test_id] = TestTaskState(
+    task = TestTaskState(
         test_entries=sorted(set(entries)),
         command=command_with_report,
         cwd=normalized_cwd,
@@ -327,7 +330,16 @@ def prepare_task(
         last_error=None,
         current_record=None,
     )
-    return stage_state.test_tasks[topic][test_id]
+    tasks = stage_state.test_tasks.setdefault(topic, {})
+    existing = tasks.get(test_id)
+    inputs = (
+        "test_entries", "command", "cwd", "dependencies", "timeout_seconds",
+        "report_adapter", "report_path",
+    )
+    if reuse_unchanged and existing is not None and all(getattr(existing, name) == getattr(task, name) for name in inputs):
+        return existing
+    tasks[test_id] = task
+    return task
 
 
 def missing_prepared_tasks(

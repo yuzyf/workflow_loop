@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "8cbbd12d4afdb5378d5067e75d4282353e8b982f00e4ec888f0827ef3ecfe57f",
+    "生成文档路径": "spec/产品总说明.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "spec/产品总说明.md": {
+      "body_hash": "8cbbd12d4afdb5378d5067e75d4282353e8b982f00e4ec888f0827ef3ecfe57f"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "956f7c8d58afcf69d5254bfc4a75dbcee063cd0d95b32e9f59a41939814fee79",
+    "生成文档路径": "impl/最终同步按表更新架构并保护正文_实施记录.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "impl/最终同步按表更新架构并保护正文_实施记录.md": {
+      "body_hash": "fe74584ec4d8569ae15f4dc077fcea59b2f7d05b20fb1055837edbe91393bedc"
+    }
+  }
+}

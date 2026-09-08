@@ -1263,6 +1263,8 @@ def validate_project_design_feature_consistency(project_root: str) -> tuple[bool
 def validate_final_code_design_document(
     project_root: str,
     workflow_id: str,
+    *,
+    candidate_content: str | None = None,
 ) -> tuple[bool, str]:
     """校验最终架构文档已经完成产品、功能、架构和真实代码映射。
 
@@ -1272,8 +1274,8 @@ def validate_final_code_design_document(
     relative_path = artifact_paths_mod.CODE_DESIGN_DOC
     full_path = os.path.join(project_root, relative_path)
     errors: list[str] = []
-    architecture_exists = os.path.isfile(full_path)
-    content = _read_text(project_root, relative_path) if architecture_exists else ""
+    architecture_exists = candidate_content is not None or os.path.isfile(full_path)
+    content = candidate_content if candidate_content is not None else (_read_text(project_root, relative_path) if architecture_exists else "")
     if not architecture_exists:
         errors.append(f"{relative_path} 不存在")
 
@@ -1521,19 +1523,25 @@ def validate_reproduce_documents(
     topics: list[str] = []
     from . import records as records_mod
 
-    table_relative = records_mod.table_relative_path(project_root, workflow_id, "bug_record", "")
-    fact_table = None
-    if records_mod.table_exists(project_root, table_relative):
-        try:
-            table = records_mod.load_table(os.path.join(project_root, table_relative))
-            if table.get("表版本") == "3":
-                fact_table = table
-                failures.extend(
-                    f"{table_relative}：{detail}" for _category, detail in
-                    records_mod.validate_table("bug_record", table, "3", project_root=project_root)
-                )
-        except records_mod.RecordsError as exc:
-            failures.append(str(exc))
+    workflow = load_state(project_root)
+    uses_tables = workflow is not None and records_mod.workflow_uses_tables(workflow, project_root)
+    fact_tables = {}
+    table_problems, tables = records_mod.bug_record_tables(
+        project_root, workflow_id, list(workflow.topics) if uses_tables else None,
+    )
+    failures.extend(detail for _, detail in table_problems)
+    for table_relative, table in tables:
+        fact_tables[table["验收主题"]] = table
+        failures.extend(
+            f"{table_relative}：{detail}" for _category, detail in
+            records_mod.validate_table("bug_record", table, project_root=project_root)
+        )
+    if uses_tables:
+        changed_bug_docs = list(dict.fromkeys(changed_bug_docs + _current_workflow_bug_documents(project_root, workflow_id)))
+        for table in fact_tables.values():
+            expected = f"bug/缺陷_{records_mod.bug_file_key(project_root, table['验收主题'])}.md"
+            if expected not in changed_bug_docs:
+                failures.append(f"主题「{table['验收主题']}」缺少本轮正式缺陷记录 {expected}")
     for rel_path in changed_bug_docs:
         filename = os.path.basename(rel_path)
         if not BUG_FILENAME_RE.match(filename):
@@ -1564,7 +1572,10 @@ def validate_reproduce_documents(
         else:
             topics.append(topic or "")
 
-        if fact_table is not None and topic == fact_table.get("验收主题"):
+        fact_table = fact_tables.get(topic)
+        if uses_tables and fact_table is None:
+            failures.append(f"{filename} 的主题「{topic}」缺少对应的缺陷记录工作记录表")
+        if fact_table is not None and fact_table.get("表版本") == "3":
             for heading in required_sections:
                 if _section(content, heading) is None:
                     failures.append(f"{filename} 缺少“{heading}”章节")

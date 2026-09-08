@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "4d6f1af34cc24fde858262531129471485a771bf57c1fdf6007af3eb295f3cd9",
+    "生成文档路径": "acceptance/测试登记按表指引首次执行即可成功_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/测试登记按表指引首次执行即可成功_验收计划.md": {
+      "body_hash": "658af59961d3330e459a7fc5790a553c3e65e9be08bdca81a1a6630647a9e43d"
+    }
+  }
+}

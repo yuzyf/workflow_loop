@@ -265,6 +265,17 @@ def print_recovery_details(wf_state) -> None:
     print("说明: 重新经过一个阶段不等于从头重做；先核对旧产出，只有不再符合最新上游时才修改。")
 
 
+def _test_registration_instruction(wf_state, project_root: str) -> str:
+    """按当前轮次模式给出完整登记入口，不以失败请求隐式切换模式。"""
+    if records_mod.workflow_uses_tables(wf_state, project_root):
+        return "`workflow test prepare --from-tables`（从工作记录表批量登记，不运行测试）"
+    return (
+        "`workflow test prepare --topic <主题> --tc <测试项编号> "
+        "--report-adapter <报告适配器> -- <实际命令和参数>`"
+        "（逐条提供主题、测试项、报告适配器和命令，不运行测试）"
+    )
+
+
 # 根据当前阶段的门禁状态，给出不会跨阶段的下一步
 def current_stage_next_instruction(wf_state) -> str:
     stage_name = wf_state.current_stage
@@ -300,8 +311,9 @@ def current_stage_next_instruction(wf_state) -> str:
             project_root = resolve_project_root() or os.getcwd()
             missing = test_execution_mod.missing_prepared_tasks(project_root, wf_state)
             if missing:
+                registration = _test_registration_instruction(wf_state, project_root)
                 return (
-                    f"{prefix}测试范围已经确认；先完成或复用测试代码，再用 `workflow test prepare` "
+                    f"{prefix}测试范围已经确认；先完成或复用测试代码，再用 {registration} "
                     f"登记这些自动化测试项：{missing}"
                 )
             tasks = [
@@ -365,13 +377,16 @@ def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
     if wf_state.recovery.source_stage:
         return False
 
-    journal_entries = journal_mod.read_all(project_root)
+    journal_entries = [
+        entry for entry in journal_mod.read_all(project_root)
+        if journal_mod.belongs_to_workflow(entry, wf_state.workflow_id, wf_state.started_at)
+    ]
     handled_recovery_ids = {
         entry.get("recovery_created_at")
         for entry in journal_entries
         if entry.get("action") == "恢复提示已处理"
+        and isinstance(entry.get("recovery_created_at"), str)
         and entry.get("recovery_created_at")
-        and entry.get("workflow_id") in (None, wf_state.workflow_id)
     }
 
     first_affected_stage = {
@@ -400,24 +415,30 @@ def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
         return False
 
     for entry in reversed(journal_entries):
-        entry_workflow_id = entry.get("workflow_id")
-        if entry_workflow_id not in (None, wf_state.workflow_id):
-            continue
         action = entry.get("action")
         if action == "验证失效":
             source_stage = entry.get("from_stage")
+            if not isinstance(source_stage, str):
+                continue
             target_stage = first_affected_stage.get(source_stage)
             reason = entry.get("reason")
-            if reason in {None, "上游内容已变化", "用户确认前发现上游内容已变化"}:
+            if not isinstance(reason, str) or reason in {"", "上游内容已变化", "用户确认前发现上游内容已变化"}:
                 reason = default_reasons.get(source_stage, "上游内容变化")
         elif action == "流程退回":
             source_stage = entry.get("to_stage")
+            if not isinstance(source_stage, str):
+                continue
             target_stage = source_stage
-            reason = entry.get("reason") or "用户确认退回"
+            reason = entry.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                reason = "用户确认退回"
         else:
             continue
         recovery_created_at = entry.get("recovery_created_at")
-        if recovery_created_at and recovery_created_at in handled_recovery_ids:
+        if recovery_created_at is not None and not isinstance(recovery_created_at, str):
+            continue
+        recovery_id = recovery_created_at or entry.get("ts")
+        if isinstance(recovery_id, str) and recovery_id in handled_recovery_ids:
             continue
         if not source_stage or target_stage not in stage_indexes:
             continue
@@ -438,6 +459,8 @@ def restore_recovery_context_from_journal(project_root: str, wf_state) -> bool:
             affected_stages,
             reason,
         )
+        if isinstance(recovery_id, str) and recovery_id:
+            wf_state.recovery.created_at = recovery_id
         return True
     return False
 
@@ -1667,9 +1690,12 @@ def cmd_discuss(args) -> None:
     journal_mod.append_entry(project_root, "角色文档加载", "workflow.py",
                             stage=stage.name())
 
-    # 环节引入工作记录表时，加载材料即生成/补齐表（不覆盖已填内容）
+    # 只为已启用表模式的轮次补表；读取材料不能把旧文档轮次隐式迁移。
     try:
-        created_tables = records_mod.ensure_stage_tables(project_root, wf_state)
+        created_tables = (
+            records_mod.ensure_stage_tables(project_root, wf_state)
+            if records_mod.workflow_uses_tables(wf_state, project_root) else []
+        )
     except (OSError, ValueError, records_mod.RecordsError) as exc:
         created_tables = []
         print(f"\n警告：工作记录表生成失败：{exc}")
@@ -1692,22 +1718,6 @@ def _has_loaded_stage_materials(
     stage,
 ) -> bool:
     """确认当前工作流已经通过 workflow discuss 加载当前阶段全部材料。"""
-
-    def belongs_to_current_workflow(entry: dict) -> bool:
-        # 新日志直接使用 workflow_id 区分不同工作流。
-        entry_workflow_id = entry.get("workflow_id")
-        if entry_workflow_id is not None:
-            return entry_workflow_id == workflow_state.workflow_id
-
-        # 兼容新增 workflow_id 之前写入的旧日志：
-        # 没有 workflow_id 时，只接受当前工作流启动之后的记录，避免误用更早 Run 的记录。
-        entry_ts = entry.get("ts")
-        if not entry_ts or not workflow_state.started_at:
-            return False
-        try:
-            return datetime.fromisoformat(entry_ts) >= datetime.fromisoformat(workflow_state.started_at)
-        except ValueError:
-            return False
 
     required_standard_docs = set(stage.additional_standard_doc_paths())
     try:
@@ -1732,9 +1742,9 @@ def _has_loaded_stage_materials(
     if saved_material_hash is not None and saved_material_hash != current_material_hash:
         return False
     for entry in reversed(journal_mod.read_all(project_root)):
-        if entry.get("action") != "材料清单登记":
+        if not journal_mod.belongs_to_workflow(entry, workflow_state.workflow_id, workflow_state.started_at):
             continue
-        if not belongs_to_current_workflow(entry):
+        if entry.get("action") != "材料清单登记":
             continue
         if entry.get("stage") != stage.name():
             continue
@@ -3214,6 +3224,7 @@ def _prepare_tasks_from_tables(project_root: str, wf_state) -> None:
                     timeout,
                     cwd=str(row.get("工作目录", "") or "") or None,
                     report_adapter=str(row.get("报告适配器", "") or "") or None,
+                    reuse_unchanged=True,
                 )
             except ValueError as exc:
                 problems.append(f"{topic} {test_id}: {exc}")
@@ -3292,7 +3303,7 @@ def cmd_test_prepare(args) -> None:
         return
     if not command or not args.topic or not args.tc or not args.report_adapter:
         print("错误：逐条登记需要 --topic、--tc、--report-adapter 和 -- 后的命令；按工作记录表登记时使用 --from-tables")
-        print_next_step("在测试工作记录表填写全部测试项后，由 AI 执行 `workflow test prepare --from-tables`")
+        print_next_step(f"补齐当前模式要求的登记输入后，由 AI 执行 {_test_registration_instruction(wf_state, project_root)}")
         sys.exit(1)
     try:
         task = test_execution_mod.prepare_task(
@@ -5213,8 +5224,9 @@ def cmd_scaffold(args) -> None:
     try:
         if args.topic:
             created = []
-            for topic in args.topic:
-                for kind in records_mod.stage_table_kinds(stage):
+            for kind in records_mod.stage_table_kinds(stage):
+                targets = [""] if kind in records_mod.WORKFLOW_LEVEL_KINDS and kind != "bug_record" else args.topic
+                for topic in dict.fromkeys(targets):
                     created.append(
                         records_mod.create_or_complete_table(
                             project_root, wf_state.workflow_id, kind, topic

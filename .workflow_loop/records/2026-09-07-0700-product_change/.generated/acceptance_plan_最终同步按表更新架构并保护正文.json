@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "0e711eaae62430918dc3884db57cc56422496aebb2e3224ef688c40cc100763f",
+    "生成文档路径": "acceptance/最终同步按表更新架构并保护正文_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/最终同步按表更新架构并保护正文_验收计划.md": {
+      "body_hash": "91fc28e9b95ac3e26c2cc2cf67a182bc61d8afef0bdae4c42fb50b3113927a4f"
+    }
+  }
+}

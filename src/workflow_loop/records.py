@@ -260,6 +260,19 @@ KIND_SCHEMAS: dict[str, dict] = {
         "narrative": ["同步说明"],
         "enums": {},
     },
+    "architecture_changes": {
+        "doc_name": "架构正文变更",
+        "row_lists": {
+            "正文变更": {
+                "columns": ["章节", "原文", "新文", "依据"],
+                "key_column": "原文",
+                "key_columns": ["章节", "原文"],
+                "required_at_gate": False,
+            },
+        },
+        "narrative": [],
+        "enums": {},
+    },
     "product_features": {
         "doc_name": "产品功能清单",
         "row_lists": {
@@ -785,7 +798,7 @@ _LEGACY_COLUMN_HINTS: dict[str, dict[str, str]] = {
 NARRATIVE_HINT = "叙述一段存一条；每条一句话到几句话，写给人看的内容"
 
 # 这些表是轮次级（不属于某个验收主题），验收主题栏目允许为空
-WORKFLOW_LEVEL_KINDS = {"product_features", "topic_relations", "spike_conclusion", "bug_record", "design_sync"}
+WORKFLOW_LEVEL_KINDS = {"product_features", "topic_relations", "spike_conclusion", "bug_record", "design_sync", "architecture_changes"}
 
 FORMAT_CATEGORY = "格式问题"
 CONTENT_CATEGORY = "内容问题"
@@ -983,6 +996,77 @@ def table_relative_path(project_root: str, workflow_id: str, kind: str, topic: s
     return f"{RECORDS_ROOT}/{workflow_id}/{kind}_{file_key}.json"
 
 
+def _storage_topic(project_root: str, kind: str, table: dict) -> str:
+    topic = str(table.get("验收主题", ""))
+    if kind == "bug_record" and topic:
+        # 旧单表的主题填写在基础文件中；保留其路径，不把已有凭据迁到新主题路径。
+        legacy = table_relative_path(project_root, str(table.get("工作流编号", "")), kind, "")
+        if table_exists(project_root, legacy):
+            stored = load_table(os.path.join(project_root, legacy))
+            if stored.get("验收主题") == topic:
+                return ""
+        return topic
+    return "" if kind in WORKFLOW_LEVEL_KINDS else topic
+
+
+def bug_record_tables(
+    project_root: str,
+    workflow_id: str,
+    required_topics: list[str] | None = None,
+) -> tuple[list[tuple[str, str]], list[tuple[str, dict]]]:
+    """发现本轮全部缺陷表并核对身份；仅忽略完全未填的无主题初始表。"""
+    directory = records_dir(project_root, workflow_id)
+    problems: list[tuple[str, str]] = []
+    tables: list[tuple[str, dict]] = []
+    seen_topics: dict[str, str] = {}
+    seen_documents: dict[str, str] = {}
+    base = table_relative_path(project_root, workflow_id, "bug_record", "")
+    for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+        if not name.startswith("bug_record_") or not name.endswith(".json"):
+            continue
+        relative = f"{RECORDS_ROOT}/{workflow_id}/{name}"
+        try:
+            table = load_table(os.path.join(project_root, relative))
+        except RecordsError as exc:
+            problems.append((FORMAT_CATEGORY, str(exc)))
+            continue
+        if table.get("工作流编号") != workflow_id:
+            problems.append((CONTENT_CATEGORY, f"{relative} 的工作流编号与当前轮次 {workflow_id} 不一致"))
+            continue
+        topic = table.get("验收主题")
+        schema = _schema("bug_record", _table_version_of(table))
+        fact_keys = set(schema["row_lists"]) | set(schema["narrative"])
+        if (
+            relative == base and topic == ""
+            and str(table.get("表版本")) == _workflow_table_version(project_root, workflow_id)
+            and all(table.get(key) == [] for key in fact_keys)
+            and not any(_generation_fields(table).values())
+            and not (set(table) - fact_keys - {"表版本", "工作流编号", "验收主题", "填写说明", *PROGRAM_FIELD_KEYS})
+        ):
+            continue
+        if not isinstance(topic, str) or not topic.strip():
+            problems.append((CONTENT_CATEGORY, f"{relative} 必须填写唯一验收主题；有缺陷事实的基础表不能作为空表跳过"))
+            continue
+        if topic != topic.strip():
+            problems.append((CONTENT_CATEGORY, f"{relative} 的验收主题不能带首尾空白"))
+        expected = table_relative_path(project_root, workflow_id, "bug_record", topic)
+        if relative not in {base, expected}:
+            problems.append((CONTENT_CATEGORY, f"{relative} 的主题与文件标识不一致；主题「{topic}」应使用 {expected}"))
+        if topic in seen_topics:
+            problems.append((CONTENT_CATEGORY, f"{relative} 与 {seen_topics[topic]} 使用重复主题「{topic}」"))
+        seen_topics[topic] = relative
+        document = f"bug/缺陷_{bug_file_key(project_root, topic)}.md"
+        if document in seen_documents:
+            problems.append((CONTENT_CATEGORY, f"缺陷文件标识冲突：{relative} 与 {seen_documents[document]} 都指向 {document}"))
+        seen_documents[document] = relative
+        tables.append((relative, table))
+    for topic in required_topics or []:
+        if topic and topic not in seen_topics:
+            relative = table_relative_path(project_root, workflow_id, "bug_record", topic)
+            problems.append((CONTENT_CATEGORY, f"主题「{topic}」缺少缺陷记录工作记录表（{relative}）"))
+    return problems, tables
+
+
 # 表格式版本 → schema/hints。版本 1 是历史轮次冻结使用的快照，保留用于按冻结版本
 # 校验和生成旧表（R18：版本 2 只对开工时冻结为版本 2 的轮次生效，旧轮次不迁移）。
 _SUPPORTED_TABLE_VERSIONS = {"1", "2", "3"}
@@ -990,6 +1074,8 @@ _SUPPORTED_TABLE_VERSIONS = {"1", "2", "3"}
 
 def _schema(kind: str, version: str | None = None) -> dict:
     version = version or TABLE_FORMAT_VERSION
+    if kind == "architecture_changes":
+        return KIND_SCHEMAS[kind]
     schemas = _LEGACY_KIND_SCHEMAS if version == "1" else KIND_SCHEMAS
     if kind not in schemas:
         raise RecordsError(f"未知的工作记录表类型：{kind}")
@@ -1101,7 +1187,20 @@ def _build_hints(schema: dict, hints_map: dict[str, dict[str, str]], kind: str =
             else:
                 hints["真实复现条件"] = "旧版表至少分别写两条：运行环境：实际环境、真实输入：实际输入；标签与内容必须在同一条同一行，不能省略固定标签"
         if kind == "design_sync":
-            hints["同步说明"] = "写最终设计核对依据；机器记录编号必须精确来自当前有效状态，测试或回归重跑后旧编号可能作废，须重新取得当前集合，不能沿用旧编号"
+            hints["核对项"] = {
+                "核对项": "分别填写产品设计核对、功能文档核对、代码实现核对、功能到代码映射、未处理差异、本次同步类型六项",
+                "核对结论": "前三项填一致；映射填完整；未处理差异填暂无；同步类型填架构变化或架构未变化；存在差异时先返回对应阶段处理",
+                "设计影响": "需要修改 或 无需修改；需要修改正文时另填架构正文变更表",
+                "代码影响": "最终同步只处理设计；确认无需修改代码才填无需修改，否则先返回实施",
+            }
+            hints["同步说明"] = "写最终设计核对依据；机器记录编号由程序每次生成时从当前有效状态重新取得完整精确集合，不要手填或沿用旧编号；不能把旧记录写成当前有效记录"
+    if kind == "architecture_changes":
+        hints["正文变更"] = {
+            "章节": "填写正式架构中唯一存在的完整章节标题，不带井号；不能填写最终同步结论章节",
+            "原文": "从该章节复制需变更的原事实，必须唯一匹配；多行原文保留换行；不能仅填已替换后的新文",
+            "新文": "填写已经实现并核实的新事实，不改原章节标题、表格结构或定位锚点",
+            "依据": "填写真实代码位置、核对结果或验收依据；无正文变化时正文变更留空数组",
+        }
     hints["程序专用字段"] = "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
     return hints
 
@@ -1123,6 +1222,10 @@ def create_or_complete_table(
     full = os.path.join(project_root, relative)
     if os.path.exists(full):
         table = load_table(full)
+        if table.get("工作流编号", workflow_id) != workflow_id:
+            raise RecordsError(f"{relative} 已属于其他工作流，不能覆盖或补写为当前轮次")
+        if not (kind == "bug_record" and not topic) and table.get("验收主题", topic) != topic:
+            raise RecordsError(f"{relative} 的主题与请求主题「{topic}」冲突，不能覆盖已填表")
         # 已存在的表按其自身登记版本补齐（R18：版本 1 表保持现状不迁移）
         table_version = _table_version_of(table)
         schema = _schema(kind, table_version)
@@ -1157,6 +1260,15 @@ def create_or_complete_table(
         if changed:
             _atomic_write(full, table)
         return relative
+    if kind == "bug_record" and topic:
+        identity_problems, existing = bug_record_tables(project_root, workflow_id)
+        if identity_problems:
+            raise RecordsError("；".join(detail for _, detail in identity_problems))
+        for existing_relative, existing_table in existing:
+            if existing_table["验收主题"] == topic:
+                raise RecordsError(f"主题「{topic}」已经使用 {existing_relative}，不能另建重复缺陷表")
+            if bug_file_key(project_root, existing_table["验收主题"]) == bug_file_key(project_root, topic):
+                raise RecordsError(f"主题「{topic}」与 {existing_relative} 的缺陷文件标识冲突")
     table: dict = _fixed_fields(workflow_id, topic, version)
     for key in schema["row_lists"]:
         table[key] = []
@@ -1273,6 +1385,8 @@ def validate_table(kind: str, table: dict, expected_version: str | None = None, 
                 ))
                 continue
             key_value = str(row.get(definition["key_column"], "")).strip()
+            if definition.get("key_columns"):
+                key_value = json.dumps([row[column] for column in definition["key_columns"]], ensure_ascii=False)
             if not key_value:
                 problems.append((
                     CONTENT_CATEGORY,
@@ -1941,7 +2055,7 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
         lines += _narrative("## 修复与验收结果", "修复与验收结果", "暂无（由后续阶段按实际结果追加）")
         return "\n".join(lines)
 
-    if kind in {"design_sync", "topic_relations"}:
+    if kind in {"design_sync", "topic_relations", "architecture_changes"}:
         # 无环节文档模板的轮次级表：标题 + 行清单表 + 叙述段，内容同样全部来自表栏位。
         title = f"{schema['doc_name']}：{topic}" if topic else schema["doc_name"]
         lines += [f"# 【工作记录】{title}", "", f"- 工作流编号：{workflow_id}"]
@@ -1970,6 +2084,8 @@ def sync_documents(
     问题为 (类别, 描述)；文档生成总是以当前表为准重写，手改内容不会被悄悄
     覆盖——检测到手改时报告问题并跳过重写，由 AI 写回表后再生成。
     """
+    if kind == "bug_record":
+        return _sync_bug_record_tables(project_root, workflow_id, selected_topics=topics, regenerate=regenerate)
     problems: list[tuple[str, str]] = []
     documents: list[str] = []
     topics_for_kind = topics or [""]
@@ -1988,10 +2104,16 @@ def sync_documents(
         problems.extend(table_problems)
         if any(category == FORMAT_CATEGORY for category, _ in table_problems):
             continue
+        wf_state = state_mod.load_state(project_root) if kind == "acceptance_result" else None
+        if kind == "acceptance_result":
+            record_problems = _fill_acceptance_record_ids(wf_state, topic, table)
+            problems.extend(record_problems)
+            if record_problems:
+                continue
         expected_name = _expected_document_path(project_root, kind, topic, table)
         doc_relative = expected_name
         doc_full = os.path.join(project_root, doc_relative)
-        content = generate_document(kind, table, project_root=project_root)
+        content = generate_document(kind, table, project_root=project_root, wf_state=wf_state)
         if _document_was_edited(project_root, kind, table, doc_relative, content):
             problems.append((
                 CONTENT_CATEGORY,
@@ -2011,7 +2133,9 @@ def sync_documents(
 
 
 def _expected_document_path(project_root: str, kind: str, topic: str, table: dict) -> str:
-    if kind in WORKFLOW_LEVEL_KINDS:
+    if kind == "bug_record":
+        topic = _storage_topic(project_root, kind, table)
+    elif kind in WORKFLOW_LEVEL_KINDS:
         topic = ""
     if kind == "product_features":
         return artifact_paths_mod.PRODUCT_OVERVIEW_DOC
@@ -2038,7 +2162,7 @@ def _generation_receipt_path(project_root: str, kind: str, table: dict) -> str:
     workflow_id = str(table.get("工作流编号", ""))
     if not workflow_id or workflow_id in {".", ".."} or any(c in workflow_id for c in "/\\"):
         raise RecordsError("工作流编号无效，无法核对程序专用字段")
-    topic = "" if kind in WORKFLOW_LEVEL_KINDS else str(table.get("验收主题", ""))
+    topic = _storage_topic(project_root, kind, table)
     filename = os.path.basename(table_relative_path(project_root, workflow_id, kind, topic))
     return os.path.join(records_dir(project_root, workflow_id), ".generated", filename)
 
@@ -2076,7 +2200,15 @@ def _owned_document_content(kind: str, relative: str, content: str) -> str:
     return content
 
 
-def _body_hash(kind: str, relative: str, content: str) -> str:
+def _body_hash(kind: str, relative: str, content: str, *, project_root: str = "", table: dict | None = None) -> str:
+    if kind == "bug_record" and relative == "bug/索引.md" and table is not None:
+        from .bug_record import index_entry
+
+        filename = f"缺陷_{bug_file_key(project_root, str(table.get('验收主题', '')))}.md"
+        entry = index_entry(content, filename)
+        # 共享索引的状态由验收阶段维护；凭据只绑定本主题的入口、现象和根因。
+        owned = json.dumps(entry[1][:-1] if entry else [], ensure_ascii=False)
+        return hashlib.sha256(owned.encode("utf-8")).hexdigest()
     owned = _owned_document_content(kind, relative, content)
     return hashlib.sha256(markdown_links_mod.without_generated_anchors(owned).encode("utf-8")).hexdigest()
 
@@ -2113,7 +2245,7 @@ def _legacy_generation_is_verified(project_root: str, kind: str, table: dict) ->
         candidates = {hashlib.sha256(text.encode("utf-8")).hexdigest() for text in (current, current_owned)}
         if path == relative:
             candidates.add(hashlib.sha256(raw_generated.encode("utf-8")).hexdigest())
-        if recorded_hash not in candidates or _body_hash(kind, path, current) != _body_hash(kind, path, expected[path]):
+        if recorded_hash not in candidates or _body_hash(kind, path, current, project_root=project_root, table=table) != _body_hash(kind, path, expected[path], project_root=project_root, table=table):
             return False
     return True
 
@@ -2167,7 +2299,9 @@ def _save_generation_receipt(project_root: str, kind: str, table: dict, generate
             generated = {path: _read_document(os.path.join(project_root, path)) for path in paths}
     receipt["fields"] = _generation_fields(table)
     for relative, content in (generated or {}).items():
-        receipt["documents"][relative] = {"body_hash": _body_hash(kind, relative, content)}
+        receipt["documents"][relative] = {"body_hash": _body_hash(kind, relative, content, project_root=project_root, table=table)}
+        if kind == "bug_record" and relative == "bug/索引.md":
+            receipt["documents"][relative]["scope"] = "bug-index-row"
     path = _generation_receipt_path(project_root, kind, table)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     _atomic_write(path, receipt)
@@ -2178,8 +2312,8 @@ def _document_was_edited(project_root: str, kind: str, table: dict, relative: st
     if not os.path.isfile(full):
         return False
     current = _read_document(full)
-    current_body = _body_hash(kind, relative, current)
-    if current_body == _body_hash(kind, relative, expected):
+    current_body = _body_hash(kind, relative, current, project_root=project_root, table=table)
+    if current_body == _body_hash(kind, relative, expected, project_root=project_root, table=table):
         return False
     previous = (table.get(BUG_DOC_HASHES_KEY) or {}).get(relative) if relative.startswith("bug/") else table.get(DOC_HASH_KEY)
     if previous is None:
@@ -2187,6 +2321,9 @@ def _document_was_edited(project_root: str, kind: str, table: dict, relative: st
     if hashlib.sha256(_owned_document_content(kind, relative, current).encode("utf-8")).hexdigest() == previous:
         return False
     receipt = _load_generation_receipt(project_root, kind, table)
+    if receipt is not None and kind == "bug_record" and relative == "bug/索引.md":
+        if receipt["documents"].get(relative, {}).get("scope") != "bug-index-row":
+            current_body = _body_hash(kind, relative, current)
     return receipt is None or current_body != receipt["documents"].get(relative, {}).get("body_hash")
 
 
@@ -2246,7 +2383,7 @@ def stage_table_kinds(stage: str) -> tuple[str, ...]:
         "qa": ("test_plan", "test_result"),
         "topic_acceptance": ("acceptance_result",),
         "reproduce": ("bug_record",),
-        "update_code_design": ("design_sync",),
+        "update_code_design": ("design_sync", "architecture_changes"),
     }
     return mapping.get(stage, ())
 
@@ -2349,7 +2486,22 @@ def ensure_stage_tables(project_root: str, wf_state: state_mod.WorkflowState) ->
     kinds = stage_table_kinds(stage)
     if not kinds:
         return []
-    topics = acceptance_topics(project_root, wf_state.intent, stage, list(wf_state.topics))
+    try:
+        topics = acceptance_topics(project_root, wf_state.intent, stage, list(wf_state.topics))
+    except ValueError:
+        if stage != "acceptance_plan":
+            raise
+        # 首次进入验收计划时旧索引还没有本轮章节，先建表，不依赖尚未生成的索引。
+        topics = list(wf_state.topics)
+    if stage == "reproduce":
+        problems, existing = bug_record_tables(project_root, wf_state.workflow_id)
+        if problems:
+            raise RecordsError("；".join(detail for _, detail in problems))
+        targets = [_storage_topic(project_root, "bug_record", table) for _, table in existing]
+        covered = {table["验收主题"] for _, table in existing}
+        targets.extend(topic for topic in topics if topic not in covered)
+        return [create_or_complete_table(project_root, wf_state.workflow_id, "bug_record", topic)
+                for topic in targets or [""]]
     created: list[str] = []
     for kind in kinds:
         if kind in {"acceptance_plan", "acceptance_result", "impl_record", "test_plan", "test_result"}:
@@ -2815,6 +2967,13 @@ def sync_stage_tables(
     # R11：表启用以开工时冻结的标记为准；旧轮次没有冻结版本时才走原有文档检查。
     if not workflow_uses_tables(wf_state, project_root):
         return [], []
+    if stage == "reproduce":
+        from .topic import list_reproduce_topics
+
+        required_topics = list(dict.fromkeys(topics + list_reproduce_topics(project_root, wf_state.workflow_id)))
+        return _sync_bug_record_tables(project_root, wf_state.workflow_id, required_topics=required_topics)
+    if stage == "update_code_design":
+        return _sync_design_tables(project_root, wf_state)
     problems: list[tuple[str, str]] = []
     documents: list[str] = []
     written_docs: set[str] = set()  # 本轮门禁首次真实生成的正式文档（触发生成方）
@@ -2886,6 +3045,11 @@ def sync_stage_tables(
             if kind == "test_result":
                 record_problems = _fill_machine_record_ids(project_root, wf_state, topic, table)
                 problems.extend(record_problems)
+            if kind == "acceptance_result":
+                record_problems = _fill_acceptance_record_ids(wf_state, topic, table)
+                problems.extend(record_problems)
+                if record_problems:
+                    continue
             if kind == "test_plan" and topic:
                 pass
             doc_relative = _expected_document_path(project_root, kind, topic, table)
@@ -2948,6 +3112,70 @@ def sync_stage_tables(
     return problems, documents
 
 
+def _sync_design_tables(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    from .design_sync import prepare_design_sync
+
+    problems: list[tuple[str, str]] = []
+    tables: dict[str, tuple[str, dict]] = {}
+    outputs: dict[str, str] = {}
+    for kind in ("design_sync", "architecture_changes"):
+        relative = table_relative_path(project_root, wf_state.workflow_id, kind, "")
+        if not table_exists(project_root, relative):
+            if kind == "design_sync":
+                problems.append((CONTENT_CATEGORY, f"缺少最终同步工作记录表 {relative}"))
+            continue
+        try:
+            table = load_table(os.path.join(project_root, relative))
+            if table.get("工作流编号") != wf_state.workflow_id or table.get("验收主题") != "":
+                problems.append((CONTENT_CATEGORY, f"{relative} 的轮次或主题身份不正确；最终同步使用本轮轮次级表"))
+                continue
+            table_problems = validate_table(kind, table, _workflow_table_version(project_root, wf_state.workflow_id), project_root=project_root)
+            problems.extend((category, f"{relative}：{detail}") for category, detail in table_problems)
+            if table_problems:
+                continue
+            doc_relative = _expected_document_path(project_root, kind, "", table)
+            content = generate_document(kind, table, project_root=project_root, wf_state=wf_state)
+            if _document_was_edited(project_root, kind, table, doc_relative, content):
+                problems.append((CONTENT_CATEGORY, f"{doc_relative} 被直接修改；请把事实写回 {relative}，保留现有文档"))
+                continue
+            outputs[doc_relative] = markdown_links_mod.with_heading_anchors(content, previous_content=_read_document(os.path.join(project_root, doc_relative)))
+            tables[kind] = (relative, table)
+        except RecordsError as exc:
+            problems.append((FORMAT_CATEGORY, str(exc)))
+    if problems:
+        return problems, []
+    sync_table = tables["design_sync"][1]
+    receipt = _load_generation_receipt(project_root, "design_sync", sync_table)
+    previous = receipt.get("architecture") if receipt is not None else None
+    if previous is not None and not isinstance(previous, dict):
+        return [(FORMAT_CATEGORY, "正式架构生成凭据损坏；保留正式架构，不重建基准")], []
+    architecture = artifact_paths_mod.CODE_DESIGN_DOC
+    current = _read_document(os.path.join(project_root, architecture))
+    try:
+        content, baseline = prepare_design_sync(
+            project_root, wf_state, sync_table,
+            tables.get("architecture_changes", ("", None))[1], current, previous,
+        )
+    except ValueError as exc:
+        return [(CONTENT_CATEGORY, str(exc))], []
+    outputs[architecture] = content
+    for relative, content in outputs.items():
+        _write_text(os.path.join(project_root, relative), content)
+    for kind, (relative, table) in tables.items():
+        doc_relative = _expected_document_path(project_root, kind, "", table)
+        table[GENERATED_DOC_PATH_KEY] = doc_relative
+        table[DOC_HASH_KEY] = _file_sha256(os.path.join(project_root, doc_relative))
+        _atomic_write(os.path.join(project_root, relative), table)
+        _save_generation_receipt(project_root, kind, table, {doc_relative: outputs[doc_relative]})
+    receipt = _load_generation_receipt(project_root, "design_sync", sync_table)
+    receipt["architecture"] = baseline
+    _atomic_write(_generation_receipt_path(project_root, "design_sync", sync_table), receipt)
+    return [], [relative for relative, _ in tables.values()] + list(outputs)
+
+
 def bug_file_key(project_root: str, defect_name: str) -> str:
     """缺陷记录的稳定文件标识：与门禁登记同取缺陷分类，避免生成路径与登记路径分叉。"""
     from .project import load_project
@@ -3003,7 +3231,7 @@ def refresh_references_after_removal(
     return list(dict.fromkeys(refreshed))
 
 
-def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str]]:
+def _bug_defect_documents(table: dict, project_root: str, *, index_content: str | None = None) -> list[tuple[str, str]]:
     """按 bug_record 表生成模板结构的缺陷记录文档与索引条目（bug/ 目录）。"""
     topic_name = str(table.get("验收主题", "")).strip() or "缺陷记录"
     workflow_id = str(table.get("工作流编号", ""))
@@ -3024,13 +3252,14 @@ def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str
     if _table_version_of(table) == "3":
         for key in ("运行环境", "真实输入"):
             lines += [f"- {key}：{item}" for item in table.get(key, []) if str(item).strip()]
-    lines += [f"- {item}".rstrip() for item in table.get("真实复现条件", []) if str(item).strip()]
+    conditions = table.get("真实复现条件", table.get("缺陷说明", []) if _table_version_of(table) == "1" else [])
+    lines += [f"- {item}".rstrip() for item in conditions if str(item).strip()]
     lines += [""] + _anchored_heading("3. 复现步骤")
     lines += [f"- {row.get('复现步骤', '')}".rstrip() for row in rows]
     lines += [""] + _anchored_heading("4. 实际结果")
-    lines += [f"- {row.get('实际结果', '')}".rstrip() for row in rows]
+    lines += [f"- {row.get('实际结果', row.get('现象', ''))}".rstrip() for row in rows]
     lines += [""] + _anchored_heading("5. 期望结果")
-    lines += [f"- {row.get('期望结果', '')}".rstrip() for row in rows]
+    lines += [f"- {row.get('期望结果', row.get('预期行为', ''))}".rstrip() for row in rows]
     lines += [""] + _anchored_heading("6. 根因")
     for row in rows:
         lines += [f"**{row.get('缺陷编号', '')}**", ""]
@@ -3057,23 +3286,29 @@ def _bug_defect_documents(table: dict, project_root: str) -> list[tuple[str, str
         lines += ["", *preserved]
     documents: list[tuple[str, str]] = [(defect_rel, markdown_links_mod.with_heading_anchors("\n".join(lines).rstrip() + "\n"))]
 
-    index_path = os.path.join(project_root, "bug", "索引.md")
+    from .bug_record import index_entry, index_width, replace_index_entry
+
     first_row = rows[0] if rows else {}
-    index_row = (
-        f"| [{topic_name}](./缺陷_{file_key}.md) "
-        f"| {_inline_cell(first_row.get('现象', ''))} "
-        f"| {_inline_cell(first_row.get('根因说明', first_row.get('根因', '')))} | 根因已确认 |"
-    )
-    if os.path.isfile(index_path):
-        with open(index_path, "r", encoding="utf-8") as stream:
-            index_content = stream.read()
-        if f"(./缺陷_{file_key}.md)" not in index_content:
-            index_content = index_content.rstrip() + "\n" + index_row + "\n"
+    index_cells = [
+        f"[{topic_name}](./缺陷_{file_key}.md)",
+        _inline_cell(first_row.get("现象", "")),
+        _inline_cell(first_row.get("根因说明", first_row.get("根因", ""))),
+        "根因已确认",
+    ]
+    if index_content is None:
+        index_content = _read_document(os.path.join(project_root, "bug", "索引.md"))
+    if index_width(index_content) == 2:
+        index_cells = [index_cells[0], index_cells[-1]]
+    entry = index_entry(index_content, f"缺陷_{file_key}.md")
+    if entry is not None:
+        row_range, current_cells = entry
+        index_cells[-1] = current_cells[-1]
+        index_content = replace_index_entry(index_content, row_range, index_cells)
     else:
-        index_content = (
-            "# Bug 索引\n\n"
-            "| Bug 记录 | 现象 | 根因 | 状态 |\n|---|---|---|---|\n" + index_row + "\n"
-        )
+        if not index_content:
+            index_content = "# Bug 索引\n\n| Bug 记录 | 现象 | 根因 | 状态 |\n|---|---|---|---|\n"
+        index_row = "| " + " | ".join(_md_cell(cell) for cell in index_cells) + " |\n"
+        index_content = index_content.rstrip() + "\n" + index_row
     documents.append(("bug/索引.md", index_content))
     return documents
 
@@ -3130,6 +3365,72 @@ def _write_bug_documents(project_root: str, table: dict) -> list[tuple[str, str]
     table[BUG_DOC_HASHES_KEY] = recorded
     _save_generation_receipt(project_root, "bug_record", table, {relative: _read_document(os.path.join(project_root, relative)) for relative in recorded})
     return problems
+
+
+def _sync_bug_record_tables(
+    project_root: str,
+    workflow_id: str,
+    *,
+    required_topics: list[str] | None = None,
+    selected_topics: list[str] | None = None,
+    regenerate: bool = True,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """缺陷整批预检后生成；任一输入或正文冲突都不覆盖本批正式文档。"""
+    problems, tables = bug_record_tables(project_root, workflow_id, required_topics)
+    if selected_topics:
+        base = table_relative_path(project_root, workflow_id, "bug_record", "")
+        tables = [(relative, table) for relative, table in tables
+                  if table["验收主题"] in selected_topics or ("" in selected_topics and relative == base)]
+        found = {table["验收主题"] for _, table in tables}
+        for topic in selected_topics:
+            if topic and topic not in found:
+                problems.append((CONTENT_CATEGORY, f"主题「{topic}」缺少缺陷记录工作记录表"))
+    if not tables and not problems:
+        problems.append((CONTENT_CATEGORY, "缺陷记录工作记录表尚未填写内容；请逐个主题填写复现事实"))
+    outputs: dict[str, str] = {}
+    internal_paths: dict[str, str] = {}
+    version = _workflow_table_version(project_root, workflow_id)
+    for relative, table in tables:
+        table_problems = validate_table("bug_record", table, version, project_root=project_root)
+        problems.extend((category, f"{relative}：{detail}") for category, detail in table_problems)
+        if table_problems:
+            continue
+        try:
+            internal = _expected_document_path(project_root, "bug_record", table["验收主题"], table)
+            generated = {internal: generate_document("bug_record", table, project_root=project_root)}
+            generated.update(_bug_defect_documents(table, project_root, index_content=outputs.get("bug/索引.md")))
+            for path, content in generated.items():
+                current = _read_document(os.path.join(project_root, path))
+                if path.startswith("bug/缺陷_") and current:
+                    from .topic import TOPIC_FIELD_RE, WORKFLOW_FIELD_RE
+
+                    owner = WORKFLOW_FIELD_RE.search(current)
+                    topic_owner = TOPIC_FIELD_RE.search(current)
+                    if owner is None or owner.group(1).strip() != workflow_id or topic_owner is None or topic_owner.group(1).strip() != table["验收主题"]:
+                        problems.append((CONTENT_CATEGORY, f"{path} 已有内容的轮次或主题与 {relative} 冲突，保留原文"))
+                        continue
+                if _document_was_edited(project_root, "bug_record", table, path, content):
+                    problems.append((CONTENT_CATEGORY, f"正式文档 {path} 与 {relative} 不一致：文档被直接修改；请把改动写回工作记录表，程序不会覆盖手改内容"))
+                outputs[path] = markdown_links_mod.with_heading_anchors(content, previous_content=current)
+            internal_paths[relative] = internal
+        except (RecordsError, ValueError) as exc:
+            problems.append((CONTENT_CATEGORY, f"{relative}：{exc}"))
+    if problems:
+        return problems, []
+    documents = [relative for relative, _ in tables] + list(outputs)
+    if not regenerate:
+        return [], documents
+    for path, content in outputs.items():
+        _write_text(os.path.join(project_root, path), content)
+    for relative, table in tables:
+        internal = internal_paths[relative]
+        defect = f"bug/缺陷_{bug_file_key(project_root, table['验收主题'])}.md"
+        table[GENERATED_DOC_PATH_KEY] = internal
+        table[DOC_HASH_KEY] = _file_sha256(os.path.join(project_root, internal))
+        table[BUG_DOC_HASHES_KEY] = {path: _file_sha256(os.path.join(project_root, path)) for path in (defect, "bug/索引.md")}
+        _atomic_write(os.path.join(project_root, relative), table)
+        _save_generation_receipt(project_root, "bug_record", table, {path: outputs[path] for path in (internal, defect, "bug/索引.md")})
+    return [], documents
 
 
 def _inline_cell(value: object) -> str:
@@ -3254,6 +3555,56 @@ def _read_document(path: str) -> str:
             return stream.read()
     except OSError:
         return ""
+
+
+def _fill_acceptance_record_ids(
+    wf_state: state_mod.WorkflowState | None,
+    topic: str,
+    table: dict,
+) -> list[tuple[str, str]]:
+    """验收程序编号只取当前有效状态；缺证据时不改表或正式文档。"""
+    from .acceptance_records import record_is_current
+
+    if _table_version_of(table) == "1":
+        return []
+    if (
+        wf_state is None
+        or wf_state.workflow_id != table.get("工作流编号")
+        or topic not in wf_state.topics
+        or table.get("验收主题") != topic
+    ):
+        return [(CONTENT_CATEGORY, f"{topic} 的验收结果缺少对应当前轮次的有效状态")]
+    stage_state = wf_state.stages.get("topic_acceptance")
+    current = stage_state.acceptance_records.get(topic, {}) if stage_state is not None else {}
+    problems: list[tuple[str, str]] = []
+    updates: list[tuple[dict, str]] = []
+    for row in table.get("验收结果", []):
+        if not isinstance(row, dict):
+            continue
+        criterion_id = str(row.get("验收条件编号", "")).strip()
+        record = current.get(criterion_id)
+        if (
+            record is None
+            or record.topic != topic
+            or record.criterion_id != criterion_id
+            or not record_is_current(record, wf_state)
+        ):
+            problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 缺少当前有效验收记录；程序编号不能手填"))
+            continue
+        if row.get("验收方式") != record.method or row.get("验收结论") != record.result:
+            problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 的验收方式或结论与当前记录不一致"))
+        machine_ids = str(row.get("机器测试记录编号", "")).strip()
+        if record.method == "人工验收":
+            matching_evidence = machine_ids == "不适用"
+        else:
+            matching_evidence = set(re.split(r"[、,，;；\s]+", machine_ids)) == set(record.test_record_ids)
+        if not matching_evidence:
+            problems.append((CONTENT_CATEGORY, f"{topic} / {criterion_id} 的机器测试记录编号与当前验收依据不一致"))
+        updates.append((row, record.record_id))
+    if not problems:
+        for row, record_id in updates:
+            row["验收记录编号"] = record_id
+    return problems
 
 
 def _fill_machine_record_ids(

@@ -7,6 +7,26 @@ from datetime import datetime, timezone
 JOURNAL_FILE = os.path.join(".workflow_loop", "journal.jsonl")
 
 
+def belongs_to_workflow(entry: dict, workflow_id: str, started_at: str | None) -> bool:
+    """显式编号优先；旧无编号日志只接受可证明在本轮开工之后的记录。"""
+    if not isinstance(entry, dict):
+        return False
+    entry_id = entry.get("workflow_id")
+    if entry_id is not None:
+        return entry_id == workflow_id
+    timestamp = entry.get("ts")
+    if not isinstance(timestamp, str) or not isinstance(started_at, str):
+        return False
+    try:
+        event_time = datetime.fromisoformat(timestamp)
+        start_time = datetime.fromisoformat(started_at)
+    except ValueError:
+        return False
+    if event_time.tzinfo is None or start_time.tzinfo is None:
+        return False
+    return event_time >= start_time
+
+
 # 往 journal.jsonl 追加一条记录
 # journal 是 append-only 的历史记录（"发生过啥"），不可改
 # 和 state.json（"现在在哪"，可重写）分离：崩溃恢复时可以从 journal 重建 state

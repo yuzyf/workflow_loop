@@ -173,7 +173,15 @@ def test_program_fields_reject_tampering_before_writes(tmp_path):
         _project(root)
         _write(root / "spec/产品总说明.md", "# 产品\n\n## 7. 产品功能\n\n原清单\n\n## 8. 相关文档\n")
         _write(root / "spec/功能_定义.md", "# 定义\n")
-        path, table = _filled_table(root, kind)
+        if kind == "acceptance_result":
+            from workflow_repair_support import prepared_project, run_project_evidence
+
+            state = prepared_project(root, [TOPIC], workflow_id=WORKFLOW_ID)
+            run_project_evidence(root, state)
+            path = root / records.table_relative_path(str(root), WORKFLOW_ID, kind, TOPIC)
+            table = records.load_table(str(path))
+        else:
+            path, table = _filled_table(root, kind)
         topic = "" if kind in records.WORKFLOW_LEVEL_KINDS else TOPIC
         if kind == "product_features":
             problems, _ = records._sync_product_features(str(root), WORKFLOW_ID)

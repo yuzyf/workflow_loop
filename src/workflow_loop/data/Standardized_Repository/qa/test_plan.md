@@ -103,7 +103,7 @@ workflow gate qa --discuss-done
 
 ## 5. 第三步：登记主题测试任务
 
-对每个自动化或混合 `TC`，由 AI 使用 `workflow test prepare` 登记：
+对自动化或混合 `TC`（测试项），表模式由 AI 使用 `workflow test prepare --from-tables`（从表批量登记，不运行测试）；旧文档模式使用 `workflow test prepare --topic <主题> --tc <测试项编号> --report-adapter <报告适配器> -- <实际命令和参数>`（逐条登记）。登记前核对：
 
 - 当前主题和 `TC`。
 - 精确测试入口。

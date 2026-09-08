@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "1920808ea356f6ccbac34187a0905e2848284a9fdfc1c17dd5b674d30a7cf553",
+    "生成文档路径": "acceptance/同轮多个缺陷各自留证并独立验收_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/同轮多个缺陷各自留证并独立验收_验收计划.md": {
+      "body_hash": "37bb752bf1fe8abc5331c851bb7919aabef59b96acee18ea922fe84b33f01826"
+    }
+  }
+}

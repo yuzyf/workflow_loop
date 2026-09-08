@@ -754,8 +754,8 @@ def test_spike_bug_design_tables_generate_docs(tmp_path: Path) -> None:
 产品入口：workflow gate 各环节第二道门按表生成正式文档
 测试入口：tests/test_records.py::test_spike_bug_design_tables_generate_docs
 代码入口：src/workflow_loop/records.py::generate_document
-准备数据：构造填写完整且满足逐栏最低信息量的 spike、缺陷、设计同步等表
-执行动作：调用 generate_document 生成对应正式文档
+准备数据：构造完整穿刺表和具名缺陷表，最终同步使用真实测试及回归证据的隔离项目
+执行动作：通过阶段按表生成入口生成对应正式文档和正式架构
 关键断言：模板规定的每一节都存在且内容来自表栏位，不出现占位句或指引句
 预期证据：pytest 结构化 junit 报告与退出码 0
     """
@@ -769,12 +769,11 @@ def test_spike_bug_design_tables_generate_docs(tmp_path: Path) -> None:
     for stage, kind, topic in [
         ("spike", "spike_conclusion", ""),
         ("reproduce", "bug_record", ""),
-        ("update_code_design", "design_sync", ""),
     ]:
         relative = records_mod.create_or_complete_table(str(root), "wf-1", kind, topic)
         table_path = root / relative
         table = json.loads(table_path.read_text(encoding="utf-8"))
-        schema = records_mod.KIND_SCHEMAS[kind]
+        schema = records_mod._schema(kind, "2")
         for list_key, definition in schema["row_lists"].items():
             table[list_key] = [{
                 column: (f"{column}内容说明具体事实与取值"
@@ -784,15 +783,25 @@ def test_spike_bug_design_tables_generate_docs(tmp_path: Path) -> None:
             }]
         for narrative_key in schema["narrative"]:
             table[narrative_key] = [f"{narrative_key}：本节说明具体事实、依据与下一步"]
+        if kind == "bug_record":
+            table["验收主题"] = "主题A"
         table_path.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
         state.current_stage = stage
         state.stages[stage] = state_mod.StageState()
+        state_mod.save_state(str(root), state)
         problems, documents = records_mod.sync_stage_tables(str(root), state)
         assert problems == [], (stage, problems)
-    # 三类表都生成了正式文档
+
+    from test_design_sync_tables import ARCHITECTURE, WORKFLOW_ID, _final_project
+
+    design_root = tmp_path / "design"
+    design_state, _ = _final_project(design_root, version="2")
+    problems, documents = records_mod.sync_stage_tables(str(design_root), design_state)
+    assert problems == [], problems
+    assert ARCHITECTURE in documents
     assert (root / ".workflow_loop/records/wf-1/spike_conclusion_spike_conclusion.md").is_file()
     assert (root / ".workflow_loop/records/wf-1/bug_record_bug_record.md").is_file()
-    assert (root / ".workflow_loop/records/wf-1/design_sync_design_sync.md").is_file()
+    assert (design_root / f".workflow_loop/records/{WORKFLOW_ID}/design_sync_design_sync.md").is_file()
 
 
 def test_acceptance_record_rejects_criterion_not_in_table(tmp_path: Path) -> None:

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
+
+from markdown_it import MarkdownIt
+from markdown_it.common.utils import unescapeAll
 
 from . import artifact_paths as artifact_paths_mod
 from .state import load_state
@@ -77,28 +81,68 @@ def _replace_result_update(content: str, stage_label: str, workflow_id: str, bod
     return content[: section_match.start(1)] + section + content[section_match.end(1) :]
 
 
+def index_entry(content: str, filename: str) -> tuple[tuple[int, int], list[str]] | None:
+    """定位一个缺陷索引行，返回原文行范围和单元格；重复入口直接拒绝。"""
+    found = []
+    row_range = None
+    cells: list[str] = []
+    matches = False
+    for token in MarkdownIt("commonmark").enable("table").parse(content):
+        if token.type == "tr_open":
+            row_range, cells, matches = token.map, [], False
+        elif token.type == "inline" and row_range is not None:
+            if not cells:
+                matches = any(
+                    child.type == "link_open"
+                    and unquote(child.attrGet("href") or "") in {filename, f"./{filename}"}
+                    for child in token.children or []
+                )
+            cells.append(unescapeAll(token.content))
+        elif token.type == "tr_close":
+            if matches:
+                if len(cells) < 2:
+                    raise ValueError(f"缺陷索引中 {filename} 的条目缺少入口或状态列")
+                found.append((tuple(row_range), cells))
+            row_range = None
+    if len(found) > 1:
+        raise ValueError(f"缺陷索引中 {filename} 有重复入口，不能确定应更新哪一行")
+    return found[0] if found else None
+
+
+def replace_index_entry(content: str, entry: tuple[int, int], cells: list[str]) -> str:
+    lines = content.splitlines(keepends=True)
+    rendered = [cell.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>") for cell in cells]
+    lines[entry[0]:entry[1]] = ["| " + " | ".join(rendered) + " |\n"]
+    return "".join(lines)
+
+
+def index_width(content: str) -> int:
+    """旧索引可只有入口和状态两列；新增条目沿用其表格结构。"""
+    width = 0
+    for token in MarkdownIt("commonmark").enable("table").parse(content):
+        if token.type == "th_open":
+            width += 1
+        elif token.type == "thead_close":
+            if width not in {2, 4}:
+                raise ValueError("缺陷索引必须使用旧版两列或当前四列表格，不能覆盖未知表格结构")
+            return width
+    if content.strip():
+        raise ValueError("缺陷索引没有可解析的表格，保留原内容")
+    return 4
+
+
 def _update_index_status(project_root: str, filename: str, status: str) -> None:
     index_path = Path(project_root) / BUG_INDEX
     if not index_path.is_file():
         raise ValueError(f"{BUG_INDEX} 不存在，无法更新缺陷索引")
 
     content = index_path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-    markers = {f"({filename})", f"(./{filename})"}
-    found = False
-    for index, line in enumerate(lines):
-        if not any(marker in line for marker in markers) or not line.strip().startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) < 2:
-            continue
-        cells[-1] = status
-        lines[index] = "| " + " | ".join(cells) + " |"
-        found = True
-        break
-    if not found:
+    entry = index_entry(content, filename)
+    if entry is None:
         raise ValueError(f"{BUG_INDEX} 没有链接缺陷记录: {filename}")
-    index_path.write_text("\n".join(lines) + ("\n" if content.endswith("\n") else ""), encoding="utf-8")
+    row_range, cells = entry
+    cells[-1] = status
+    index_path.write_text(replace_index_entry(content, row_range, cells), encoding="utf-8")
 
 
 def update_status(

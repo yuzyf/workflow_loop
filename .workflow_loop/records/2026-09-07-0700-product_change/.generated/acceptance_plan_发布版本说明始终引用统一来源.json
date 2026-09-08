@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "47675b0828714e9607f4942adbaeec67e5f29d9bc1bcb0f6cfd998c8831de46d",
+    "生成文档路径": "acceptance/发布版本说明始终引用统一来源_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/发布版本说明始终引用统一来源_验收计划.md": {
+      "body_hash": "4e2bcef47ee52dac6daf50201ffcabd1a5744eb1f325f5c108344b21d34ad30f"
+    }
+  }
+}
