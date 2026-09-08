@@ -1,12 +1,12 @@
 {
   "fields": {
-    "生成文档哈希": "e785f3d5d86729c5925f7e40b339f33badf4538c7dc927b13e2298a5b317a76d",
+    "生成文档哈希": "8131066de07f4e7069e7ae48795bdeca1dd7084383be4a79b53ef1ee9ed457f8",
     "生成文档路径": "acceptance/先改代码后准备基线的Git自证出口_验收计划.md",
     "缺陷文档哈希": {}
   },
   "documents": {
     "acceptance/先改代码后准备基线的Git自证出口_验收计划.md": {
-      "body_hash": "c981e133a9c012a1c355cbf220e9d23c7bee8f7c7e2e5da9af31c3041defd8b6"
+      "body_hash": "a94a1b7a95b76a1844517b1ce8301ec77da086f105caae3237437f1e79191793"
     }
   }
 }

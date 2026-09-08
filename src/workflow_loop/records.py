@@ -3110,6 +3110,14 @@ def sync_stage_tables(
                     ))
                 continue
             table = load_table(os.path.join(project_root, relative))
+            if kind == "test_result":
+                # 机器采集（主题一）：三列回填先于空表守卫——程序把当前任务的
+                # 编号/结论/机器记录写进表后，表即非空；无任务的表保持空由
+                # 守卫报告。回填失败（如表结构异常）不阻塞，交给后续校验。
+                try:
+                    _fill_machine_record_ids(project_root, wf_state, topic, table)
+                except Exception:
+                    pass
             if kind != "topic_relations" and not table_is_filled(table):
                 # R11：空表也属于启用表流程，报"尚未填写"，不退回文档模式
                 if any(
