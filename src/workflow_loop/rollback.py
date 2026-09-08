@@ -2215,6 +2215,15 @@ def prepare_impl(
     wf_state.rollback.code_baseline_hash = stage_state.code_baseline_hash
     wf_state.rollback.planned_paths = paths
 
+    # R25：进场时代码范围干净则记录 Git 基线提交号，供计划外修改文件取进场内容
+    try:
+        from . import machine_collect as machine_collect_mod
+
+        machine_collect_mod.record_entry_git_baseline(project_root, wf_state)
+    except Exception:
+        # 记录失败不阻塞准备；采集时按无基线处理并走回退副本路径
+        pass
+
     valid, detail, _ = validate_prepared(project_root, wf_state)
     if not valid:
         raise ValueError(detail)
@@ -2538,6 +2547,20 @@ def _implementation_change_validation(
                 recorded_changes,
             )
         )
+        # R25（v4）：表内有采集指纹时重算差异并与指纹比对；不一致报请重新采集
+        fingerprint_problems = _collection_fingerprint_problems(
+            project_root, wf_state
+        )
+        for topic, problem in fingerprint_problems.items():
+            report.add_error(
+                check_id="impl.collection_fingerprint.mismatch",
+                location=f"实施记录表（{topic}）的采集指纹",
+                expected="门禁重算差异与采集时记录的文件内容指纹一致",
+                actual=problem,
+                evidence=problem,
+                impact="文件在采集后又发生了变化，表内代码位置不再反映最终文件",
+                next_action="重新执行 workflow collect；重新采集只刷新文件与代码位置两列，已填写的叙述列会保留",
+            )
 
     dependency_ids = tuple(
         item.check_id for item in report.diagnostics if item.kind == "error"
@@ -2667,6 +2690,24 @@ def validate_implementation_changes_report(
 ) -> diagnostics_mod.ValidationReport:
     """返回三方核对的原始结构化事实，供门禁命令直接渲染。"""
     return _implementation_change_validation(project_root, wf_state).report
+
+
+def _collection_fingerprint_problems(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+) -> dict[str, str]:
+    """R25：表内有采集指纹的主题，重算差异并与指纹比对；返回 {主题: 问题}。"""
+    try:
+        from . import machine_collect as machine_collect_mod
+    except ImportError:
+        return {}
+    try:
+        return machine_collect_mod.verify_collection_fingerprint(
+            project_root, wf_state
+        )
+    except machine_collect_mod.CollectError:
+        # 差异事实本身取不到时由上方差异检查报告，这里不重复报
+        return {}
 
 
 def validate_implementation_changes(

@@ -1,0 +1,182 @@
+# 【主题测试结果】产品和代码设计及缺陷穿刺结论保持真实一致
+
+- 工作流编号：2026-07-30-0740-product_change
+- 验收主题：产品和代码设计及缺陷穿刺结论保持真实一致
+- 自动化测试结果：通过
+- 人工验收状态：待主题验收
+- 测试完成时间：2026-08-03T06:26:48+00:00
+
+## 1. 测试依据
+
+- [验收计划](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md)
+- [测试计划](./产品和代码设计及缺陷穿刺结论保持真实一致_测试计划.md)
+- [实施计划和记录](../impl/产品和代码设计及缺陷穿刺结论保持真实一致_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+## 2. 测试环境和执行说明
+
+- 本主题执行范围：TC-01、TC-02、TC-03、TC-04、TC-05、TC-06
+- 执行顺序：TC-01：无前置；TC-02：TC-01；TC-03：TC-02；TC-04：TC-02、TC-03；TC-05：TC-03；TC-06：TC-05
+- 未执行项：暂无
+
+## 3. 测试项结果
+
+### TC-01：中文正式路径和稳定文件标识
+
+- 对应验收条件：[AC-01：正式文档统一使用中文文件名](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md#ac-01)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_artifact_paths.py::test_dynamic_artifact_paths_use_chinese_formal_names","tests/test_artifact_paths.py::test_file_key_is_cross_platform_safe","tests/test_artifact_paths.py::test_registered_file_keys_remain_stable_and_case_insensitive_unique","tests/test_stages.py::test_stage_artifact_entries_use_confirmed_chinese_formal_paths"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_artifact_paths.py::test_dynamic_artifact_paths_use_chinese_formal_names","tests/test_artifact_paths.py::test_file_key_is_cross_platform_safe","tests/test_artifact_paths.py::test_registered_file_keys_remain_stable_and_case_insensitive_unique","tests/test_stages.py::test_stage_artifact_entries_use_confirmed_chinese_formal_paths"]
+- 机器记录编号：RUN-20260803T062647+0000-3830f642
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-03T06:26:47+00:00
+- 结束时间：2026-08-03T06:26:47+00:00
+- 时长（秒）：0.093
+- 退出码：0
+- 输出摘要：".......                                                                  [100%]\n7 passed in 0.02s\n"
+- 输出哈希：ee09f6debd9f81709cd5af75a47e8b1c6ed9a94b8e82a9b34c00f597199e9c17
+- 输出字节数：98
+- 产品代码哈希：4285c91d074cade740575e4fc7ae127d4bbe67ae7731a117ecec71b35c4ab696
+- 测试代码哈希：d5e8082cfdfbd6df2e9fbe9244b4b718807f2576a7e3a9596712d4045a435d3a
+- 实际结果：机器记录显示已执行“中文正式路径和稳定文件标识”的全部登记入口，退出码为 0；这证明该测试项的自动化检查通过。
+- 自动化测试结果：通过
+- 证据：机器记录编号 RUN-20260803T062647+0000-3830f642；完整输出由输出哈希 ee09f6debd9f81709cd5af75a47e8b1c6ed9a94b8e82a9b34c00f597199e9c17 和输出字节数 98 绑定。
+
+### TC-02：产品设计结构和修改范围
+
+- 对应验收条件：[AC-02：产品设计只记录已确认内容](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md#ac-02)
+- 测试方式：自动化测试 + 人工验收
+- 测试入口：["tests/test_stages.py::test_spec_stage_accepts_linked_chinese_product_documents","tests/test_stages.py::test_spec_stage_rejects_missing_linked_feature_document"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_stages.py::test_spec_stage_accepts_linked_chinese_product_documents","tests/test_stages.py::test_spec_stage_rejects_missing_linked_feature_document"]
+- 机器记录编号：RUN-20260803T062647+0000-a7adbd3b
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-03T06:26:47+00:00
+- 结束时间：2026-08-03T06:26:47+00:00
+- 时长（秒）：0.094
+- 退出码：0
+- 输出摘要："..                                                                       [100%]\n2 passed in 0.02s\n"
+- 输出哈希：cdf8d13a3f141b449c7d92c9b86d6fd681de17445a1d661236b92f93860eafac
+- 输出字节数：98
+- 产品代码哈希：4285c91d074cade740575e4fc7ae127d4bbe67ae7731a117ecec71b35c4ab696
+- 测试代码哈希：d5e8082cfdfbd6df2e9fbe9244b4b718807f2576a7e3a9596712d4045a435d3a
+- 实际结果：机器记录显示已执行“产品设计结构和修改范围”的全部登记入口，退出码为 0；这证明自动化检查部分通过，人工判断留到主题验收。
+- 自动化测试结果：通过
+- 证据：机器记录编号 RUN-20260803T062647+0000-a7adbd3b；完整输出由输出哈希 cdf8d13a3f141b449c7d92c9b86d6fd681de17445a1d661236b92f93860eafac 和输出字节数 98 绑定。
+
+### TC-03：代码设计区分计划实现和证据
+
+- 对应验收条件：[AC-03：代码设计区分计划和事实](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md#ac-03)
+- 测试方式：自动化测试 + 人工验收
+- 测试入口：["tests/test_architecture_validation.py::test_final_architecture_requires_feature_to_code_mapping"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_architecture_validation.py::test_final_architecture_requires_feature_to_code_mapping"]
+- 机器记录编号：RUN-20260803T062647+0000-366c51a8
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-03T06:26:47+00:00
+- 结束时间：2026-08-03T06:26:47+00:00
+- 时长（秒）：0.098
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.02s\n"
+- 输出哈希：a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925
+- 输出字节数：98
+- 产品代码哈希：4285c91d074cade740575e4fc7ae127d4bbe67ae7731a117ecec71b35c4ab696
+- 测试代码哈希：d5e8082cfdfbd6df2e9fbe9244b4b718807f2576a7e3a9596712d4045a435d3a
+- 实际结果：机器记录显示已执行“代码设计区分计划实现和证据”的全部登记入口，退出码为 0；这证明自动化检查部分通过，人工判断留到主题验收。
+- 自动化测试结果：通过
+- 证据：机器记录编号 RUN-20260803T062647+0000-366c51a8；完整输出由输出哈希 a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925 和输出字节数 98 绑定。
+
+### TC-04：缺陷使用真实复现和根因证据
+
+- 对应验收条件：[AC-04：缺陷依据来自真实复现](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md#ac-04)
+- 测试方式：自动化测试 + 人工验收
+- 测试入口：["tests/test_bug_validation.py::test_reproduce_document_rejects_unconfirmed_root_cause","tests/test_bug_validation.py::test_reproduce_document_requires_real_evidence_root_cause_and_one_topic"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_bug_validation.py::test_reproduce_document_rejects_unconfirmed_root_cause","tests/test_bug_validation.py::test_reproduce_document_requires_real_evidence_root_cause_and_one_topic"]
+- 机器记录编号：RUN-20260803T062647+0000-0f4b2f7c
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-03T06:26:47+00:00
+- 结束时间：2026-08-03T06:26:48+00:00
+- 时长（秒）：0.089
+- 退出码：0
+- 输出摘要："..                                                                       [100%]\n2 passed in 0.02s\n"
+- 输出哈希：cdf8d13a3f141b449c7d92c9b86d6fd681de17445a1d661236b92f93860eafac
+- 输出字节数：98
+- 产品代码哈希：4285c91d074cade740575e4fc7ae127d4bbe67ae7731a117ecec71b35c4ab696
+- 测试代码哈希：d5e8082cfdfbd6df2e9fbe9244b4b718807f2576a7e3a9596712d4045a435d3a
+- 实际结果：机器记录显示已执行“缺陷使用真实复现和根因证据”的全部登记入口，退出码为 0；这证明自动化检查部分通过，人工判断留到主题验收。
+- 自动化测试结果：通过
+- 证据：机器记录编号 RUN-20260803T062647+0000-0f4b2f7c；完整输出由输出哈希 cdf8d13a3f141b449c7d92c9b86d6fd681de17445a1d661236b92f93860eafac 和输出字节数 98 绑定。
+
+### TC-05：穿刺候选执行和跳过符合真实场景
+
+- 对应验收条件：[AC-05：穿刺只验证真正未知的技术事实](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md#ac-05)
+- 测试方式：自动化测试 + 人工验收
+- 测试入口：["tests/test_spike_validation.py::test_validate_spike_stage_accepts_complete_current_run"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_spike_validation.py::test_validate_spike_stage_accepts_complete_current_run"]
+- 机器记录编号：RUN-20260803T062648+0000-2405dc4f
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-03T06:26:48+00:00
+- 结束时间：2026-08-03T06:26:48+00:00
+- 时长（秒）：0.089
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.02s\n"
+- 输出哈希：a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925
+- 输出字节数：98
+- 产品代码哈希：4285c91d074cade740575e4fc7ae127d4bbe67ae7731a117ecec71b35c4ab696
+- 测试代码哈希：d5e8082cfdfbd6df2e9fbe9244b4b718807f2576a7e3a9596712d4045a435d3a
+- 实际结果：机器记录显示已执行“穿刺候选执行和跳过符合真实场景”的全部登记入口，退出码为 0；这证明自动化检查部分通过，人工判断留到主题验收。
+- 自动化测试结果：通过
+- 证据：机器记录编号 RUN-20260803T062648+0000-2405dc4f；完整输出由输出哈希 a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925 和输出字节数 98 绑定。
+
+### TC-06：证据冲突阻止推进并同步设计
+
+- 对应验收条件：[AC-06：证据冲突时不能自行定论](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md#ac-06)
+- 测试方式：自动化测试 + 人工验收
+- 测试入口：["tests/test_spike_validation.py::test_validate_spike_stage_requires_design_hash_change"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_spike_validation.py::test_validate_spike_stage_requires_design_hash_change"]
+- 机器记录编号：RUN-20260803T062648+0000-b72cd59a
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-03T06:26:48+00:00
+- 结束时间：2026-08-03T06:26:48+00:00
+- 时长（秒）：0.091
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.02s\n"
+- 输出哈希：a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925
+- 输出字节数：98
+- 产品代码哈希：4285c91d074cade740575e4fc7ae127d4bbe67ae7731a117ecec71b35c4ab696
+- 测试代码哈希：d5e8082cfdfbd6df2e9fbe9244b4b718807f2576a7e3a9596712d4045a435d3a
+- 实际结果：机器记录显示已执行“证据冲突阻止推进并同步设计”的全部登记入口，退出码为 0；这证明自动化检查部分通过，人工判断留到主题验收。
+- 自动化测试结果：通过
+- 证据：机器记录编号 RUN-20260803T062648+0000-b72cd59a；完整输出由输出哈希 a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925 和输出字节数 98 绑定。
+
+## 4. 人工验收交接
+
+- 人工验收对象：产品设计、代码设计、缺陷记录和穿刺结论中的事实与决定
+- 人工检查方法：逐份查看当前正式文档，并把关键结论与已确认需求、实际代码、复现记录和穿刺证据对照。
+- 自动化已经证明：文档结构、中文路径、状态约束和证据冲突门禁已由登记测试执行通过。
+- 还需要用户确认：文档内容是否只写已确认事实；代码设计是否区分计划与实现；缺陷和穿刺结论是否符合真实证据。
+- 人工结果填写位置：`../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收结果.md`
+
+## 5. 未通过或阻塞
+
+暂无
+
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](./产品和代码设计及缺陷穿刺结论保持真实一致_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/产品和代码设计及缺陷穿刺结论保持真实一致_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | [主题验收](../acceptance/产品和代码设计及缺陷穿刺结论保持真实一致_验收结果.md) | 混合测试在这里接收人工确认 |

@@ -320,7 +320,7 @@ def test_regeneration_preserves_anchors_and_manual_edits(tmp_path):
     records.create_or_complete_table(str(root), WORKFLOW_ID, "acceptance_plan", TOPIC)
     assert records._refresh_stage_document(str(root), WORKFLOW_ID, "acceptance_plan", TOPIC) == []
     problems, _ = records.sync_documents(str(root), WORKFLOW_ID, "acceptance_plan", [TOPIC])
-    assert any("文档被直接修改" in message for _, message in problems)
+    assert any("与工作记录表不一致" in message for _, message in problems)
     assert document.read_text(encoding="utf-8") == protected
     example = '## Intro\n\n\x60\x60\x60html\n<a id="intro"></a>\n\x60\x60\x60\n'
     assert links.without_generated_anchors(links.with_heading_anchors(example)) == example

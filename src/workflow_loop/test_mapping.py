@@ -139,6 +139,35 @@ class WorkflowTestMarker:
     body_sha256: str = ""
 
 
+def build_marker_from_plan(
+    item: "TestPlanItem",
+) -> str:
+    """R28：按测试计划表项生成标准 Workflow-Test 标识文本。
+
+    输出与 MARKER_FIELDS 十字段一一对应，测试入口取计划表"测试入口"列；
+    登记测试任务时输出，AI 复制粘贴到测试代码 docstring，不再逐字段手抄。
+    生成与校验同源：字段名与 _parse_marker_lines 的解析标签完全一致。
+    """
+    lines = [f"Workflow-Test: {item.test_id} {item.test_name}"]
+    values = (
+        ("主题", item.topic),
+        ("测试项", f"{item.test_id} {item.test_name}"),
+        ("验收条件", f"{item.criterion_id} {item.criterion_name}"),
+        ("测试方式", item.test_method),
+        ("测试层级", "单元测试"),
+        ("产品入口", item.product_entry),
+        ("测试入口", "、".join(item.registered_entries)),
+        ("代码入口", item.code_entry),
+        ("准备数据", item.preparation),
+        ("执行动作", item.action),
+        ("关键断言", item.expected_result),
+        ("预期证据", item.evidence_requirement),
+    )
+    for label, value in values:
+        lines.append(f"{label}：{value}")
+    return "\n".join(lines)
+
+
 def _read_text(project_root: str, relative_path: str) -> str:
     with open(os.path.join(project_root, relative_path), "r", encoding="utf-8") as stream:
         return stream.read()

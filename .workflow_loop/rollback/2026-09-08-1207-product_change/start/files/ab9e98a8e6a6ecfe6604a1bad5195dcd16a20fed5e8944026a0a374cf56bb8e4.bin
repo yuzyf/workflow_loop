@@ -1,0 +1,164 @@
+# 【主题测试结果】门禁失败一次展示完整可处理原因且快照范围准确
+
+- 工作流编号：2026-08-07-0837-product_change
+- 验收主题：门禁失败一次展示完整可处理原因且快照范围准确
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 测试完成时间：2026-08-09T08:19:49+00:00
+
+## 1. 测试依据
+
+- [验收计划](../acceptance/门禁失败一次展示完整可处理原因且快照范围准确_验收计划.md)
+- [测试计划](../qa/门禁失败一次展示完整可处理原因且快照范围准确_测试计划.md)
+- [实施计划和记录](../impl/门禁失败一次展示完整可处理原因且快照范围准确_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+## 2. 测试环境和执行说明
+
+- 本主题执行范围：TC-01 同一门禁一次报告全部错误和未检查项；TC-02 错误定位到原值且只给一条可执行命令；TC-03 重复诊断稳定且最终回归只有真实入口；TC-04 窄快照忽略生成物并列出四类文件变化
+- 执行顺序：TC-01 -> TC-02 -> TC-03 -> TC-04；程序按照测试计划中的前置测试项执行。
+- 未执行项：暂无
+
+## 3. 测试项结果
+
+### TC-01：同一门禁一次报告全部错误和未检查项
+
+- 对应验收条件：[AC-01：一次列出全部独立错误并标明未检查依赖](../acceptance/门禁失败一次展示完整可处理原因且快照范围准确_验收计划.md#ac-01)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_contracts.py::test_gate_reports_all_independent_errors_and_unchecked_dependencies"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_contracts.py::test_gate_reports_all_independent_errors_and_unchecked_dependencies","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-07-0837-product_change/门禁失败一次展示完整可处理原因且快照范围准确/TC-01.xml"]
+- 机器记录编号：RUN-20260809T081948+0000-33f2fe15
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-09T08:19:48+00:00
+- 结束时间：2026-08-09T08:19:49+00:00
+- 时长（秒）：0.144
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：ae8b23d8d16bc355ded402f9da5b8ddd3e6dfe791226095a823972e90fce7913
+- 报告字节数：599
+- 精确匹配测试入口：["tests/test_current_workflow_contracts.py::test_gate_reports_all_independent_errors_and_unchecked_dependencies"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：98c427262148f0fab2ee5aec889c5bdde5d278f4ecb74da2c615d1bafd37a586
+- 测试代码哈希：b88fe709f0368aa0e683262c848b3b2dc5bbf71e6d819d9bf18beddf0b641330
+- 实际结果：结构化报告精确匹配登记入口，实际执行 1 项，跳过、失败和错误均为 0；实际检查：三个独立错误各出现一次；依赖检查标为未检查并注明依赖；副作用未执行；状态停留当前阶段
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260809T081948+0000-33f2fe15；结构化报告 SHA-256 为 ae8b23d8d16bc355ded402f9da5b8ddd3e6dfe791226095a823972e90fce7913；报告精确匹配 ["tests/test_current_workflow_contracts.py::test_gate_reports_all_independent_errors_and_unchecked_dependencies"]。
+
+### TC-02：错误定位到原值且只给一条可执行命令
+
+- 对应验收条件：[AC-02：每项错误能定位到具体内容并给出唯一下一命令](../acceptance/门禁失败一次展示完整可处理原因且快照范围准确_验收计划.md#ac-02)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_contracts.py::test_gate_error_points_to_exact_source_and_one_next_command"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_contracts.py::test_gate_error_points_to_exact_source_and_one_next_command","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-07-0837-product_change/门禁失败一次展示完整可处理原因且快照范围准确/TC-02.xml"]
+- 机器记录编号：RUN-20260809T081949+0000-acb1d026
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-09T08:19:49+00:00
+- 结束时间：2026-08-09T08:19:49+00:00
+- 时长（秒）：0.141
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：2c30029a78f296a0eeefad4610dcba6c6b6d01ae7b4efb509b3f50ca9aeb7ae7
+- 报告字节数：583
+- 精确匹配测试入口：["tests/test_current_workflow_contracts.py::test_gate_error_points_to_exact_source_and_one_next_command"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：98c427262148f0fab2ee5aec889c5bdde5d278f4ecb74da2c615d1bafd37a586
+- 测试代码哈希：b88fe709f0368aa0e683262c848b3b2dc5bbf71e6d819d9bf18beddf0b641330
+- 实际结果：结构化报告精确匹配登记入口，实际执行 1 项，跳过、失败和错误均为 0；实际检查：两个错误同次准确定位；末尾恰好一条完整命令，并写明执行者、自动动作、成功条件和后续阶段
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260809T081949+0000-acb1d026；结构化报告 SHA-256 为 2c30029a78f296a0eeefad4610dcba6c6b6d01ae7b4efb509b3f50ca9aeb7ae7；报告精确匹配 ["tests/test_current_workflow_contracts.py::test_gate_error_points_to_exact_source_and_one_next_command"]。
+
+### TC-03：重复诊断稳定且最终回归只有真实入口
+
+- 对应验收条件：[AC-03：重复失败不逐次暴露错误，最终回归给出唯一执行方式](../acceptance/门禁失败一次展示完整可处理原因且快照范围准确_验收计划.md#ac-03)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_contracts.py::test_repeated_failure_is_stable_and_regression_has_one_command"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_contracts.py::test_repeated_failure_is_stable_and_regression_has_one_command","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-07-0837-product_change/门禁失败一次展示完整可处理原因且快照范围准确/TC-03.xml"]
+- 机器记录编号：RUN-20260809T081949+0000-0f28788c
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-09T08:19:49+00:00
+- 结束时间：2026-08-09T08:19:49+00:00
+- 时长（秒）：0.136
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：7d43d09b490e81457c01c8c59b27ad2145810494436e5bcd9e989dd233f50763
+- 报告字节数：589
+- 精确匹配测试入口：["tests/test_current_workflow_contracts.py::test_repeated_failure_is_stable_and_regression_has_one_command"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：98c427262148f0fab2ee5aec889c5bdde5d278f4ecb74da2c615d1bafd37a586
+- 测试代码哈希：b88fe709f0368aa0e683262c848b3b2dc5bbf71e6d819d9bf18beddf0b641330
+- 实际结果：结构化报告精确匹配登记入口，实际执行 1 项，跳过、失败和错误均为 0；实际检查：两次错误清单、顺序和哈希相同；失败报告要求先修改；最终回归唯一命令为 `workflow gate regression_test` 且入口只执行一次
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260809T081949+0000-0f28788c；结构化报告 SHA-256 为 7d43d09b490e81457c01c8c59b27ad2145810494436e5bcd9e989dd233f50763；报告精确匹配 ["tests/test_current_workflow_contracts.py::test_repeated_failure_is_stable_and_regression_has_one_command"]。
+
+### TC-04：窄快照忽略生成物并列出四类文件变化
+
+- 对应验收条件：[AC-04：只对登记范围做快照并准确列出文件差异](../acceptance/门禁失败一次展示完整可处理原因且快照范围准确_验收计划.md#ac-04)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_contracts.py::test_snapshots_include_only_registered_core_paths_and_exact_diffs"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_contracts.py::test_snapshots_include_only_registered_core_paths_and_exact_diffs","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-07-0837-product_change/门禁失败一次展示完整可处理原因且快照范围准确/TC-04.xml"]
+- 机器记录编号：RUN-20260809T081949+0000-f97ca2c8
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-09T08:19:49+00:00
+- 结束时间：2026-08-09T08:19:49+00:00
+- 时长（秒）：0.106
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.02s\n"
+- 输出哈希：a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：22f3d1de06db9d06929f8fd62b9957b606407a0301b8180a4c57c741311e93e8
+- 报告字节数：595
+- 精确匹配测试入口：["tests/test_current_workflow_contracts.py::test_snapshots_include_only_registered_core_paths_and_exact_diffs"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：98c427262148f0fab2ee5aec889c5bdde5d278f4ecb74da2c615d1bafd37a586
+- 测试代码哈希：b88fe709f0368aa0e683262c848b3b2dc5bbf71e6d819d9bf18beddf0b641330
+- 实际结果：结构化报告精确匹配登记入口，实际执行 1 项，跳过、失败和错误均为 0；实际检查：只读取登记普通文件；四个登记变化分别标为 added、modified、deleted、type_changed；范围外变化零差异；非法目录拒绝；缺基线标未检查
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260809T081949+0000-f97ca2c8；结构化报告 SHA-256 为 22f3d1de06db9d06929f8fd62b9957b606407a0301b8180a4c57c741311e93e8；报告精确匹配 ["tests/test_current_workflow_contracts.py::test_snapshots_include_only_registered_core_paths_and_exact_diffs"]。
+
+## 4. 人工验收交接
+
+无需人工验收
+
+## 5. 未通过或阻塞
+
+暂无
+
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/门禁失败一次展示完整可处理原因且快照范围准确_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](../qa/门禁失败一次展示完整可处理原因且快照范围准确_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/门禁失败一次展示完整可处理原因且快照范围准确_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | `acceptance/门禁失败一次展示完整可处理原因且快照范围准确_验收结果.md`（待生成） | 主题验收在这里记录自动化和人工结论 |

@@ -1,0 +1,20 @@
+# 【工作记录】验收结果：索引与其余环节文档程序生成
+
+- 工作流编号：2026-08-29-0852-product_change
+- 验收结果：通过
+- 验收主题：索引与其余环节文档程序生成
+
+## 验收结果
+
+| 验收条件编号 | 验收结论 | 实际观察结果 | 证据 |
+|---|---|---|---|
+| AC-01 | passed | acceptance/impl/qa 三类索引由程序按主题关系表重写，列头与既有模板一致 | tests/test_records.py::test_regenerate_indexes_from_topic_relations 通过；本轮三类索引实际被程序重写 |
+| AC-02 | passed | 穿刺结论文档由程序按表生成 | tests/test_records.py::test_spike_bug_design_tables_generate_docs 通过 |
+| AC-03 | passed | 作废删除本轮表；收工保留；从零清场保留旧表 | tests/test_records.py::test_records_lifecycle_abort_deletes_and_clean_preserves 通过 |
+| AC-04 | passed | 缺陷记录由程序按表生成并查表 | tests/test_records.py::test_spike_bug_design_tables_generate_docs 通过 |
+| AC-05 | passed | 最终设计同步固定字段进表并生成结论文档 | tests/test_records.py::test_spike_bug_design_tables_generate_docs 通过 |
+| AC-06 | passed | 产品总说明功能清单由程序按表写入，链接目标程序核对 | tests/test_records.py::test_product_features_section_rewrite 通过 |
+
+## 验收说明
+
+- 验收结论基于真实执行的测试机器记录、门禁真实运行结果和本轮真实使用证据；每行证据可复核。

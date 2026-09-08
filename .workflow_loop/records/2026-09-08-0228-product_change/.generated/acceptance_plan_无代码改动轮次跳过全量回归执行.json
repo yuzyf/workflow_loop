@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "5c25ff299e5200632dd18c55dfb6c41ae8ec3fefb5a9b918df86fddd0e67a8b9",
+    "生成文档路径": "acceptance/无代码改动轮次跳过全量回归执行_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/无代码改动轮次跳过全量回归执行_验收计划.md": {
+      "body_hash": "1a9be307fdfdb272bd35c5eeb35030b7e5d9d668b98ed2ac4006c7c33e4f6327"
+    }
+  }
+}

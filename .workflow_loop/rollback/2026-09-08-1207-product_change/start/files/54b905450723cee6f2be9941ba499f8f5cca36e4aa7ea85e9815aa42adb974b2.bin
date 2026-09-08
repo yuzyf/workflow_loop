@@ -1,0 +1,71 @@
+# 测试结果：生成文档导航与边界
+
+- 工作流编号：2026-08-29-1238-product_change
+- 验收主题：生成文档导航与边界
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 验收结果：通过
+
+本文档由程序按测试工作记录表和当前机器记录生成；固定事实不由 AI 手写。
+
+## 3. 测试项结果
+
+### TC-01：按主题关系表重生成索引，导航锚点可跳转
+
+- 对应验收条件：AC-01
+- 机器记录编号：RUN-20260829T215352+0000-bdc1bade
+- 工作目录：项目根
+- 测试入口：["tests/test_records.py::test_regenerate_indexes_from_topic_relations"]
+- 执行命令：["uv","run","python","-m","pytest","-q","tests/test_records.py::test_regenerate_indexes_from_topic_relations","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-29-1238-product_change/生成文档导航与边界/TC-01.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=/Users/yu/.local/bin/uv
+- 开始时间：2026-08-29T21:53:52+00:00
+- 结束时间：2026-08-29T21:53:52+00:00
+- 时长（秒）：0.152
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：8f039845d01909220edfcb58d7e28ba58b043d9dfe8bdfc040abf72ee1389a47
+- 报告字节数：515
+- 精确匹配测试入口：["tests/test_records.py::test_regenerate_indexes_from_topic_relations"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：4165b2cc6e917e657ad4869b84a22878edce3fcc70e2a34426740ab02b1206da
+- 测试代码哈希：d488da21e50e6b3e01e02a557c898bdc4f556a9b27e22bce751722b0ba0f03d2
+- 自动化测试结果：通过
+- 实际结果：按主题关系表重生成索引，导航锚点可跳转
+- 证据：机器记录 RUN-20260829T215352+0000-bdc1bade；结构化报告哈希 8f039845d01909220edfcb58d7e28ba58b043d9dfe8bdfc040abf72ee1389a47
+
+### TC-02：生成 impl 文档并检测手改，路径不越界与哈希保护
+
+- 对应验收条件：AC-02
+- 机器记录编号：RUN-20260829T215352+0000-bbfaa82d
+- 工作目录：项目根
+- 测试入口：["tests/test_records.py::test_generate_impl_doc_and_detect_tamper"]
+- 执行命令：["uv","run","python","-m","pytest","-q","tests/test_records.py::test_generate_impl_doc_and_detect_tamper","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-29-1238-product_change/生成文档导航与边界/TC-02.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=/Users/yu/.local/bin/uv
+- 开始时间：2026-08-29T21:53:52+00:00
+- 结束时间：2026-08-29T21:53:52+00:00
+- 时长（秒）：0.153
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.06s\n"
+- 输出哈希：3605abb09038ce24e90d81df8f7c0d87bb6f647a5e016bf461d8a8fcb408f6e9
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：e953251746e3c8e460a0ed153c1ab6f140802c0db83d87357921701239fc7039
+- 报告字节数：507
+- 精确匹配测试入口：["tests/test_records.py::test_generate_impl_doc_and_detect_tamper"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：4165b2cc6e917e657ad4869b84a22878edce3fcc70e2a34426740ab02b1206da
+- 测试代码哈希：d488da21e50e6b3e01e02a557c898bdc4f556a9b27e22bce751722b0ba0f03d2
+- 自动化测试结果：通过
+- 实际结果：生成 impl 文档并检测手改，路径不越界与哈希保护
+- 证据：机器记录 RUN-20260829T215352+0000-bbfaa82d；结构化报告哈希 e953251746e3c8e460a0ed153c1ab6f140802c0db83d87357921701239fc7039

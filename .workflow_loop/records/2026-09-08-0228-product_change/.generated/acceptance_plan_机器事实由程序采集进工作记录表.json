@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "6dea834d067873a0fa79754fb97cb79741d8f485219a0571d6a22ab70b82ff2b",
+    "生成文档路径": "acceptance/机器事实由程序采集进工作记录表_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/机器事实由程序采集进工作记录表_验收计划.md": {
+      "body_hash": "f3a1d5fd122dd0d244c7d63cc5f1af37e2f17ae0ac9ed2850336bcc54e0385e0"
+    }
+  }
+}

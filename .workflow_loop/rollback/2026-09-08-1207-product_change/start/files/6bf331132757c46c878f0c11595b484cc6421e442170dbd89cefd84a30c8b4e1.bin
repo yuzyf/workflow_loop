@@ -1,0 +1,17 @@
+# 【工作记录】验收结果：生成文档导航与边界
+
+- 工作流编号：2026-08-29-1238-product_change
+- 验收结果：通过
+- 验收主题：生成文档导航与边界
+
+## 验收结果
+
+<a id="ac-01"></a>
+<a id="ac-02"></a>
+
+| 验收条件编号 | 验收结论 | 实际观察结果 | 证据 |
+|---|---|---|---|
+| AC-01 | passed | 按主题关系表重生成索引，导航锚点稳定可跳转到目标 | 机器记录 RUN-20260829T215352+0000-bdc1bade；测试 tests/test_records.py::test_regenerate_indexes_from_topic_relations |
+| AC-02 | passed | 生成路径不越界、文档哈希/路径为程序专用键 AI 不可写、手改检测程序重算哈希 | 机器记录 RUN-20260829T215352+0000-bbfaa82d；测试 tests/test_records.py::test_generate_impl_doc_and_detect_tamper |
+
+## 验收说明

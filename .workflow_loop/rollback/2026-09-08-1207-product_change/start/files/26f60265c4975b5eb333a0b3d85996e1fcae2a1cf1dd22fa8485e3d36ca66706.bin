@@ -1,0 +1,146 @@
+# 【主题测试结果】最终同步按表更新架构并保护正文
+
+- 工作流编号：2026-09-07-0700-product_change
+- 验收主题：最终同步按表更新架构并保护正文
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 测试完成时间：2026-09-07T12:01:48+00:00
+
+<a id="1-测试依据"></a>
+## 1. 测试依据
+
+- [验收计划](../acceptance/最终同步按表更新架构并保护正文_验收计划.md)
+- [测试计划](./最终同步按表更新架构并保护正文_测试计划.md)
+- [代码计划、实施和结果](../impl/最终同步按表更新架构并保护正文_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+<a id="2-测试环境和执行说明"></a>
+## 2. 测试环境和执行说明
+
+- 已通过程序登记并正式执行本主题全部自动化测试，使用独立临时项目检查真实命令和文件结果；无未执行项。
+- 每项当前结构化报告均精确匹配登记入口，执行数为 1，失败、错误、跳过和退出码均为 0；机器事实由程序读取当前记录。
+
+<a id="3-测试项结果"></a>
+## 3. 测试项结果
+
+<a id="tc-01"></a>
+<a id="tc-01最终同步直接更新正式架构和证据"></a>
+### TC-01：最终同步直接更新正式架构和证据
+
+- 对应验收条件：AC-01
+- 机器记录编号：RUN-20260907T120145+0000-04c1b547
+- 工作目录：项目根
+- 测试入口：["tests/test_design_sync_tables.py::test_stage_generates_current_formal_architecture"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_design_sync_tables.py::test_stage_generates_current_formal_architecture","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-07-0700-product_change/最终同步按表更新架构并保护正文/TC-01.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-07T12:01:45+00:00
+- 结束时间：2026-09-07T12:01:46+00:00
+- 时长（秒）：0.784
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.70s\n"
+- 输出哈希：0ee5888eac5501909c7d7da392d69c44baa7c918e85045cdb4f2eb4f722f4c68
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：bb2e70c006a93e156afa394e871c09331b160c71e6c05ca748864903bde2425c
+- 报告字节数：545
+- 精确匹配测试入口：["tests/test_design_sync_tables.py::test_stage_generates_current_formal_architecture"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：cd72c7ad42a4bef8e687a5bc5967ef2db0fc0a9c4ce4cc59f020b621d36f025d
+- 测试代码哈希：23c9b195c3b7d95cd76623e6db7e5b4bcda07140d839a3444664a2d23b70de92
+- 自动化测试结果：通过
+- 实际结果：具备当前真实主题测试、自动验收与全量回归证据的临时项目，按表直接更新正式架构；当前轮次、全部机器依据和核对结论通过最终架构校验。
+- 证据：机器记录 RUN-20260907T120145+0000-04c1b547；结构化报告哈希 bb2e70c006a93e156afa394e871c09331b160c71e6c05ca748864903bde2425c
+
+<a id="tc-02"></a>
+<a id="tc-02精确修改正文且重复生成不变"></a>
+### TC-02：精确修改正文且重复生成不变
+
+- 对应验收条件：AC-02
+- 机器记录编号：RUN-20260907T120146+0000-64f5506f
+- 工作目录：项目根
+- 测试入口：["tests/test_design_sync_tables.py::test_body_changes_preserve_structure_and_repeat"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_design_sync_tables.py::test_body_changes_preserve_structure_and_repeat","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-07-0700-product_change/最终同步按表更新架构并保护正文/TC-02.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-07T12:01:46+00:00
+- 结束时间：2026-09-07T12:01:47+00:00
+- 时长（秒）：0.843
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.75s\n"
+- 输出哈希：01311baa852db076753814271165a33a7a35b7e0b63de979423ac3269388316e
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：fbc70e9a4108c1a0b79c1f8f421a94459d0c9deac154a96f263323d730b6ed8d
+- 报告字节数：543
+- 精确匹配测试入口：["tests/test_design_sync_tables.py::test_body_changes_preserve_structure_and_repeat"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：cd72c7ad42a4bef8e687a5bc5967ef2db0fc0a9c4ce4cc59f020b621d36f025d
+- 测试代码哈希：23c9b195c3b7d95cd76623e6db7e5b4bcda07140d839a3444664a2d23b70de92
+- 自动化测试结果：通过
+- 实际结果：正文变更只替换指定章节的唯一原文，既有标题、表格、代码块与锚点结构保留；再次生成内容不变，空变更表保留正文。
+- 证据：机器记录 RUN-20260907T120146+0000-64f5506f；结构化报告哈希 fbc70e9a4108c1a0b79c1f8f421a94459d0c9deac154a96f263323d730b6ed8d
+
+<a id="tc-03"></a>
+<a id="tc-03缺证据和正文冲突都拒绝覆盖"></a>
+### TC-03：缺证据和正文冲突都拒绝覆盖
+
+- 对应验收条件：AC-03
+- 机器记录编号：RUN-20260907T120147+0000-cc52a5fc
+- 工作目录：项目根
+- 测试入口：["tests/test_design_sync_tables.py::test_invalid_evidence_and_conflicts_never_overwrite"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_design_sync_tables.py::test_invalid_evidence_and_conflicts_never_overwrite","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-07-0700-product_change/最终同步按表更新架构并保护正文/TC-03.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-07T12:01:47+00:00
+- 结束时间：2026-09-07T12:01:48+00:00
+- 时长（秒）：0.602
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.52s\n"
+- 输出哈希：0cddb2f9522c5fc98e9503738cea759bed811b3ad3b391083a46a5d5f403e174
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：3453b1519ce63fc48e9c608b0669ec8a432c2bbbaf679196f1d9473985f06c8b
+- 报告字节数：551
+- 精确匹配测试入口：["tests/test_design_sync_tables.py::test_invalid_evidence_and_conflicts_never_overwrite"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：cd72c7ad42a4bef8e687a5bc5967ef2db0fc0a9c4ce4cc59f020b621d36f025d
+- 测试代码哈希：23c9b195c3b7d95cd76623e6db7e5b4bcda07140d839a3444664a2d23b70de92
+- 自动化测试结果：通过
+- 实际结果：缺少结论或当前证据、重复原文、结构冲突和生成后手改均明确拒绝且保留正式架构；把手改准确写回变更表后才能继续生成。
+- 证据：机器记录 RUN-20260907T120147+0000-cc52a5fc；结构化报告哈希 3453b1519ce63fc48e9c608b0669ec8a432c2bbbaf679196f1d9473985f06c8b
+
+<a id="4-人工验收交接"></a>
+## 4. 人工验收交接
+
+- 无需人工验收；本主题的完成条件均由当前自动化检查判断，不声称用户亲自执行测试。
+
+<a id="5-未通过或阻塞"></a>
+## 5. 未通过或阻塞
+
+- 暂无
+
+<a id="结果说明"></a>
+### 结果说明
+
+- 本主题 3 项正式自动化测试全部通过，覆盖已确认验收条件；开发局部检查未冒充正式结果。
+
+<a id="6-上下游文档"></a>
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/最终同步按表更新架构并保护正文_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](./最终同步按表更新架构并保护正文_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/最终同步按表更新架构并保护正文_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | [最终同步按表更新架构并保护正文验收结果](../acceptance/最终同步按表更新架构并保护正文_验收结果.md) | 混合测试在这里接收人工确认 |

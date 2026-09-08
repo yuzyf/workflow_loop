@@ -1,0 +1,157 @@
+# 【缺陷】退回验收计划后新增主题能走通门禁与追踪表
+
+- 工作流编号：2026-09-01-1141-bugfix
+- 复现状态：已复现
+- 根因状态：已确认
+- 验收主题：退回验收计划后新增主题能走通门禁与追踪表
+
+## 1. 缺陷现象
+
+- 轮次已推进过验收计划后执行 workflow return 退回，并向 acceptance/索引.md 新增验收主题，第二道门 workflow gate acceptance_plan 报「索引的主题必须覆盖当前工作流全部主题」拒绝放行；第三道门 --confirmed 又因第二道门未通过被拦，而唯一能把新主题写入 state.topics 的注册代码位于第三道门内部，新主题永远进不了流程。
+- 同一场景下需求交付追踪表不为新增主题补交付行：退回后工作流章节仍存在（旧主题的行在），往索引追加新主题后追踪表没有任何机制为其生成行，第二道门随即报缺少主题的交付记录。
+- 同一场景下 workflow scaffold 与 discuss 环节加载不为新主题生成验收计划记录表：scaffold 只按 state.topics 的 2 个旧主题建表，新主题没有 acceptance_plan 表，门禁报「记录表尚未填写」，需手动 scaffold --topic 指定才能绕行。
+- 同一个 Run 内第一次实施完成并推进出 impl 后，用户 workflow return 退回上游、重走环节再次进入 impl；第二次进入时程序重新冻结入场基线，快照里已包含第一次实施的真实改动，第二道门用新快照做 diff 时，旧主题实施结果登记的代码文件全部「未检测到变化」，批量误报（废纸篓轮实际产生 57 项）。旧主题本轮凌晨真实做过的实施被基线覆盖在校验语义上抹平。
+- impl 第二道门对「登记了实施结果但未检测到变化」的文件无条件报错，报错文案却承诺「补充复用说明，或删除该条实际改动记录」两条出路；实际代码里不存在任何读取复用说明的豁免分支，按提示补了说明仍报错——提示与实现脱节。
+- 同一 Run 退回后第二遍执行 workflow gate reproduce --confirmed（bugfix 轮），程序报「错误：主题名称已经使用过: [退回验收计划后新增主题能走通门禁与追踪表]」并拒绝确认，提示却让用户「修改重复的主题名称」——主题名没有重复，是本 Run 第一遍已经注册过，重走路径必然再注册一次，第二遍 reproduce 确认永远无法通过。
+- 退回 acceptance_plan 后，为已注册主题在验收计划记录表新增验收条件（AC-06~08），需求交付追踪表不会为这些新 AC 补行，第二道门报「主题…AC-06：预期恰好一行，实际 0 行」。
+- 退回使追踪表穿刺列重置为「待重新确认；已登记资产保留」后，第二遍执行 workflow gate spike --skip，程序不做任何回补；随后 acceptance_plan 第二道门对每条 AC 报「本轮已跳过新穿刺且没有复用历史资产，必须精确写"本轮未执行穿刺，无可复用资产"」，用户无路可走（该列是程序管理的列，规则又禁止手改正式文档记录）。
+- qa 测试结果文档先生成为全部通过，随后在同一 Run 推进到 topic_acceptance 阶段时，因验收结果文档真实生成触发引用回补，qa 测试结果文档被重新渲染为自动化测试结果：未完成且每个 TC 未执行，表内生成文档哈希被覆盖为坏文档哈希；推进到整体验收时门禁报 460 项（缺自动化测试结果：通过、逐 TC 机器字段全部不一致）。
+- 整体验收通过后执行 update_code_design：按规范更新 spec/代码架构设计.md 的功能到代码映射后，workflow gate update_code_design 不进入本阶段校验，而是报出验证失效共 15-17 项，其中 9 项声称 install.ps1、install.sh、uninstall.*、update.*、uv.lock、src/workflow_loop/role_doc.py、snapshots.py、spike_reuse.py、stages/__init__.py、stages/base.py 等文件“新增进入核心代码”；这些文件本轮从未修改。失效无法归属主题（第 1 项“未检查”），程序拒绝清零并停在 regression_test，本 Run 实际在 11:44（同机理误报把代码微调打回 impl）和 15:05（架构文档更新后卡住收工）两次被同一缺陷误伤。
+
+## 2. 真实复现条件
+
+- 运行环境：macOS，全局 workflow 命令（uv editable 安装，加载本仓库 src/workflow_loop 真实源码，workflow-loop 0.3.6）；复现沙盒 /tmp/wf_repro_deadlock
+- 真实输入：intent=product_change 的 acceptance_plan 阶段状态，state.topics 为 2 个已注册旧主题（经 register_topics 真实写入 project.json），acceptance/索引.md 含 3 个主题（第 3 个为主题历史中未使用过的新主题），需求交付追踪表章节已存在且仅含 2 个旧主题行
+- 复现前提与用户场景一致：workflow return 退回 acceptance_plan 后 state.topics 不被清空，保留退回前已确定的主题；本仓库 v0.3.6「删除进废纸篓并入当前轮次」轮真实走过该路径并靠手工提前执行第三道门副作用才走通
+- BUG-04/05 复现环境：/tmp/wf_repro_impl2 沙盒项目 + 真实函数 cli.ensure_impl_recovery_baseline、verification.clear_stage_gates、rollback.validate_actual_implementation_changes_report、actual_implementation_paths_since_entry；快照A/B 对同一文件 diff 结果相反（A 检出、B 漏检）。
+- 第二遍复核补充事实：同一主题在第一遍 reproduce 生成的缺陷文档文件名（无 _2 后缀）与验收主题经第三道门注册后的稳定文件标识（退回…_2）不一致，根因是 bug 类文件标识先占用了同名标识、topic 类注册时碰撞加 _2；该不一致导致 bug/索引.md 出现同一主题双行、旧缺陷文档成为孤儿。已按规范路径（_2 版本）清理：删除孤儿文档与索引旧行，acceptance_plan 表和追踪表中指向旧文件名的链接统一改为 _2 路径。
+- BUG-07/08 复现环境：本仓库真实 Run 2026-09-01-1141-bugfix 第二遍 acceptance_plan 门禁真实输出（报告哈希 c21ddf95、791a6f0e），非沙盒模拟。
+- BUG-09 复现环境：本仓库真实 Run 2026-09-01-1141-bugfix 第三遍 topic_acceptance 之后整体验收真实输出（报告哈希 c71930b0），机器记录与文档不一致状态直接可见，非沙盒模拟。
+- BUG-10 复现环境：本仓库真实 Run 2026-09-01-1141-bugfix update_code_design 第二道门真实输出（15 项失效报告），9 个幻影 added 文件 git 可证本轮零修改；非沙盒模拟。
+
+## 3. 复现步骤
+
+- 在临时项目用 register_topics 登记 2 个旧主题并构造 state.topics 为这两个旧主题的 acceptance_plan 阶段状态；把 acceptance/索引.md 写成 3 个主题（2 旧 + 1 新）并补齐验收计划与记录表；在沙盒目录执行 workflow gate acceptance_plan --discuss-done 后执行 workflow gate acceptance_plan
+- 在 BUG-01 沙盒中保留需求交付追踪表.md 已含 demo-return 章节（仅 2 个旧主题的行）；调用真实 API traceability.ensure_workflow_section(root, "demo-return", 3 个主题)
+- 在 BUG-01 沙盒执行 workflow scaffold；查看 .workflow_loop/records/demo-return/ 下生成的 acceptance_plan 表；执行门禁后确认新主题因缺表被报「验收计划工作记录表尚未填写内容」
+- 在沙盒用真实函数链复现：ensure_impl_recovery_baseline 首次冻结快照A（代码 return 1）；真实修改 src/demo/core.py 为 return 2 并在 impl_record 表登记；clear_stage_gates 模拟 return 清零后 ensure_impl_recovery_baseline 第二次冻结得快照B；分别用两份快照调 actual_implementation_paths_since_entry 对比当前代码
+- 审阅 rollback.validate_actual_implementation_changes_report 的 recorded_paths - actual 循环（期望文案含「或明确说明这是复用的既有实现」），构造登记未变化文件且修改理由写明复用既有实现的 impl_record 表，调用该报告函数
+- 真实环境：本仓库项目，Run 2026-09-01-1141-bugfix。第一遍 reproduce --confirmed 成功（主题写入 topic_history）→ workflow return --to reproduce → 第二遍过第一、二道门 → workflow gate reproduce --confirmed。
+- 真实环境：本仓库 Run 2026-09-01-1141-bugfix。第一遍 acceptance_plan --confirmed 已为该主题在追踪表建 5 行（AC-01~05）→ workflow return 退回 → 在 acceptance_plan 工作记录表追加 AC-06/07/08 → workflow gate acceptance_plan。
+- 真实环境：本仓库 Run 2026-09-01-1141-bugfix。第一遍 spike --skip → acceptance_plan --confirmed（追踪表建 5 行）→ workflow return --to reproduce（穿刺列重置为待重新确认文本）→ 第二遍 reproduce 三道门 → 第二遍 spike --skip → workflow gate acceptance_plan。
+- 真实环境：本仓库 Run 2026-09-01-1141-bugfix。qa 第二道门通过后按当前机器记录生成 qa 测试结果文档（全部通过）→ workflow gate topic_acceptance --discuss-done / 第二道门（sync_stage_tables 生成 acceptance 结果文档）→ workflow gate qa 之后再次进入任何会跑 _backfill_referencing_documents 的门禁 → 打开 qa/退回…_测试结果.md 看到自动化测试结果：未完成、逐 TC 未执行 → workflow gate overall_acceptance 报 460 项。
+- 真实环境：本仓库 Run 2026-09-01-1141-bugfix。回归通过并 --confirmed 后执行 workflow gate update_code_design --discuss-done → 按本轮代码改动更新架构文档映射行（登记责任集从 31 个文件变为 30 个：删除行使 test_entry.py 退出登记集）→ 执行 workflow gate update_code_design → 程序输出验证失效报告：impl 绑定变化，核心代码 added=上述 9 文件；同时 workflow status 显示轮次被自动退回 regression_test。
+
+## 4. 实际结果
+
+- 门禁输出唯一报错：acceptance/索引.md 的主题必须覆盖当前工作流全部主题；当前主题 ['打开废纸篓查看已删文件', '从废纸篓恢复文件']，索引主题含第 3 个主题；再执行 workflow gate acceptance_plan --confirmed 报「第二道程序校验还没有通过」，state.topics 保持 2 个旧主题不变。
+- 函数返回 False，追踪表正文不变，新主题「删除进废纸篓并入当前轮次」不出现在表中任何一行。
+- 仅生成 2 个旧主题的 acceptance_plan 表和 topic_relations 表；新主题无表，门禁一度报「主题『…』的验收计划工作记录表尚未填写内容」。
+- 相对快照A检出 ['src/demo/core.py']；相对快照B检出 []。同一份真实改动对第二次入场的校验完全不可见；退回后 code_baseline_hash 被清为 None，二次进入重新冻结返回 True 覆盖原快照。
+- 无论实施结果行写什么复用说明，该文件仍无条件产生 impl.actual_changes.recorded_without_change 错误项，门禁失败。
+- register_topics 对全量 topics 调用，主题已在 project.topic_history 中，抛「主题名称已经使用过」，第三道门失败，流程卡死在 reproduce。
+- 追踪表仍只有旧 5 行；第二道门对每个新 AC 报「预期恰好一行，实际 0 行」共 3 项，无法放行。
+- 第二道门报 5 项穿刺列文本错误（AC-01~05 均为「待重新确认；已登记资产保留」）；spike --skip 分支只清理临时目录和推进阶段，不触碰追踪表。
+- 结果文档被空机器任务集重刷：正文头部自动化测试结果：未完成，每个 TC 小节只有未执行一行，丢失工作目录、命令、时间、退出码、哈希、报告与代码哈希全部机器字段；test_result 表 DOC_HASH 被更新为坏文档哈希；整体验收按机器记录核对时文档字段为 None，460 项报错。
+- verification.py 的 impl 失效检查把「登记责任快照基线（31 文件）」与「完整实施观察快照当前值（43 文件）」互相比较：基线里没有而观察集合里有的既有文件全部报 added；受影响主题无法从这些历史文件定位，affected_topics 报未检查；失效计划无法生成可执行范围，收工链卡死。
+
+## 5. 期望结果
+
+- 第二道门的校验集应包含 state 已有主题并接纳索引中未使用过的新主题，与 acceptance/索引.md 一致时放行，用户可依次通过第二、第三道门进入下一阶段。
+- 章节已存在但索引主题在表内缺行时，ensure_workflow_section 应按与建表相同的初值规则为该主题追加交付行。
+- 与修复后的第二道门校验集口径一致：scaffold 与 ensure_stage_tables 的主题来源应包含索引中未使用过的新主题，为新主题一并建表。
+- 同一 Run 重进 impl 继承首次入场基线：入场快照与 code_baseline_hash 不被第二次冻结覆盖，diff 仍是「本轮开始时代码 → 当前代码」，旧主题真实改动照常检出。
+- 报错文案承诺的出路真实存在：实施结果该行修改理由写明「复用既有实现」时豁免该项；未写明的仍报错，防止把无关旧文件冒充本轮实现。
+- 与验收计划阶段第三道门一致：只登记 state.topics 之外的新主题（new_topics 过滤），同一 Run 重走 reproduce 确认幂等通过；跨 Run 重名主题仍按既有规则拒绝。
+- 已有主题新增 AC 时，追踪表按建章节同一初值规则为新 AC 自动补行；旧 AC 已有行不被改写。
+- 本轮跳过穿刺且未引用任何历史资产时，spike --skip（或后续门禁的表同步）把当前工作流各行的穿刺列从待重新确认回补为「本轮未执行穿刺，无可复用资产」；有历史资产引用的行不受影响。
+- 引用回补按当前 state 的机器任务集渲染，与主生成路径 generate_test_result_document 结果一致；无机器记录可绑定时（wf_state 缺失或任务为空）不得用空事实覆盖已通过结果文档。
+- 比较双方范围一致：基线是登记责任快照时，当前值必须同样按登记责任范围计算（compute_registered_file_snapshot）；基线是入场完整观察快照（impl_actual）时才用完整观察范围比较。范围一致时既有未修改文件不会幻影报 added，删除登记映射行只会报该路径 deleted 且可归属主题。
+
+<a id="6-根因"></a>
+## 6. 根因
+
+**BUG-01**
+
+- 根因说明：第二道门取校验集时 or 短路——state 已有主题时 current_workflow_topics 非空，candidate_topics()（实现为 topic in current or topic not in history，本就为收纳索引新主题而写）永不执行，校验集被钉死在旧主题，与索引 3 个主题比对必失败；而注册新主题写入 state 的代码只在第三道门 --confirmed 内部，第三道门又要求第二道门先通过，形成互相等待。
+- 根因位置：src/workflow_loop/stages/stages.py 第 333 行 topics = current_workflow_topics(project_root) or candidate_topics(project_root)。
+- 根因证据：沙盒 /tmp/wf_repro_deadlock 跑真实命令 workflow gate acceptance_plan，报错「当前主题 [2 个旧主题]，索引主题 [3 个]」；再跑 workflow gate acceptance_plan --confirmed 报「第二道程序校验还没有通过」，state.topics 未变，死锁两端闭合。
+
+**BUG-02**
+
+- 根因说明：ensure_workflow_section 只负责「章节整体缺失时按主题生成章节」，检测到工作流章节已存在就直接返回，不检查章节内是否缺少索引新增主题的行，新主题没有任何机制获得交付行。
+- 根因位置：src/workflow_loop/traceability.py ensure_workflow_section 中 if _workflow_heading_pattern(workflow_id).search(content): return False 分支。
+- 根因证据：沙盒中追踪表 demo-return 章节仅含 2 个旧主题行，直接调用 ensure_workflow_section(root, 'demo-return', 3 个主题) 返回 False，grep 确认新主题「删除进废纸篓并入当前轮次」不在表格任何一行。
+
+**BUG-03**
+
+- 根因说明：scaffold 与环节加载生成记录表的主题来源与第二道门同源，均取 current_workflow_topics（即 state.topics），索引中未使用过的新主题拿不到 acceptance_plan 表，门禁报「记录表尚未填写」。
+- 根因位置：src/workflow_loop/records.py 第 2094 行 ensure_stage_tables 的 topics = current_workflow_topics(project_root)；src/workflow_loop/cli.py cmd_scaffold 非当前阶段分支同样调用 current_workflow_topics。
+- 根因证据：沙盒执行 workflow scaffold 只生成 2 个旧主题的 acceptance_plan 表；补齐第 3 份表前门禁报「主题「打开废纸篓查看已删文件」的验收计划工作记录表尚未填写内容」类错误。
+
+**BUG-04**
+
+- 根因说明：clear_stage_gates 把 impl 的 code_baseline_hash 清为 None，ensure_impl_recovery_baseline 的守卫 code_baseline_hash is not None 因此失效，_freeze_impl_code_baseline 无条件重算并覆盖 meta 中的入场快照——程序隐含假设「一个 Run 只进一次 impl」。
+- 根因位置：src/workflow_loop/verification.py clear_stage_gates（stage.code_baseline_hash = None）+ src/workflow_loop/cli.py _freeze_impl_code_baseline / ensure_impl_recovery_baseline 守卫。
+- 根因证据：沙盒 /tmp/wf_repro_impl2 实测两次冻结与 diff 相反结果；本 Run journal 11:56 记录过首次入场基线哈希 f4328fab…，退回后 state 里 impl.code_baseline_hash 为 None 而 meta 快照仍是首冻内容。
+
+**BUG-05**
+
+- 根因说明：expected/next_action 文案按「允许复用说明」设计，但循环体对每个未检出变化的登记文件直接 add_error，没有任何判定分支读取说明内容——提示实现了承诺的一条不存在的出路。
+- 根因位置：src/workflow_loop/rollback.py validate_actual_implementation_changes_report 中 for path in sorted(recorded_paths - actual) 循环（约 1632-1644 行）。
+- 根因证据：函数源码通读无豁免分支；沙盒登记带复用说明的行后调用仍返回该错误项。
+
+**BUG-06**
+
+- 根因说明：cli.py 验收计划分支的第三道门先算 new_topics = [t for t in topics if t not in previous_topics] 再注册（约 4661-4664 行），而 bugfix 的 reproduce 分支（约 4614-4621 行）把 list_reproduce_topics 的全量结果直接传给 register_topics，没有按 wf_state.topics 过滤；同一 Run 退回重走时主题已在 topic_history，duplicates 检查必失败。
+- 根因位置：src/workflow_loop/cli.py reproduce --confirmed 的 bugfix 分支 project_mod.register_topics(project_root, topics) 调用点。
+- 根因证据：本会话真实执行 workflow gate reproduce --confirmed 报「错误：主题名称已经使用过: ['退回验收计划后新增主题能走通门禁与追踪表']」；对照同文件验收计划分支的 new_topics 过滤写法。
+
+**BUG-07**
+
+- 根因说明：本轮 BUG-02 修复引入的 _append_missing_topic_rows 以「主题在表内是否有任何行」为补行条件（if _topic_rows(...): continue），主题已有旧行时整个跳过，新增 AC 的行不会被生成；粒度应到验收条件编号而不是主题。
+- 根因位置：src/workflow_loop/traceability.py 的 _append_missing_topic_rows 按主题 continue 的判断。
+- 根因证据：本会话真实门禁输出「需求交付追踪表.md 主题"退回验收计划后新增主题能走通门禁与追踪表"AC-06：预期恰好一行，实际 0 行」（AC-07、AC-08 同），而追踪表该主题确有 AC-01~05 五行。
+
+**BUG-08**
+
+- 根因说明：回溯重置把穿刺列写成 SPIKE_RECHECK_TEXT（traceability.py 905/955 行，reproduce 在 _RETURN_RECHECKS_SPIKE 中），而校验要求 spike_skipped 且无资产引用时精确等于 SPIKE_SKIPPED_TEXT（traceability.py 364-372 行）；spike --skip 分支（cli.py 3776-3834 行）没有任何将当前工作流行从待重新确认回补为跳过文本的动作，正常首轮不触发是因为建行初值本身就是跳过文本，只有退回重走路径暴露缺口。
+- 根因位置：src/workflow_loop/cli.py cmd_gate 的 args.skip 分支缺少追踪表穿刺列回补调用。
+- 根因证据：本会话真实门禁输出 5 项「AC-0x 穿刺列：本轮已跳过新穿刺且没有复用历史资产，必须精确写…」（报告 c21ddf95）；对照 cli.py skip 分支代码无 traceability 写入。
+
+**BUG-09**
+
+- 根因说明：records.py 的 test_result 文档渲染器需要 qa 阶段 test_tasks 与测试计划表才能写机器事实；生成文档路径 generate_test_result_document 在 sync_stage_tables 主路径显式传入 wf_state.stages['qa'].test_tasks（约 2639-2647 行），但回补路径 _refresh_stage_document（2811-2834 行）调用 generate_document 时不传 wf_state（generate_document 的 test_result 分支 wf_state is None 时 tasks_by_id 取空字典，约 1478-1491 行），于是按空任务集把文档重写为未执行并覆盖表哈希。
+- 根因位置：src/workflow_loop/records.py 的 _refresh_stage_document 第 2828 行 generate_document(kind, table, project_root=project_root) 缺 wf_state 参数，以及 generate_document test_result 分支对 wf_state=None 静默降级为空任务集。
+- 根因证据：本会话真实运行——qa/退回…_测试结果.md 被刷成未完成（自动化测试结果：未完成，TC-01..17 全部未执行）；state.json 机器记录 RUN-20260902T033522…等 17 条全部 passed 且存在；同表同任务集手工调用 generate_test_result_document 输出通过版；回补函数签名 (project_root, workflow_id, kind, topic) 无 wf_state。
+
+**BUG-10**
+
+- 根因说明：verification.py 约 2603 行 `impl_snapshot = stored.get("impl_actual") or stored.get("impl")` 期望读取“进入 impl 时冻结的完整观察快照”，但全仓库没有任何写入方（grep 全源码 impl_actual 仅出现在该行），stored 键集里只有 registered_snapshots.impl（登记快照，由 cmd_gate impl --confirmed 写入）。于是回退分支拿到登记快照当基线，紧接着约 2606 行却无条件调用 compare_complete_implementation_file_snapshot（完整观察范围）计算当前值。基线 31 文件 vs 当前 43 文件的差集把安装脚本、依赖锁与未登记源码全报成新增。
+- 根因位置：src/workflow_loop/verification.py::inspect_invalidation 的 impl 绑定失效分支（约 2603-2616 行）读取不存在的 impl_actual 键并以错误范围比较。
+- 根因证据：本会话真实输出——失效报告 9 项幻影 added 文件清单（报告哈希 448623f0/1ee58287）；用两函数实算登记快照=30/31、完整观察快照=43、差集与报告完全一致；grep 确认 impl_actual 无写入方；本轮 11:44 的 impl 微调误报与 15:05 收工卡死为同一机理两次触发。
+
+## 7. 修复仍存在的不确定性
+
+- 文件标识碰撞产生孤儿文档与索引双行的问题本身不在本轮 5 个缺陷修复范围内（本轮按人工清理走通）；已在 BUG-04/05 修复验证中确认基线继承与复用豁免两个改法在沙盒用真实函数可行。
+
+## 8. 修复与验收结果
+
+- 主题验收、全量回归、整体验收与最终设计同步结论已随 workflow return（BUG-10）退回作废：由程序追加的结论块引用的下游文档已删除但结论块未回退（与 BUG-09 同族现象），已按表重建本节，待重走对应阶段后由程序按最新机器记录重新追加。
+
+### 主题验收结果（工作流 2026-09-01-1141-bugfix）
+- 最终状态：主题验收通过，待全量回归
+- 实施记录：[实施记录](../impl/退回验收计划后新增主题能走通门禁与追踪表_2_实施记录.md)
+- 主题测试结果：[测试结果](../qa/退回验收计划后新增主题能走通门禁与追踪表_2_测试结果.md)
+- 主题验收结果：[验收结果](../acceptance/退回验收计划后新增主题能走通门禁与追踪表_2_验收结果.md)
+- 最终全量回归：待执行
+
+### 最终全量回归结果（工作流 2026-09-01-1141-bugfix）
+- 最终状态：全量回归通过，待整体验收
+- 回归结果：统一测试入口执行通过，详情见当前工作流 state.json 和 journal
+- 后续处理：等待用户进行整体验收
+
+### 整体验收确认（工作流 2026-09-01-1141-bugfix）
+- 最终状态：已修复并验收
+- 最终全量回归：统一测试入口已通过，详情见当前工作流 state.json 和 journal
+- 整体验收：用户已确认

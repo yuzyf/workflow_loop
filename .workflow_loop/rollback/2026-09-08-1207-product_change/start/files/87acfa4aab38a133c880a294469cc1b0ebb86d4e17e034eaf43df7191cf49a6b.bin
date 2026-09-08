@@ -1,0 +1,328 @@
+# 【主题测试结果】所有阶段门禁失败时一次指出全部真实原因和改法
+
+- 工作流编号：2026-08-13-0346-bugfix
+- 验收主题：所有阶段门禁失败时一次指出全部真实原因和改法
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 测试完成时间：2026-08-14T03:58:44+00:00
+
+## 1. 测试依据
+
+- [验收计划](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md)
+- [测试计划](./所有阶段门禁失败时一次指出全部真实原因和改法_测试计划.md)
+- [代码计划、实施和结果](../impl/所有阶段门禁失败时一次指出全部真实原因和改法_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+## 2. 测试环境和执行说明
+
+- 本主题执行范围：TC-01 至 TC-09，共 9 个自动化测试项。
+- 执行顺序：9 个测试项均无前置测试项；程序按登记顺序完成正式执行。
+- 未执行项：暂无
+
+## 3. 测试项结果
+
+<a id="tc-01"></a>
+### TC-01：一次列全错误并标明未检查依赖
+
+- 对应验收条件：[AC-01：一次收集全部可独立确定的问题](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-01)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_diagnostics.py::test_cli_adapter_preserves_structured_facts_and_real_dependencies"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_diagnostics.py::test_cli_adapter_preserves_structured_facts_and_real_dependencies","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-01.xml"]
+- 机器记录编号：RUN-20260814T035842+0000-f1e81e55
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:42+00:00
+- 结束时间：2026-08-14T03:58:42+00:00
+- 时长（秒）：0.181
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_diagnostics.py .                                              [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-01.xml -\n============================== 1 passed in 0.07s ===============================\n"
+- 输出哈希：177656f6bcfc2e8894660cb0480a0152df25a38360a75f051ce7f779b4fbef5d
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：505ad101df01901909dac529a18fca3ee08c9657da14f8d56a625fd23b1a680c
+- 报告字节数：565
+- 精确匹配测试入口：["tests/test_diagnostics.py::test_cli_adapter_preserves_structured_facts_and_real_dependencies"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：命令层保留了独立错误和依赖未检查项的全部结构化事实，替换无效下层命令，并且只输出一条当前有效命令。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035842+0000-f1e81e55；结构化报告 SHA-256 为 505ad101df01901909dac529a18fca3ee08c9657da14f8d56a625fd23b1a680c。
+
+<a id="tc-02"></a>
+### TC-02：上层汇总不覆盖底层逐文件事实
+
+- 对应验收条件：[AC-02：每项诊断保留真实事实并能直接修改](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-02)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_commands.py::test_impl_gate_replaces_covered_legacy_text_with_structured_file_facts"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_commands.py::test_impl_gate_replaces_covered_legacy_text_with_structured_file_facts","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-02.xml"]
+- 机器记录编号：RUN-20260814T035842+0000-9a2d4b79
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:42+00:00
+- 结束时间：2026-08-14T03:58:43+00:00
+- 时长（秒）：0.648
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_commands.py .                                                 [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-02.xml -\n============================== 1 passed in 0.56s ===============================\n"
+- 输出哈希：560f36f09916300259a0bbdbd0fc4bd247bea79170cf795d19097d84e578d689
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：11bfeb855e388ebf53527e5ed9695ecfc7ef793f57be5413b23563c0053b5d10
+- 报告字节数：569
+- 精确匹配测试入口：["tests/test_commands.py::test_impl_gate_replaces_covered_legacy_text_with_structured_file_facts"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：两个文件的具体结构化错误和未被覆盖的基线错误同时保留，已被结构化事实替代的旧路径列表不再重复出现。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035842+0000-9a2d4b79；结构化报告 SHA-256 为 11bfeb855e388ebf53527e5ed9695ecfc7ef793f57be5413b23563c0053b5d10。
+
+<a id="tc-03"></a>
+### TC-03：验收索引错路径显示实际值和正确写法
+
+- 对应验收条件：[AC-03：格式错误报真实格式和改法](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-03)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_stages.py::test_acceptance_plan_reports_bad_index_path_instead_of_hiding_the_topic"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_stages.py::test_acceptance_plan_reports_bad_index_path_instead_of_hiding_the_topic","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-03.xml"]
+- 机器记录编号：RUN-20260814T035843+0000-81f62a07
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:43+00:00
+- 结束时间：2026-08-14T03:58:43+00:00
+- 时长（秒）：0.132
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_stages.py .                                                   [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-03.xml -\n============================== 1 passed in 0.04s ===============================\n"
+- 输出哈希：96dda9805296ca1a4898dc0153cc420490064d722d623d94f5e2f890f7f8cc7d
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：2af621f920a840508d7af29852dc975238bd34b5941ea30e03c475347b3e7d72
+- 报告字节数：567
+- 精确匹配测试入口：["tests/test_stages.py::test_acceptance_plan_reports_bad_index_path_instead_of_hiding_the_topic"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：验收索引路径错误会同时显示实际路径和以 `./` 开头的正确写法，依赖该索引的后续文档检查明确标为未检查。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035843+0000-81f62a07；结构化报告 SHA-256 为 2af621f920a840508d7af29852dc975238bd34b5941ea30e03c475347b3e7d72。
+
+<a id="tc-04"></a>
+### TC-04：固定字段换行指出同行规则
+
+- 对应验收条件：[AC-03：格式错误报真实格式和改法](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-03)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_stages.py::test_acceptance_plan_explains_when_a_fixed_field_value_is_on_the_next_line"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_stages.py::test_acceptance_plan_explains_when_a_fixed_field_value_is_on_the_next_line","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-04.xml"]
+- 机器记录编号：RUN-20260814T035843+0000-57bb8d1d
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:43+00:00
+- 结束时间：2026-08-14T03:58:43+00:00
+- 时长（秒）：0.122
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_stages.py .                                                   [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-04.xml -\n============================== 1 passed in 0.04s ===============================\n"
+- 输出哈希：b7ffacf3a89a28022b61141ef6e59de2f4deea807167bc14d6678c97af29bdd6
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：d2ab640e7ea357949f856b67f1acb5006ea6a4cdaa6c46d57897a42829cf8e1a
+- 报告字节数：573
+- 精确匹配测试入口：["tests/test_stages.py::test_acceptance_plan_explains_when_a_fixed_field_value_is_on_the_next_line"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：固定字段值写到下一行时，诊断会定位具体文件、验收条件和字段，并明确说明标签和值必须写在同一行。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035843+0000-57bb8d1d；结构化报告 SHA-256 为 d2ab640e7ea357949f856b67f1acb5006ea6a4cdaa6c46d57897a42829cf8e1a。
+
+<a id="tc-05"></a>
+### TC-05：缺陷主题空值不吞下一字段
+
+- 对应验收条件：[AC-03：格式错误报真实格式和改法](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-03)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_bug_validation.py::test_reproduce_topic_on_the_next_line_is_not_misread_as_the_next_field"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_bug_validation.py::test_reproduce_topic_on_the_next_line_is_not_misread_as_the_next_field","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-05.xml"]
+- 机器记录编号：RUN-20260814T035843+0000-74a14822
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:43+00:00
+- 结束时间：2026-08-14T03:58:43+00:00
+- 时长（秒）：0.113
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_bug_validation.py .                                           [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-05.xml -\n============================== 1 passed in 0.03s ===============================\n"
+- 输出哈希：34103c11996c6451e74a9501673adea3cd408c367de604aab50e95c0d03b676f
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：21b6c469eec4b8ddbddda604495fb8234e1deed4b5633061037f4d90a5d354a0
+- 报告字节数：581
+- 精确匹配测试入口：["tests/test_bug_validation.py::test_reproduce_topic_on_the_next_line_is_not_misread_as_the_next_field"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：缺陷记录的验收主题同行值为空时，下一字段不会被误读为主题；诊断会指出空字段位置和同行写法。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035843+0000-74a14822；结构化报告 SHA-256 为 21b6c469eec4b8ddbddda604495fb8234e1deed4b5633061037f4d90a5d354a0。
+
+<a id="tc-06"></a>
+### TC-06：首次实施讨论先说明基线已经冻结
+
+- 对应验收条件：[AC-04：实施基线差异说清冻结时机、变化文件和处理方法](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-04)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_commands.py::test_discuss_announces_impl_baseline_frozen_before_first_material_read"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_commands.py::test_discuss_announces_impl_baseline_frozen_before_first_material_read","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-06.xml"]
+- 机器记录编号：RUN-20260814T035843+0000-b3bbe518
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:43+00:00
+- 结束时间：2026-08-14T03:58:43+00:00
+- 时长（秒）：0.143
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_commands.py .                                                 [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-06.xml -\n============================== 1 passed in 0.05s ===============================\n"
+- 输出哈希：abfaaf8fab110b9bd152e74730f924f189a4d18b5334eb334e3a7cbaedab6f7c
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：2721e22c118330ce001166e2b7a6c65f936dbf33a7fa18e217d131b2f1805c8a
+- 报告字节数：569
+- 精确匹配测试入口：["tests/test_commands.py::test_discuss_announces_impl_baseline_frozen_before_first_material_read"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：首次读取实施材料前会提示实施基线已经冻结，并明确讨论命令或 Git 提交不会重写基线；重复讨论不重复提示。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035843+0000-b3bbe518；结构化报告 SHA-256 为 2721e22c118330ce001166e2b7a6c65f936dbf33a7fa18e217d131b2f1805c8a。
+
+<a id="tc-07"></a>
+### TC-07：完整实施快照发现未登记文件变化
+
+- 对应验收条件：[AC-04：实施基线差异说清冻结时机、变化文件和处理方法](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-04)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_stages.py::test_impl_discussion_detects_unregistered_file_change_from_complete_baseline"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_stages.py::test_impl_discussion_detects_unregistered_file_change_from_complete_baseline","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-07.xml"]
+- 机器记录编号：RUN-20260814T035843+0000-73592ff0
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:43+00:00
+- 结束时间：2026-08-14T03:58:43+00:00
+- 时长（秒）：0.122
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_stages.py .                                                   [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-07.xml -\n============================== 1 passed in 0.03s ===============================\n"
+- 输出哈希：9b82a8f10c93d37894f432e27dfe87e2a7fbd78b91978b4c886f31117ada4534
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：8c3d752ea27aa176e2051b02ad639e8e5214f1050c45386644f2521133dbfada
+- 报告字节数：577
+- 精确匹配测试入口：["tests/test_stages.py::test_impl_discussion_detects_unregistered_file_change_from_complete_baseline"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：完整实施范围快照能够发现未登记文件 `src/hidden.py` 的修改，登记哈希不变也不能绕过检查，并给出处理遗留修改或重设基线的方法。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035843+0000-73592ff0；结构化报告 SHA-256 为 8c3d752ea27aa176e2051b02ad639e8e5214f1050c45386644f2521133dbfada。
+
+<a id="tc-08"></a>
+### TC-08：实施记录一行的全部真实错误一次说清
+
+- 对应验收条件：[AC-05：代码位置泛称指出文件内可定位名称规则](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-05)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_rollback.py::test_implementation_record_reports_every_invalid_row_fact_at_once"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_rollback.py::test_implementation_record_reports_every_invalid_row_fact_at_once","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-08.xml"]
+- 机器记录编号：RUN-20260814T035843+0000-d75539c7
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:43+00:00
+- 结束时间：2026-08-14T03:58:43+00:00
+- 时长（秒）：0.136
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_rollback.py .                                                 [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-08.xml -\n============================== 1 passed in 0.05s ===============================\n"
+- 输出哈希：f6da2a8c3d6f748777f05bd3c597f87c5393d68908e68ff2c5f80c214c13fc6a
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：839b8f0f1772e6a933f3de798ed5d29b7ef5b22111100a51fac8189c7e977029
+- 报告字节数：559
+- 精确匹配测试入口：["tests/test_rollback.py::test_implementation_record_reports_every_invalid_row_fact_at_once"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：实施记录同一行中的位置泛称、两个占位值和不存在的验收条件会一次全部报告；位置改法明确要求填写文件内真实函数名、类名或配置项。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035843+0000-d75539c7；结构化报告 SHA-256 为 839b8f0f1772e6a933f3de798ed5d29b7ef5b22111100a51fac8189c7e977029。
+
+<a id="tc-09"></a>
+### TC-09：重复失败报告全文和哈希稳定且只有一条命令
+
+- 对应验收条件：[AC-06：相同输入稳定输出并只给一个有效下一动作](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md#ac-06)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_diagnostics.py::test_repeated_failure_report_is_byte_stable_and_exposes_one_next_command"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_diagnostics.py::test_repeated_failure_report_is_byte_stable_and_exposes_one_next_command","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-09.xml"]
+- 机器记录编号：RUN-20260814T035843+0000-530e5d37
+- 工作目录：项目根
+- 超时（秒）：120
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-14T03:58:43+00:00
+- 结束时间：2026-08-14T03:58:44+00:00
+- 时长（秒）：0.139
+- 退出码：0
+- 输出摘要："============================= test session starts ==============================\nplatform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0\nrootdir: /Users/yu/business_qt/ai_qt/workflow_loop\nconfigfile: pyproject.toml\ncollected 1 item\n\ntests/test_diagnostics.py .                                              [100%]\n\n- generated xml file: /Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-13-0346-bugfix/所有阶段门禁失败时一次指出全部真实原因和改法/TC-09.xml -\n============================== 1 passed in 0.05s ===============================\n"
+- 输出哈希：41a0c75d7eebec7371b1c7812fce3496947a8aa1af3089bf6a33ca56690090ac
+- 输出字节数：595
+- 报告适配器：pytest-junitxml
+- 报告哈希：938fb1aa97eddaf4a3191cabc1e0e3361325e07aa17cff72cdec2153cee15d55
+- 报告字节数：579
+- 精确匹配测试入口：["tests/test_diagnostics.py::test_repeated_failure_report_is_byte_stable_and_exposes_one_next_command"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：32a61f0201d3c502dbbd35a84c863fb43f195afe8304207c5991f80aad8e4eed
+- 测试代码哈希：a905ef48e59499da1f96c49de48ed8668462bf24974461550e055440f70e03eb
+- 实际结果：相同事实以不同输入顺序生成的两份失败报告全文和哈希一致，错误与未检查项顺序稳定，末尾只有一条完整下一命令，并明确状态未变时不要原样重试。
+- 自动化测试结果：通过
+- 证据：机器记录 RUN-20260814T035843+0000-530e5d37；结构化报告 SHA-256 为 938fb1aa97eddaf4a3191cabc1e0e3361325e07aa17cff72cdec2153cee15d55。
+
+## 4. 人工验收交接
+
+无需人工验收
+
+## 5. 未通过或阻塞
+
+暂无
+
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](./所有阶段门禁失败时一次指出全部真实原因和改法_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/所有阶段门禁失败时一次指出全部真实原因和改法_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | `acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收结果.md`（待生成） | 主题验收在这里记录自动化结论 |

@@ -2278,6 +2278,48 @@ def validate_stage_output(
             links_failed=not links_passed,
         )
 
+    # R9：差异为空时跳过测试执行（判定依据写入状态，不产生机器执行记录）
+    skip_regression, skip_reason = test_runner_mod.should_skip_final_regression(
+        project_root,
+        wf_state,
+    )
+    if skip_regression:
+        from .state import now_iso as _now_iso
+
+        wf_state.regression_test.skip_reason = skip_reason
+        wf_state.regression_test.skipped_at = _now_iso()
+        wf_state.regression_test.status = "skipped-by-no-change"
+        journal_mod.append_entry(
+            project_root,
+            "最终全量回归跳过（无代码改动）",
+            "workflow.py",
+            stage=stage_name,
+            passed=True,
+            reason=skip_reason,
+        )
+        state_mod.save_state(project_root, wf_state)
+        stage_passed, stage_details = stage.code_validate(project_root)
+        if not stage_passed:
+            diagnostics.extend(
+                _diagnostics_from_failure_details(
+                    stage_name=stage_name,
+                    gate_name="阶段产出校验",
+                    details=stage_details,
+                    command="workflow gate regression_test",
+                    excluded_prefixes=("最终全量回归机器记录",),
+                )
+            )
+            return False, _format_combined_stage_diagnostics(
+                stage_name,
+                diagnostics,
+                links_failed=False,
+            )
+        return True, (
+            "═══ 最终全量回归跳过（无代码改动） ═══\n"
+            f"判定依据：{skip_reason}\n"
+            "跳过只免除测试执行；整体验收和最终代码设计同步的确认门照常（R9a）。"
+        )
+
     regression_passed, regression_details = test_runner_mod.run_final_regression(
         project_root,
         wf_state,
@@ -3270,6 +3312,17 @@ def _prepare_tasks_from_tables(project_root: str, wf_state) -> None:
     print("═══ 测试项已按工作记录表登记 ═══")
     for item in registered:
         print(f"  - {item}")
+    # R28：登记时输出程序生成的 Workflow-Test 标识文本，AI 复制粘贴到测试代码
+    marker_items = [
+        item
+        for item in test_mapping_mod.collect_test_plan_items(project_root, topics)
+        if item.requires_test_code
+    ]
+    if marker_items:
+        print("\n【Workflow-Test 标识】以下文本由程序按测试计划表生成，复制粘贴到对应测试代码 docstring：")
+        for item in marker_items:
+            print(f"\n--- {item.topic} / {item.test_id} ---")
+            print(test_mapping_mod.build_marker_from_plan(item))
     missing = test_execution_mod.missing_prepared_tasks(project_root, wf_state)
     if missing:
         print_next_step(f"表中仍有未登记的自动化测试项: {missing}；补齐后重新执行 `workflow test prepare --from-tables`")
@@ -3786,6 +3839,14 @@ def cmd_return(args) -> None:
     if bug_detail:
         print(bug_detail)
     print("未列出的独立主题保留当前测试和验收记录。")
+    # R25（返回上游）：退回后重新进入有产物环节的时序提示，防止先改文件被记进产物基线
+    if args.to in {"spec", "acceptance_plan", "reproduce"}:
+        print(
+            "【产物修改时序】先重新加载材料并与用户讨论，通过第一道门"
+            "（--discuss-done）之后再修改产物文件。第一道门执行时会记录产物基线；"
+            "先改文件后登记时，修改会被记进基线，第二道门将看不见变化并报“产物未更新”。"
+            "核对确认无需修改的内容不产生文件变化、不要求制造无意义修改。"
+        )
     print_recovery_details(wf_state)
     print_next_step(current_stage_next_instruction(wf_state))
 
@@ -5263,6 +5324,64 @@ def cmd_scaffold(args) -> None:
     print_next_step("由 AI 在表中填写固定事实（数据一段一条），正式文档由程序按表生成")
 
 
+def cmd_collect(args) -> None:
+    """机器采集实施改动：按基线差异算文件与代码位置写入实施记录表（R25）。
+
+    只写机器列并记录采集指纹；AI 叙述列保留。失败时一次列出全部可确认
+    的问题（按全局失败输出规范），不中断其它主题的采集结果。
+    """
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    wf_state = _load_active_workflow_for_command(project_root)
+    if wf_state is None:
+        print("错误：没有进行中的工作流轮次，无法采集。")
+        sys.exit(1)
+    if wf_state.current_stage != "impl":
+        print(f"错误：collect 只适用于 impl（代码实施）环节，当前是 {wf_state.current_stage}。")
+        sys.exit(1)
+    from . import machine_collect as machine_collect_mod
+
+    journal_mod.append_entry(
+        project_root,
+        "机器采集实施改动",
+        "workflow.py",
+        workflow_id=wf_state.workflow_id,
+        stage="impl",
+    )
+    try:
+        summary = machine_collect_mod.collect_implementation_changes(
+            project_root, wf_state
+        )
+    except machine_collect_mod.CollectError as exc:
+        state_mod.save_state(project_root, wf_state)
+        _print_gate_failure(
+            stage_name="impl",
+            gate_name="机器采集实施改动",
+            details=str(exc),
+            command="workflow collect",
+            side_effects="只写实施记录表的文件与代码位置列和采集指纹，不修改业务代码",
+            success_condition="每个差异文件都有可信的改动前内容并算出代码位置",
+        )
+        sys.exit(1)
+    state_mod.save_state(project_root, wf_state)
+    print("═══ 机器采集完成 ═══")
+    for topic, detail in summary.get("topics", {}).items():
+        print(f"  {topic}: {detail}")
+    unclaimed = summary.get("unclaimed") or []
+    if unclaimed:
+        print(f"  计划外且无主题认领的文件（请在叙述栏说明归属）：{unclaimed}")
+    print(
+        "说明：采集只写文件与代码位置两列并记录指纹；实际修改的代码逻辑、"
+        "修改理由、对应验收条件和测试证据由 AI 填写，重新采集会保留这些叙述列。"
+    )
+    print_next_step(
+        "AI 补填实际代码修改行的叙述列（逻辑、理由、验收条件、测试证据），"
+        "再执行 `workflow gate impl`（第二道门会重算差异并与指纹比对）"
+    )
+
+
 def cmd_status(args) -> None:
     # 定位项目根
     project_root = resolve_project_root()
@@ -6006,11 +6125,11 @@ def main() -> None:
     # --version：固定产品身份查询，输出 "workflow-loop 0.2.0"
     # 安装脚本用它核对同名命令身份和兼容版本
     parser.add_argument("--version", action="version", version=PRODUCT_IDENTITY)
-    # 子命令。metavar 固定列出公开命令，内部维护入口不出现在普通帮助中
+    # subcommand。metavar 固定列出公开命令，内部维护入口不出现在普通帮助中
     subparsers = parser.add_subparsers(
         dest="command",
         help="可用命令",
-        metavar="{start,light,discuss,test,spike,acceptance,gate,repair-links,scaffold,status,done,abort,return,update,uninstall}",
+        metavar="{start,light,discuss,test,spike,acceptance,gate,collect,repair-links,scaffold,status,done,abort,return,update,uninstall}",
     )
 
     # start 命令
@@ -6242,6 +6361,12 @@ def main() -> None:
         help="只生成指定主题的表；省略时按当前环节全部主题生成",
     )
 
+    # collect 命令：机器采集实施改动写入实施记录表（R25）
+    collect_parser = subparsers.add_parser(
+        "collect",
+        help="按实施前基线与最终文件差异采集文件与代码位置写入实施记录表",
+    )
+
     # status 命令（旧状态可能先迁移阶段路径）
     subparsers.add_parser("status", help="打印状态摘要")
     # done 命令
@@ -6368,6 +6493,8 @@ def _dispatch_command(args, parser) -> None:
         cmd_status(args)
     elif args.command == "scaffold":
         cmd_scaffold(args)
+    elif args.command == "collect":
+        cmd_collect(args)
     elif args.command == "done":
         cmd_done(args)
     elif args.command == "abort":

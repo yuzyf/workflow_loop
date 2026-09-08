@@ -1,0 +1,461 @@
+{
+  "表版本": "3",
+  "工作流编号": "2026-09-08-0228-product_change",
+  "验收主题": "机器事实由程序采集进工作记录表",
+  "生成文档哈希": "6f36fb1b52570df50e841e0ec678cce1e70bfac58d6825f37348ee77735c3413",
+  "生成文档路径": "impl/机器事实由程序采集进工作记录表_实施记录.md",
+  "实施依据": [
+    {
+      "依据类型": "产品设计",
+      "依据编号": "JU-01",
+      "具体内容": "实施记录表中依赖机器事实的栏位由程序直接采集写入，AI 不手抄；改动前内容先取实施前回退副本，无副本时用进场记录的 Git 基线提交号取进场内容",
+      "文档位置": "[工作记录表与正式文档生成 R25](../spec/功能_工作记录表与正式文档生成.md#r-25)"
+    },
+    {
+      "依据类型": "产品设计",
+      "依据编号": "JU-02",
+      "具体内容": "验收结果表五列由程序从状态记录回填，failed/blocked 时清除记录并标记待重做、AI 叙述保留",
+      "文档位置": "[工作记录表与正式文档生成 R26](../spec/功能_工作记录表与正式文档生成.md#r-26)"
+    },
+    {
+      "依据类型": "产品设计",
+      "依据编号": "JU-03",
+      "具体内容": "编号引用只写编号本身、程序渲染并校验存在性、限定本主题、断档合法；测试标识由程序按测试计划表生成；穿刺资产引用由程序回填；表版本升 4 旧轮次不迁移",
+      "文档位置": "[工作记录表与正式文档生成 R27](../spec/功能_工作记录表与正式文档生成.md#r-27)、[R28](../spec/功能_工作记录表与正式文档生成.md#r-28)、[R29](../spec/功能_工作记录表与正式文档生成.md#r-29)"
+    },
+    {
+      "依据类型": "验收条件",
+      "依据编号": "JU-04",
+      "具体内容": "AC-01 至 AC-06：实施改动采集、计划外文件处理、验收五列回填、编号引用、测试标识、表版本升 4",
+      "文档位置": "[AC-01](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-01)"
+    },
+    {
+      "依据类型": "现有代码设计",
+      "依据编号": "JU-05",
+      "具体内容": "行号算法 _changed_line_ranges、差异清单 changed_paths_since_prepare、回退副本读取 _recorded_path_texts、Git 取内容 _trusted_git_head_baseline 均已存在并被最终同步使用；表校验 validate_table 按冻结版本判定",
+      "文档位置": "[代码架构设计 6.18](../spec/代码架构设计.md#618-功能工作记录表与正式文档生成)"
+    },
+    {
+      "依据类型": "穿刺结论",
+      "依据编号": "JU-06",
+      "具体内容": "本轮未执行穿刺，无可复用资产",
+      "文档位置": "暂无"
+    }
+  ],
+  "最低实现设计": [
+    {
+      "设计项": "模块与职责",
+      "已确认做法": "新增 src/workflow_loop/machine_collect.py 模块，集中承载机器采集职责：实施改动采集（按基线与最终文件差异算文件+行号+指纹）、进场 Git 基线提交号记录、验收五列回填值计算、编号引用解析校验、测试标识文本生成、穿刺资产引用回填值计算。records.py 的表 schema 升 v4 并登记；cli.py 增加采集命令入口；rollback.py 提供进场时记录基线提交号的钩子。不把采集逻辑散进 cli.py",
+      "选择理由": "六个采集动作共享同一批底层能力（差异计算、基线读取、state 读取），集中一个模块避免同一条规则复制多份；与现有 records.py（表结构）、rollback.py（基线）职责边界清晰",
+      "对应验收条件": "AC-01、AC-02、AC-03、AC-04、AC-05、AC-06"
+    },
+    {
+      "设计项": "接口与调用顺序",
+      "已确认做法": "对外入口三个：①collect_implementation_changes(project_root, workflow_id)→写入实施记录表实际代码修改行的机器列并返回指纹；②acceptance_result_columns(topic 的有效验收记录)→五列值；③render_test_marker(test_plan 表行)→标识文本。进场基线提交号由 record_entry_git_baseline(project_root) 在 impl 进场快照时调用，结果存 state.meta。门禁校验时重算比对复用①的纯函数形态 collect_diff_facts(baseline, current)",
+      "选择理由": "采集（写表）与校验（重算比对）必须用同一套纯函数，保证一致性是结构保证不是约定；命令入口只做参数解析和调用，可测试性最好",
+      "对应验收条件": "AC-01、AC-02、AC-03、AC-05"
+    },
+    {
+      "设计项": "数据、状态与副作用",
+      "已确认做法": "采集结果写入实施记录表 JSON 的实际代码修改行（文件列、代码位置列）并记录采集指纹（每文件内容哈希集合）；进场基线提交号写入 state.meta.entry_git_baseline（含记录时间与当时 HEAD）；验收五列由 sync 阶段从 stage_state.acceptance_records 直接取值渲染，不再要求 AI 预填。副作用集中：只在采集命令执行时写表，门禁只读比对",
+      "选择理由": "指纹+重算是防止采集后文件又变化的关键闭环；五列由渲染时实时取值而不是先写进表再核对，消除两个事实来源",
+      "对应验收条件": "AC-01、AC-03"
+    },
+    {
+      "设计项": "错误与边界",
+      "已确认做法": "计划外新建文件登记为全部行新增不报错；计划外修改文件按回退副本→基线提交号顺序取内容，都取不到时报错含文件名与下一步指引；基线提交号只在进场时代码范围无未提交改动时记录，取不到或仓库不可读时 state 无该键、后续按无基线处理；非 UTF-8 文件报不能使用行号范围定位（沿用现有报错）",
+      "选择理由": "这些边界来自 R25 已确认的规则文本；沿用现有报错口径减少新增判断",
+      "对应验收条件": "AC-02"
+    }
+  ],
+  "代码修改计划": [
+    {
+      "顺序": "1",
+      "文件": "src/workflow_loop/machine_collect.py",
+      "类、函数或配置项": "新增模块：collect_diff_facts、collect_implementation_changes、record_entry_git_baseline、acceptance_result_columns、resolve_id_reference、render_test_marker",
+      "当前逻辑": "暂无现有逻辑（新文件）",
+      "计划修改内容": "新增机器采集模块：差异事实纯函数、采集写表、进场基线提交号、验收五列、编号引用解析、测试标识生成",
+      "数据、状态或输出变化": "AI 执行采集命令后实施记录表实际代码修改行的文件与代码位置列由程序写入并带指纹",
+      "对应验收条件": "AC-01、AC-02、AC-03、AC-04、AC-05",
+      "前置步骤": "无"
+    },
+    {
+      "顺序": "2",
+      "文件": "src/workflow_loop/records.py",
+      "类、函数或配置项": "_SUPPORTED_TABLE_VERSIONS、TABLE_SCHEMAS、COLUMN_HINTS",
+      "当前逻辑": "支持版本集合为 {\"1\",\"2\",\"3\"}；impl_record 表的验证位置等列为 AI 手填；验收结果表五列为 AI 手填",
+      "计划修改内容": "表版本集合加 \"4\"；v4 的 impl_record 实际代码修改行增加机器采集列（采集指纹）；acceptance_result 五列改程序回填（sync 时从状态记录取值写入表）；填写说明同步改为程序分配断档合法口径",
+      "数据、状态或输出变化": "新轮次生成 v4 表；门禁校验 v4 结构；AI 引用编号时填写说明不再要求连续编号",
+      "对应验收条件": "AC-06、AC-01、AC-03、AC-04",
+      "前置步骤": "1"
+    },
+    {
+      "顺序": "3",
+      "文件": "src/workflow_loop/rollback.py",
+      "类、函数或配置项": "prepare_impl、_manifest_entry_for_recorded_path 相关取内容路径",
+      "当前逻辑": "进场只保存回退清单和副本；取改动前内容只有回退副本和 _trusted_git_head_baseline（要求文件干净）两条路",
+      "计划修改内容": "prepare_impl 完成时调用 record_entry_git_baseline：代码范围（排除受管文档目录）无未提交改动时记录当前 HEAD 为基线提交号；_recorded_path_texts 增加第三来源：无副本但有基线提交号时用 git show 取进场内容",
+      "数据、状态或输出变化": "进场后 state.meta 有基线提交号；计划外修改文件能取到进场内容并算出行号",
+      "对应验收条件": "AC-02",
+      "前置步骤": "1"
+    },
+    {
+      "顺序": "4",
+      "文件": "src/workflow_loop/cli.py",
+      "类、函数或配置项": "新增 collect 子命令；cmd_gate 中 impl/qa/topic_acceptance 第二道门的表校验路径",
+      "当前逻辑": "无采集命令；门禁校验实际代码修改行时逐字段对照 AI 填写值与真实差异",
+      "计划修改内容": "新增 workflow collect 命令（impl 环节采集实施改动写入表）；门禁校验改为：有采集指纹时重算差异与指纹比对（不一致报请重新采集），无指纹时按原逻辑；验收五列校验改为与状态记录精确一致",
+      "数据、状态或输出变化": "AI 执行 workflow collect 后表内机器列就位；门禁报错从格式类变为明确的重新采集指引",
+      "对应验收条件": "AC-01、AC-03",
+      "前置步骤": "2"
+    },
+    {
+      "顺序": "5",
+      "文件": "src/workflow_loop/test_mapping.py",
+      "类、函数或配置项": "标识文本生成入口（新增 build_marker_from_plan）",
+      "当前逻辑": "只有校验（十字段比对测试代码 docstring 与计划），无生成",
+      "计划修改内容": "新增按测试计划表行生成标准标识文本的函数，登记测试任务时输出供 AI 复制粘贴；校验规则不变",
+      "数据、状态或输出变化": "登记测试任务时输出标识文本；AI 不再逐字段手抄",
+      "对应验收条件": "AC-05",
+      "前置步骤": "1"
+    },
+    {
+      "顺序": "6",
+      "文件": "src/workflow_loop/traceability.py",
+      "类、函数或配置项": "穿刺列回填值计算",
+      "当前逻辑": "穿刺列由 AI 按登记手填四段机器事实",
+      "计划修改内容": "从 state 的穿刺资产登记程序化取值回填穿刺列（结论文档路径、用途、运行方法、当前重跑结论）",
+      "数据、状态或输出变化": "追踪表穿刺列由程序写入；登记变化后引用不再失效",
+      "对应验收条件": "AC-06",
+      "前置步骤": "1"
+    },
+    {
+      "顺序": "7",
+      "文件": "tests/test_machine_collect.py",
+      "类、函数或配置项": "新增测试文件",
+      "当前逻辑": "暂无现有逻辑（新文件）",
+      "计划修改内容": "覆盖：采集与门禁重算一致、采集后文件变化触发重新采集、重采集保留叙述列、计划外新建/修改文件两来源顺序、都取不到时报错含文件名和下一步、五列与状态记录一致、failed 标记待重做、编号断档合法、引用已删编号报错、标识生成与校验一致、v4 表通过且 v1-v3 不迁移",
+      "数据、状态或输出变化": "新增测试全部通过",
+      "对应验收条件": "AC-01、AC-02、AC-03、AC-04、AC-05、AC-06",
+      "前置步骤": "4"
+    }
+  ],
+  "开发检查计划": [
+    {
+      "检查命令或方法": "uv run python -m pytest tests/test_machine_collect.py -q",
+      "检查范围": "机器采集模块全部行为",
+      "预期观察结果": "全部测试通过，退出码 0"
+    },
+    {
+      "检查命令或方法": "uv run python -m pytest tests/test_records.py tests/test_workflow_guidance.py tests/test_gate_rework_stability.py -q",
+      "检查范围": "表版本升级不破坏既有表行为（v1-v3 冻结、校验、生成）",
+      "预期观察结果": "既有测试全部通过，无 v4 相关回归"
+    }
+  ],
+  "实施动作记录": [
+    {
+      "实施顺序": "1",
+      "对应计划步骤": "1",
+      "文件": "src/workflow_loop/machine_collect.py",
+      "代码位置（最终文件）": "L1-L601",
+      "实际执行的动作": "新建机器采集模块：差异事实纯函数 collect_diff_facts、采集写表 collect_implementation_changes、进场基线提交号 record_entry_git_baseline、验收五列取值 acceptance_result_columns、编号引用解析 resolve_id_reference、测试标识 render_test_marker",
+      "当步反馈": "导入成功；tests/test_machine_collect.py 17 项通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "2",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L22-L22",
+      "实际执行的动作": "表版本升 4（_SUPPORTED_TABLE_VERSIONS 加 4、TABLE_FORMAT_VERSION=4）；v4 impl_record 放行采集指纹程序专用键；_fill_acceptance_record_ids 增加 v4 五列程序回填分支和 _fill_acceptance_row_columns",
+      "当步反馈": "tests/test_records.py、test_workflow_guidance.py、test_gate_rework_stability.py 全通过（3 处旧文案断言更新为与工作记录表不一致）",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "3",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L1072-L1075",
+      "实际执行的动作": "（续前一行）表版本升 4（_SUPPORTED_TABLE_VERSIONS 加 4、TABLE_FORMAT_VERSION=4）；v4 impl_record 放行采集指纹程序专用键；_fill_acceptance_record_ids 增加 v4 五列程序回填分支和 _fill_acceptance_row_columns",
+      "当步反馈": "tests/test_records.py、test_workflow_guidance.py、test_gate_rework_stability.py 全通过（3 处旧文案断言更新为与工作记录表不一致）",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "4",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L1343-L1345",
+      "实际执行的动作": "（续前一行）表版本升 4（_SUPPORTED_TABLE_VERSIONS 加 4、TABLE_FORMAT_VERSION=4）；v4 impl_record 放行采集指纹程序专用键；_fill_acceptance_record_ids 增加 v4 五列程序回填分支和 _fill_acceptance_row_columns",
+      "当步反馈": "tests/test_records.py、test_workflow_guidance.py、test_gate_rework_stability.py 全通过（3 处旧文案断言更新为与工作记录表不一致）",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "5",
+      "对应计划步骤": "2",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L3688-L3731",
+      "实际执行的动作": "（续前一行）表版本升 4（_SUPPORTED_TABLE_VERSIONS 加 4、TABLE_FORMAT_VERSION=4）；v4 impl_record 放行采集指纹程序专用键；_fill_acceptance_record_ids 增加 v4 五列程序回填分支和 _fill_acceptance_row_columns",
+      "当步反馈": "tests/test_records.py、test_workflow_guidance.py、test_gate_rework_stability.py 全通过（3 处旧文案断言更新为与工作记录表不一致）",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "6",
+      "对应计划步骤": "3",
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L2218-L2226",
+      "实际执行的动作": "prepare_impl 完成时调用 record_entry_git_baseline 记录进场基线提交号；_implementation_change_validation 增加采集指纹比对报错；新增 _collection_fingerprint_problems 桥接",
+      "当步反馈": "tests/test_rollback.py 全通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "7",
+      "对应计划步骤": "3",
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L2550-L2563",
+      "实际执行的动作": "（续前一行）prepare_impl 完成时调用 record_entry_git_baseline 记录进场基线提交号；_implementation_change_validation 增加采集指纹比对报错；新增 _collection_fingerprint_problems 桥接",
+      "当步反馈": "tests/test_rollback.py 全通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "8",
+      "对应计划步骤": "3",
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L2695-L2712",
+      "实际执行的动作": "（续前一行）prepare_impl 完成时调用 record_entry_git_baseline 记录进场基线提交号；_implementation_change_validation 增加采集指纹比对报错；新增 _collection_fingerprint_problems 桥接",
+      "当步反馈": "tests/test_rollback.py 全通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "9",
+      "对应计划步骤": "4",
+      "代码位置（最终文件）": "L5327-L5384",
+      "实际执行的动作": "新增 workflow collect 命令（注册、分发、cmd_collect 实现：采集失败按失败输出规范报错、成功打印各主题写入详情与未认领文件清单）",
+      "当步反馈": "命令注册成功；--help 可见",
+      "状态": "已完成",
+      "文件": "src/workflow_loop/cli.py"
+    },
+    {
+      "实施顺序": "10",
+      "对应计划步骤": "4",
+      "代码位置（最终文件）": "L6128-L6132",
+      "实际执行的动作": "（续前一行）新增 workflow collect 命令（注册、分发、cmd_collect 实现：采集失败按失败输出规范报错、成功打印各主题写入详情与未认领文件清单）",
+      "当步反馈": "命令注册成功；--help 可见",
+      "状态": "已完成",
+      "文件": "src/workflow_loop/cli.py"
+    },
+    {
+      "实施顺序": "11",
+      "对应计划步骤": "4",
+      "代码位置（最终文件）": "L6496-L6497",
+      "实际执行的动作": "（续前一行）新增 workflow collect 命令（注册、分发、cmd_collect 实现：采集失败按失败输出规范报错、成功打印各主题写入详情与未认领文件清单）",
+      "当步反馈": "命令注册成功；--help 可见",
+      "状态": "已完成",
+      "文件": "src/workflow_loop/cli.py"
+    },
+    {
+      "实施顺序": "12",
+      "对应计划步骤": "5",
+      "文件": "src/workflow_loop/test_mapping.py",
+      "代码位置（最终文件）": "L142-L170",
+      "实际执行的动作": "新增 build_marker_from_plan：按 TestPlanItem 生成十字段标准标识文本，标签与 MARKER_FIELDS 解析同源",
+      "当步反馈": "tests/test_machine_collect.py 标识生成与字段同源测试通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "13",
+      "对应计划步骤": "6",
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L160-L225",
+      "实际执行的动作": "新增 backfill_spike_facts_from_state 按资产登记回填穿刺列（只补空/占位单元格，已填内容不覆盖）；collect_spike_asset_acceptance_links 校验前先回填",
+      "当步反馈": "模块导入成功，既有 traceability 测试通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "14",
+      "对应计划步骤": "6",
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L391-L400",
+      "实际执行的动作": "（续前一行）新增 backfill_spike_facts_from_state 按资产登记回填穿刺列（只补空/占位单元格，已填内容不覆盖）；collect_spike_asset_acceptance_links 校验前先回填",
+      "当步反馈": "模块导入成功，既有 traceability 测试通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "15",
+      "对应计划步骤": "7",
+      "文件": "tests/test_machine_collect.py",
+      "代码位置（最终文件）": "L1-L384",
+      "实际执行的动作": "新建测试：编号引用四场景、标识生成同源、v4/v3 指纹键边界、五列回填三方式、差异来源顺序、子目录 git 取内容、脏代码不记基线、重采集保留叙述、指纹变化检测",
+      "当步反馈": "17 passed in 0.38s（--basetemp 本地运行）",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "16",
+      "对应计划步骤": "4",
+      "文件": "src/workflow_loop/cli.py",
+      "代码位置（最终文件）": "L3315-L3325",
+      "实际执行的动作": "按表登记成功输出追加 R28 程序生成标识文本段（marker_items 循环输出 build_marker_from_plan 结果）",
+      "当步反馈": "模块导入成功；登记路径既有测试通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "17",
+      "对应计划步骤": "1",
+      "文件": "src/workflow_loop/machine_collect.py",
+      "代码位置（最终文件）": "L204-L224",
+      "实际执行的动作": "对抗审查修复：新文件位置值从文字描述改为 L1-L行数；多块差异从顿号连接改为覆盖全部差异的连续范围，与门禁 _parse_recorded_line_range 单块格式同源；修复 _entry_text_or_none 解包顺序错误",
+      "当步反馈": "tests/test_machine_collect.py 19 项、test_rollback.py 41 项全部通过",
+      "状态": "已完成"
+    },
+    {
+      "实施顺序": "18",
+      "对应计划步骤": "额外",
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L289-L302",
+      "实际执行的动作": "计划外缺陷修复：test_result 表 required_at_gate 从 False 改为 True。修复依据：qa 确认后补填测试结果表触发哈希失效退回，暴露空 test_result 表被门禁静默放行（违反 R11 空表报尚未填写），根因是该行清单必填标记错置",
+      "当步反馈": "tests/test_empty_result_table_guard.py 2 项通过（空表必报尚未填写）；test_records/test_workflow_guidance/test_gate_rework_stability 56 项全过；test_current_workflow_qa 4 项失败经对照均为环境固定失败（在下午 stash 对照清单内）",
+      "状态": "已完成"
+    }
+  ],
+  "实际代码修改": [
+    {
+      "文件": "src/workflow_loop/machine_collect.py",
+      "代码位置（最终文件）": "L1-L601",
+      "实际修改的代码逻辑": "机器采集模块：_run_git 受控执行、record_entry_git_baseline 进场判定（代码范围干净才记提交号）、_entry_baseline_text 用提交号取进场内容、collect_diff_facts 差异事实（回退副本→基线提交号→新文件登记，都取不到报 CollectError 含文件名与下一步）、collect_implementation_changes 写表保留叙述列、verify_collection_fingerprint 重算比对、acceptance_result_columns 五列取值、resolve_id_reference 编号校验（断档合法、已删编号报行已删除、未知编号报当前可用清单）、render_test_marker 标识生成",
+      "数据、状态或输出的实际变化": "AI 执行 workflow collect 后实施记录表实际代码修改行的文件与代码位置两列由程序写入并记录采集指纹；门禁指纹比对不一致时报请重新采集",
+      "修改理由": "R25-R29 机器采集五件套的核心实现；新模块集中承载避免同一规则复制多份",
+      "对应验收条件": "AC-01、AC-02、AC-03、AC-04、AC-05",
+      "测试证据": "tests/test_machine_collect.py 17 项全部通过"
+    },
+    {
+      "文件": "src/workflow_loop/records.py",
+      "代码位置（最终文件）": "L22-L3731",
+      "实际修改的代码逻辑": "TABLE_FORMAT_VERSION 升 4；COLLECTION_FINGERPRINT_KEY 常量；v4 impl_record 放行采集指纹键；_fill_acceptance_record_ids v4 分支五列程序回填（记录失效标记待重做、AI 叙述保留）+ _fill_acceptance_row_columns（test_record_ids 取机器编号、自动化测试归并不适用字段）；三处表文档不一致报错改用 _table_document_conflict_facts（带章节块、两指纹、按表是否更新区分修复路径）；追加计划外缺陷修复：test_result 行清单 required_at_gate 改为 True（空表必报尚未填写，R11）",
+      "数据、状态或输出的实际变化": "新轮次生成 v4 表；v1-v3 按 R11 冻结版本原样校验；验收五列由程序回填；表文档不一致报错含事实与正确修复路径；空 test_result 表被 qa 门禁立即拦截",
+      "修改理由": "表版本 v4 与五列回填、R46 报错增强的产品要求",
+      "对应验收条件": "AC-01、AC-03、AC-06",
+      "测试证据": "tests/test_records.py、test_machine_collect.py、test_gate_self_heal_output.py 相关项通过；tests/test_empty_result_table_guard.py 2 项通过"
+    },
+    {
+      "文件": "src/workflow_loop/rollback.py",
+      "代码位置（最终文件）": "L2218-L2712",
+      "实际修改的代码逻辑": "prepare_impl 尾部调用 record_entry_git_baseline（异常不阻塞准备）；_implementation_change_validation 差异计算后插入采集指纹比对错误项（含重新采集指引）；新增 _collection_fingerprint_problems 延迟导入桥接",
+      "数据、状态或输出的实际变化": "进场时 state.meta 记录 impl_entry_git_commit；门禁对有指纹的表重算差异并比对",
+      "修改理由": "R25 采集时机与门禁闭环",
+      "对应验收条件": "AC-01、AC-02",
+      "测试证据": "tests/test_rollback.py、test_machine_collect.py 指纹检测项通过"
+    },
+    {
+      "文件": "src/workflow_loop/cli.py",
+      "代码位置（最终文件）": "L3315-L6497",
+      "实际修改的代码逻辑": "cmd_collect：校验 impl 环节与活动轮次、journal 登记、调 collect_implementation_changes、失败走 _print_gate_failure、成功打印各主题详情与未认领清单；按表登记成功输出追加标识文本段；collect 命令注册与分发",
+      "数据、状态或输出的实际变化": "新增 workflow collect 命令；测试任务登记输出可复制粘贴的标识文本",
+      "修改理由": "R25 采集入口、R28 标识输出",
+      "对应验收条件": "AC-01、AC-05",
+      "测试证据": "命令注册成功；tests/test_commands.py 全通过"
+    },
+    {
+      "文件": "src/workflow_loop/test_mapping.py",
+      "代码位置（最终文件）": "L142-L170",
+      "实际修改的代码逻辑": "build_marker_from_plan 按 TestPlanItem 生成十二行标识文本（Workflow-Test 头行+十字段），标签与 _parse_marker_lines 的 MARKER_FIELDS 完全同源",
+      "数据、状态或输出的实际变化": "登记测试任务时输出标准标识；生成与校验同源，抄错环节消失",
+      "修改理由": "R28 测试标识程序生成",
+      "对应验收条件": "AC-05",
+      "测试证据": "tests/test_machine_collect.py::test_render_test_marker_matches_field_labels 通过"
+    },
+    {
+      "文件": "src/workflow_loop/traceability.py",
+      "代码位置（最终文件）": "L160-L400",
+      "实际修改的代码逻辑": "backfill_spike_facts_from_state：按当前工作流资产登记组装结论文档链接、用途、运行方法、当前重跑结论、资产目录文本，只补空或占位单元格、已填不覆盖；collect_spike_asset_acceptance_links 校验前先回填（回填与校验同源）",
+      "数据、状态或输出的实际变化": "穿刺列机器事实由程序回填；登记变化后重新校验即取新值，引用不再失效",
+      "修改理由": "R29 穿刺资产引用回填",
+      "对应验收条件": "AC-06",
+      "测试证据": "模块导入成功；既有 traceability 测试通过"
+    }
+  ],
+  "开发检查记录": [
+    {
+      "检查命令或方法": ".venv/bin/python -m pytest tests/test_machine_collect.py -q --basetemp=/tmp/pytest-basetemp",
+      "检查范围": "机器采集模块全部行为（编号、标识、版本、五列、差异、指纹）",
+      "实际反馈": "17 passed in 0.38s，退出码 0",
+      "是否需要继续修改": "否"
+    },
+    {
+      "检查命令或方法": ".venv/bin/python -m pytest tests/test_records.py tests/test_workflow_guidance.py tests/test_gate_rework_stability.py -q --basetemp=/tmp/pytest-basetemp",
+      "检查范围": "表版本升级不破坏既有表行为",
+      "实际反馈": "56 passed（含 3 处文案断言更新后），退出码 0",
+      "是否需要继续修改": "否"
+    }
+  ],
+  "预期产品结果": [
+    "AI 填实施记录表时执行一次采集命令，文件和行号由程序算出写入；验收结果五列、编号引用格式、测试标识、穿刺资产引用都不再需要 AI 手抄，抄错格式被门禁打回的反复从机制上消除。"
+  ],
+  "实施中问题与处理": [
+    "开发检查环境问题：WorkBuddy 沙箱 shim 拦截 pytest 默认临时目录（EEXIST），用 TMPDIR + --basetemp 指向 /tmp 固定目录绕过，不影响测试本身。",
+    "实施中发现 AcceptanceCriterionRecord 有 test_ids（TC 编号）与 test_record_ids（RUN 编号）两个易混字段，机器测试记录编号列必须用后者；已修正并写入测试防回归。",
+    "实施中发现验收方式枚举是自动化测试而非自动化，is_automated 判定已按真实枚举修正。",
+    "对抗审查发现两处采集位置值与门禁行号格式不同源：新增文件原先写文字描述（新增文件，全部行均为新增）、多块差异原先用顿号连接，均不被门禁 _parse_recorded_line_range 的单块 L 范围接受；已改为新文件写 L1-L行数、多块写覆盖全部差异的连续范围（模板允许），并补两项与门禁格式同源的回归测试。",
+    "对抗审查发现 _entry_text_or_none 解包顺序错误（把 entry 字典赋给了 before 文本），导致全量测试 35 项失败；修正为 _entry, before, _after 解包，test_rollback.py 41 项恢复通过。",
+    "qa 确认后补填 test_result 表触发哈希失效退回 qa（我的填表时机错误：该在 qa 第二道门前填）。根因排查发现机制缺陷：test_result 行清单 required_at_gate=False 让空表静默通过三道门，违反 R11。已修复为 True 并加守卫测试；同时把该教训记入 MEMORY（第五类机器事实手抄点：test_result 的编号/结论/机器编号三列，下轮机器采集范围候选）。"
+  ],
+  "未决问题": [
+    "暂无"
+  ],
+  "未完成状态": "状态：无",
+  "填写说明": {
+    "实施依据": {
+      "依据类型": "产品设计、验收条件、现有代码设计或穿刺结论四选一；与实施记录模板第 1 章表格的“依据类型”列一致",
+      "依据编号": "该行在表内的唯一编号，例如 JU-01；生成文档用于锚点命名",
+      "具体内容": "这条依据规定的产品行为或规则的一句话概括，取自上游文档原文；不写代码实现细节",
+      "文档位置": "指向上游文档具体章节或 AC 锚点的 Markdown 链接，例如 [AC-01](../acceptance/主题_验收计划.md#ac-01)；从本主题实施记录出发可解析；现有代码设计没有时写“暂无现有代码设计”"
+    },
+    "最低实现设计": {
+      "设计项": "模块与职责、接口与调用顺序、数据、状态与副作用、错误与边界之一（与实施模板 2.2 表一致），或本轮新增的设计主题名",
+      "已确认做法": "这个设计项本轮确定怎么做，写到能指导编码；修改产品时只写本轮新增或改变的决定",
+      "选择理由": "为什么这样划分或处理足以完成当前验收条件；不写“最佳实践”这类无依据概括",
+      "对应验收条件": "本设计支撑的 AC 编号，多个用顿号连接；取自本主题验收计划表"
+    },
+    "代码修改计划": {
+      "顺序": "从 1 开始的连续整数，表示计划执行顺序；生成文档 2.3 表按本列排序",
+      "文件": "项目内相对路径，例如 src/workflow_loop/records.py；与计划实际要改的文件一致",
+      "类、函数或配置项": "该文件内要改的具体符号名；新增位置写“新增”；取自真实代码调查，不写模块泛称",
+      "当前逻辑": "该符号现在的实际行为一句话；从零项目写“暂无现有逻辑”；必须看过真实代码后填写",
+      "计划修改内容": "一句话写清这一处增加、删除或改变什么处理逻辑，例如 表启用判定从按已填内容改为按文件存在",
+      "数据、状态或输出变化": "改完后程序或用户可检查到的具体变化，例如 空表主题门禁报“尚未填写”而非跳过",
+      "对应验收条件": "本步骤服务的 AC 编号，多个用顿号连接；取自本主题验收计划表",
+      "前置步骤": "必须先完成的本表其他行顺序号；无依赖写“无”；只写直接前置，不重复间接依赖"
+    },
+    "开发检查计划": {
+      "检查命令或方法": "实施期间将实际运行的命令或检查方法，例如 uv run python -m pytest tests/test_records.py -q；不写正式测试结论",
+      "检查范围": "这条检查覆盖哪些代码行为，例如 表启用判定三处修改后的门禁行为",
+      "预期观察结果": "运行后应当看到什么（退出码、报错文字、生成内容），看到即说明实施按预期生效；与计划修改内容逐项对应"
+    },
+    "实施动作记录": {
+      "实施顺序": "从 1 开始的连续整数，按实际执行先后登记",
+      "对应计划步骤": "本动作对应的代码修改计划“顺序”号；计划外额外文件写“额外”并在修改理由说明",
+      "文件": "实际修改的项目内相对路径",
+      "代码位置（最终文件）": "必须写最终文件起止行号 L起始行-L结束行，例如 L12-L34，单行也写 L12-L12，不能只写 L12；局部删除写“基线 L18-L31”；整文件删除写“删除整个文件”",
+      "实际执行的动作": "这一步实际增加、删除或修改了什么；写事实，不复制计划文字",
+      "当步反馈": "该步完成后的语法、静态检查或局部运行真实反馈；尚未检查时写“待检查”，不写“正式测试通过”",
+      "状态": "已完成 或 进行中；全部行完成前不能过第二道门"
+    },
+    "实际代码修改": {
+      "文件": "实际修改文件的项目内相对路径；与 git 真实差异一致，覆盖本轮全部差异文件",
+      "代码位置（最终文件）": "必须写最终文件起止行号 L起始行-L结束行，例如 L12-L34，不能只写 L12；每个不连续差异块都要被至少一行覆盖",
+      "实际修改的代码逻辑": "根据最终代码写清具体判断、调用和错误处理；不能复制“计划修改内容”代替事实",
+      "数据、状态或输出的实际变化": "根据最终代码写可检查的状态、数据、文件或输出变化",
+      "修改理由": "该文件为什么属于本轮已确认行为；计划外文件必须在这里说明理由",
+      "对应验收条件": "例如 AC-01；取自本主题验收计划表，与代码修改计划的 AC 关联一致",
+      "测试证据": "覆盖它的测试或检查，例如 tests/test_records.py::test_xxx 及实际结果；正式测试事实留给 qa 环节"
+    },
+    "开发检查记录": {
+      "检查命令或方法": "与开发检查计划一致的实际命令或方法",
+      "检查范围": "该检查实际覆盖的代码行为",
+      "实际反馈": "真实观察到的输出摘要（退出码、失败项、报错位置）；不写“正常”“符合预期”",
+      "是否需要继续修改": "是 或 否；为“是”时先回到实施动作继续处理，不能直接过门"
+    },
+    "预期产品结果": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "实施中问题与处理": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "未决问题": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "程序专用字段": "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
+  }
+}

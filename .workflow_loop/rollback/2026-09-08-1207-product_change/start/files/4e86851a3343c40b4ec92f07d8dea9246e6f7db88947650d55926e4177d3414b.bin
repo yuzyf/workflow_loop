@@ -1,0 +1,226 @@
+# 【主题测试结果】完整研发流程按最少用户环节推进并兼容旧轮次
+
+- 工作流编号：2026-08-10-0817-product_change
+- 验收主题：完整研发流程按最少用户环节推进并兼容旧轮次
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 测试完成时间：2026-08-12T08:04:57+00:00
+
+## 1. 测试依据
+
+- [验收计划](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md)
+- [测试计划](./完整研发流程按最少用户环节推进并兼容旧轮次_测试计划.md)
+- [代码计划、实施和结果](../impl/完整研发流程按最少用户环节推进并兼容旧轮次_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+## 2. 测试环境和执行说明
+
+- 本主题执行范围：TC-01 三类新轮次只生成精简研发主干、TC-02 从零最低实现设计只进入代码计划、TC-03 旧轮次逐项迁移且重复继续零变化、TC-04 初始化标记只在真实架构确认后设置、TC-05 当前 QA 机器记录可建立并复核验收记录、TC-06 主题验收结果只接受当前验收记录编号字段
+- 执行顺序：本主题测试项均无前置测试项；主题执行顺序按 qa/索引.md 中的主题关系处理。
+- 未执行项：暂无
+
+## 3. 测试项结果
+
+### TC-01：三类新轮次只生成精简研发主干
+
+- 对应验收条件：[AC-01：新轮次只生成精简后的完整研发路径](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md#ac-01)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_flow_ac01_new_runs_use_condensed_stage_path"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_flow_ac01_new_runs_use_condensed_stage_path","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-01.xml"]
+- 机器记录编号：RUN-20260812T080454+0000-b7c25dff
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T08:04:54+00:00
+- 结束时间：2026-08-12T08:04:55+00:00
+- 时长（秒）：0.948
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.83s\n"
+- 输出哈希：1d4a11fc90a7086c182cc06bc43bebeb59a36928082944ef103c86041aa4cf49
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：00de27dd364b78b58ad68476d2c06c32d723c9a6dee267c0cf5bae95b69f8df8
+- 报告字节数：547
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_flow_ac01_new_runs_use_condensed_stage_path"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：6a918d6cb35c6c45a5d73dc800ab5c0d09700f2446affd61f851f52acc1a944f
+- 测试代码哈希：43976a642a651747c32c16852d0df7b356f59ebcc45c6e346dea02400115b71f
+- 实际结果：登记的“三类新轮次只生成精简研发主干”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-01.xml`；机器记录编号为 `RUN-20260812T080454+0000-b7c25dff`。
+
+### TC-02：从零最低实现设计只进入代码计划
+
+- 对应验收条件：[AC-02：从零创建的最低限度实现设计只进入代码计划](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md#ac-02)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_flow_ac02_from_scratch_design_lives_in_impl_plan"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_flow_ac02_from_scratch_design_lives_in_impl_plan","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-02.xml"]
+- 机器记录编号：RUN-20260812T080455+0000-70a800d7
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T08:04:55+00:00
+- 结束时间：2026-08-12T08:04:55+00:00
+- 时长（秒）：0.124
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.04s\n"
+- 输出哈希：f4c77b58e2280613a49ba18da1c4a02d440e862c49a6c8fe5daaf277333ff99d
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：b9c0440f0fabac2464cc226408a42da1d8913d46d9a63d1a45f39169b7b97ca1
+- 报告字节数：557
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_flow_ac02_from_scratch_design_lives_in_impl_plan"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：6a918d6cb35c6c45a5d73dc800ab5c0d09700f2446affd61f851f52acc1a944f
+- 测试代码哈希：43976a642a651747c32c16852d0df7b356f59ebcc45c6e346dea02400115b71f
+- 实际结果：登记的“从零最低实现设计只进入代码计划”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-02.xml`；机器记录编号为 `RUN-20260812T080455+0000-70a800d7`。
+
+### TC-03：旧轮次逐项迁移且重复继续零变化
+
+- 对应验收条件：[AC-03：旧进行中轮次逐项迁移且重复继续结果不变](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md#ac-03)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_flow_ac03_legacy_runs_migrate_once_and_preserve_current_evidence"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_flow_ac03_legacy_runs_migrate_once_and_preserve_current_evidence","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-03.xml"]
+- 机器记录编号：RUN-20260812T080455+0000-4e7726d0
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T08:04:55+00:00
+- 结束时间：2026-08-12T08:04:56+00:00
+- 时长（秒）：0.932
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.81s\n"
+- 输出哈希：f9c9506451c8c246d741ba6f531e0c5616255ea5048df68bdc58562afc09939b
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：199ddb903e402adcc52330f1de4c661cd71f798359a98ceb2b3f94c610b6b528
+- 报告字节数：589
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_flow_ac03_legacy_runs_migrate_once_and_preserve_current_evidence"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：6a918d6cb35c6c45a5d73dc800ab5c0d09700f2446affd61f851f52acc1a944f
+- 测试代码哈希：43976a642a651747c32c16852d0df7b356f59ebcc45c6e346dea02400115b71f
+- 实际结果：登记的“旧轮次逐项迁移且重复继续零变化”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-03.xml`；机器记录编号为 `RUN-20260812T080455+0000-4e7726d0`。
+
+### TC-04：初始化标记只在真实架构确认后设置
+
+- 对应验收条件：[AC-04：项目设计初始化标记只在真实架构形成后设置](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md#ac-04)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_flow_ac04_design_initialized_only_after_confirmed_real_architecture"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_flow_ac04_design_initialized_only_after_confirmed_real_architecture","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-04.xml"]
+- 机器记录编号：RUN-20260812T080456+0000-a3a349f9
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T08:04:56+00:00
+- 结束时间：2026-08-12T08:04:57+00:00
+- 时长（秒）：0.727
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.64s\n"
+- 输出哈希：b263d69c44b612282137de0281bd9556f3ac416582ffd664301063cbd8c10652
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：b41e46ef22c716b82cbccad7becda165af3ef459ed7aff5fbd51aeac84847cca
+- 报告字节数：595
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_flow_ac04_design_initialized_only_after_confirmed_real_architecture"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：6a918d6cb35c6c45a5d73dc800ab5c0d09700f2446affd61f851f52acc1a944f
+- 测试代码哈希：43976a642a651747c32c16852d0df7b356f59ebcc45c6e346dea02400115b71f
+- 实际结果：登记的“初始化标记只在真实架构确认后设置”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-04.xml`；机器记录编号为 `RUN-20260812T080456+0000-a3a349f9`。
+
+### TC-05：当前 QA 机器记录可建立并复核验收记录
+
+- 对应验收条件：[AC-01：新轮次只生成精简后的完整研发路径](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md#ac-01)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_acceptance_records.py::test_current_qa_tasks_drive_automated_and_mixed_acceptance_with_legacy_fallback"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_acceptance_records.py::test_current_qa_tasks_drive_automated_and_mixed_acceptance_with_legacy_fallback","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-05.xml"]
+- 机器记录编号：RUN-20260812T080457+0000-2659fcb8
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T08:04:57+00:00
+- 结束时间：2026-08-12T08:04:57+00:00
+- 时长（秒）：0.105
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.03s\n"
+- 输出哈希：35d86279d96ed65491ba8ff0748e1c8e7891711531404dc5d4b9cd6ae33de3ec
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：94c3bded5f923ddb1375ddd60f192207448f571cbd526b1b53e06db5fc971901
+- 报告字节数：607
+- 精确匹配测试入口：["tests/test_acceptance_records.py::test_current_qa_tasks_drive_automated_and_mixed_acceptance_with_legacy_fallback"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：6a918d6cb35c6c45a5d73dc800ab5c0d09700f2446affd61f851f52acc1a944f
+- 测试代码哈希：43976a642a651747c32c16852d0df7b356f59ebcc45c6e346dea02400115b71f
+- 实际结果：登记的“当前 QA 机器记录可建立并复核验收记录”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-05.xml`；机器记录编号为 `RUN-20260812T080457+0000-2659fcb8`。
+
+### TC-06：主题验收结果只接受当前验收记录编号字段
+
+- 对应验收条件：[AC-01：新轮次只生成精简后的完整研发路径](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md#ac-01)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_flow_ac01_acceptance_result_uses_current_record_id_field"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_flow_ac01_acceptance_result_uses_current_record_id_field","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-06.xml"]
+- 机器记录编号：RUN-20260812T080457+0000-93f9ce7f
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T08:04:57+00:00
+- 结束时间：2026-08-12T08:04:57+00:00
+- 时长（秒）：0.126
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：6680dfbe71d93e70e12df935b54c130b7729047b2e3b5654f5cbea56c7f19c98
+- 报告字节数：573
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_flow_ac01_acceptance_result_uses_current_record_id_field"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：6a918d6cb35c6c45a5d73dc800ab5c0d09700f2446affd61f851f52acc1a944f
+- 测试代码哈希：43976a642a651747c32c16852d0df7b356f59ebcc45c6e346dea02400115b71f
+- 实际结果：登记的“主题验收结果只接受当前验收记录编号字段”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/完整研发流程按最少用户环节推进并兼容旧轮次/TC-06.xml`；机器记录编号为 `RUN-20260812T080457+0000-93f9ce7f`。
+
+## 4. 人工验收交接
+
+无需人工验收。
+
+## 5. 未通过或阻塞
+
+暂无
+
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](./完整研发流程按最少用户环节推进并兼容旧轮次_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/完整研发流程按最少用户环节推进并兼容旧轮次_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | `acceptance/完整研发流程按最少用户环节推进并兼容旧轮次_验收结果.md`（待生成） | 本主题验收在这里记录 |

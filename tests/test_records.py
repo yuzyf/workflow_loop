@@ -415,7 +415,7 @@ Workflow-Test
         encoding="utf-8",
     )
     problems, _docs = records_mod.sync_stage_tables(str(root), _state_with_stage("wf-1", "spec"))
-    assert any("文档被直接修改" in message for _category, message in problems)
+    assert any("与工作记录表不一致" in message for _category, message in problems)
 
 
 def _blank_impl_table() -> dict:
@@ -552,7 +552,7 @@ def test_generate_impl_doc_and_detect_tamper(tmp_path: Path) -> None:
         str(root),
         _state_with_stage("wf-1", "impl"),
     )
-    assert any("文档被直接修改" in message for _category, message in problems)
+    assert any("与工作记录表不一致" in message for _category, message in problems)
     assert "手工追加" in doc.read_text(encoding="utf-8")
 
 
@@ -583,7 +583,7 @@ def test_pristine_table_activates_table_path_and_reports_unfilled(tmp_path: Path
         _state_with_stage("wf-1", "impl"),
     )
     assert any("尚未填写" in message for _category, message in problems), problems
-    assert not any("文档被直接修改" in message for _category, message in problems)
+    assert not any("与工作记录表不一致" in message for _category, message in problems)
     assert documents == []
 
 

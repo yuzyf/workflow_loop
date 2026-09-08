@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "652ea348c56bc6b5178a8e827b8fff1904a28e584598d7925f7bbebdbccc9868",
+    "生成文档路径": "acceptance/无代码改动轮次跳过全量回归执行_验收结果.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/无代码改动轮次跳过全量回归执行_验收结果.md": {
+      "body_hash": "791ed4cc866f25a8b76979c6fdc458451d521b63a98756d461cb320ad3e62b8a"
+    }
+  }
+}

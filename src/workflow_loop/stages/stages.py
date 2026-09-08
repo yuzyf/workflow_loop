@@ -70,6 +70,43 @@ def _validator_error(label: str, result: tuple[bool, str], errors: list[str]) ->
     return ok
 
 
+def _baseline_conflict_facts(state, project_root: str, overview_rel: str) -> str:
+    """R46：基线类失败附上产物基线与当前哈希的对比事实，不只报断言。"""
+    stage_state = state.stages.get("spec")
+    if stage_state is None or stage_state.artifact_baseline_captured_at is None:
+        return "（无法提供对比数据：当前轮次没有记录产物基线；先通过第一道门后再修改产物文件）"
+    baseline_hashes = stage_state.artifact_baseline_hashes or {}
+    normalized_rel = overview_rel.replace(os.sep, "/")
+    baseline_hash = baseline_hashes.get(normalized_rel)
+    current_hash = None
+    try:
+        from .. import verification as verification_mod
+
+        current_hashes = verification_mod.compute_file_hashes(
+            project_root, [normalized_rel]
+        )
+        current_hash = current_hashes.get(normalized_rel)
+    except Exception:
+        current_hash = None
+    facts = (
+        f"产物基线拍摄时间：{stage_state.artifact_baseline_captured_at}；"
+        f"产品总说明基线哈希：{baseline_hash or '（基线中无该文件，登记为不存在）'}；"
+        f"当前哈希：{current_hash or '（无法读取）'}；"
+    )
+    if baseline_hash is not None and baseline_hash == current_hash:
+        facts += (
+            "对比结论：当前内容与基线完全一致——如果本阶段已经做过修改，"
+            "说明修改发生在基线拍摄之前（已被记进基线）；"
+            "先通过第一道门（--discuss-done）之后再修改产物文件。"
+        )
+    else:
+        facts += (
+            "对比结论：当前内容与基线不同或无法比较；"
+            "确认修改发生在第一道门之后；核对确认无需修改的内容不要求制造无意义修改。"
+        )
+    return facts
+
+
 def _stage_table_sync(
     project_root: str,
     workflow_state,
@@ -195,7 +232,10 @@ class SpecStage(StageStrategy):
             if state.intent == "from_scratch" and (not product_changed or not feature_changed):
                 errors.append("从零创建产品时，产品总说明和至少一份功能文档都必须在本阶段新建")
             if state.intent == "product_change" and not product_changed:
-                errors.append("修改产品时，产品总说明必须更新并记录本轮变化")
+                errors.append(
+                    "修改产品时，产品总说明必须更新并记录本轮变化。"
+                    + _baseline_conflict_facts(state, project_root, overview_rel)
+                )
         return _validation_result(
             errors,
             f"产品设计文档存在并且属于本阶段修改: 产品总说明 + {[os.path.basename(p) for p in linked_paths]}",

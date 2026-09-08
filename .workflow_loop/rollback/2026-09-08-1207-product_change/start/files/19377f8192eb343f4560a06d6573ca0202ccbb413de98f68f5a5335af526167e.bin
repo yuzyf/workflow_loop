@@ -1,0 +1,43 @@
+# 机器事实由程序采集进工作记录表测试计划
+
+- 工作流编号：2026-09-08-0228-product_change
+- 上游验收计划：[机器事实由程序采集进工作记录表验收计划](../acceptance/机器事实由程序采集进工作记录表_验收计划.md)
+
+<a id="1-验收条件覆盖"></a>
+## 1. 验收条件覆盖
+
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：实施改动程序采集](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 采集写入与门禁重算一致且重采集保留叙述列](#tc-01) | 无 | 自动化测试 | workflow collect 命令 | `src/workflow_loop/machine_collect.py::collect_implementation_changes` | `tests/test_machine_collect.py::test_collect_implementation_changes_preserves_narrative` | v4 实施记录表已有 AI 叙述列；实施前回退清单存在；差异文件与计划行归属一致 | 执行采集命令后再修改文件并重新采集 | 实施记录表实际代码修改行的文件与代码位置列及采集指纹 | 采集后位置列由程序写入且与门禁重算一致；重采集后 AI 叙述列逐字保留；指纹记录文件内容哈希 | 叙述列被清空或改写；指纹缺失 | pytest junitxml 报告与退出码 |
+| [AC-01：实施改动程序采集](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-01) | <a id="tc-02"></a>[TC-02 采集后文件变化触发请重新采集报错](#tc-02) | 无 | 自动化测试 | workflow gate impl 第二道门 | `src/workflow_loop/machine_collect.py::verify_collection_fingerprint` | `tests/test_machine_collect.py::test_verify_collection_fingerprint_detects_change` | v4 表内已有采集指纹；指纹后文件内容再变化 | 执行门禁触发指纹重算比对 | 门禁报错输出 | 报错含变化文件清单、请重新执行采集命令、叙述列会保留字样 | 指纹不一致仍放行；报错不含文件清单 | pytest junitxml 报告与退出码 |
+| [AC-02：计划外文件明确处理](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-02) | <a id="tc-03"></a>[TC-03 计划外修改文件按回退副本→基线提交号顺序取内容且都取不到时报错](#tc-03) | 无 | 自动化测试 | workflow collect 命令 | `src/workflow_loop/machine_collect.py::_entry_text_or_none` | `tests/test_machine_collect.py::test_collect_error_message_contains_path_and_next_step` | 计划外修改文件在回退清单登记但副本不可读 | 执行采集命令取改动前内容 | CollectError 异常消息 | 报错含文件名与无法读取字样；新文件（无登记）不报错按全部新增登记 | 报错不含文件名；新文件被报错 | pytest junitxml 报告与退出码 |
+| [AC-02：计划外文件明确处理](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-02) | <a id="tc-04"></a>[TC-04 子目录项目用进场基线提交号取进场内容且脏代码不记录基线](#tc-04) | 无 | 自动化测试 | workflow gate impl --discuss-done 后的进场动作 | `src/workflow_loop/machine_collect.py::record_entry_git_baseline` | `tests/test_machine_collect.py::test_git_show_entry_baseline_for_subdirectory` | git 仓库子目录项目；进场时代码范围干净或脏两种场景 | 进场时记录基线提交号，随后修改文件并用提交号取内容 | state.meta 的 impl_entry_git_commit 与取到的内容 | 代码干净时记录提交号且修改后仍能取到进场内容；代码脏时不记录该键 | 脏代码也记录提交号；修改后取到的是新内容 | pytest junitxml 报告与退出码 |
+| [AC-03：验收结果五列程序回填](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-03) | <a id="tc-05"></a>[TC-05 验收五列程序回填且失效记录标记待重做](#tc-05) | 无 | 自动化测试 | workflow gate topic_acceptance 第二道门 | `src/workflow_loop/records.py::_fill_acceptance_row_columns` | `tests/test_machine_collect.py::test_fill_acceptance_row_columns_automated` | 主题验收记录存在（自动化、人工、混合三种方式） | 门禁同步验收结果表 | 验收结果表五列的值 | 五列与状态记录精确一致；自动化方式用户实际回答与人工确认为不适用；机器编号取 test_record_ids | 五列与记录不一致；自动化方式的用户回答不是不适用 | pytest junitxml 报告与退出码 |
+| [AC-04：编号引用程序渲染校验](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-04) | <a id="tc-06"></a>[TC-06 编号引用只写编号且断档合法已删编号报行已删除](#tc-06) | 无 | 自动化测试 | workflow gate 各第二道门 | `src/workflow_loop/machine_collect.py::resolve_id_reference` | `tests/test_machine_collect.py::test_id_reference_accepts_known_ids` | 表内已有编号集合与已删除编号集合 | 引用编号通过程序校验 | 校验返回的通过与消息 | 已知编号通过；已删编号报已删除；未知编号报不存在并给当前可用编号；含格式内容被拒 | 已删编号通过；未知编号不提示可用编号 | pytest junitxml 报告与退出码 |
+| [AC-05：测试标识程序生成](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-05)、[AC-06：表版本升4旧轮次不迁移](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-06) | <a id="tc-07"></a>[TC-07 测试标识按计划表生成与解析字段同源且 v4 表兼容旧版本](#tc-07) | 无 | 自动化测试 | workflow test prepare --from-tables | `src/workflow_loop/test_mapping.py::build_marker_from_plan` | `tests/test_machine_collect.py::test_render_test_marker_matches_field_labels` | 测试计划表行已填写；v3 与 v4 表并存 | 登记测试任务时输出标识文本；校验 v3/v4 表结构 | 标识输出文本与 validate_table 结果 | 标识字段与 MARKER_FIELDS 同源；v4 放行采集指纹键；v3 拒绝指纹键（旧轮次不迁移） | 标识字段与解析标签不一致；v3 表接受新键 | pytest junitxml 报告与退出码 |
+| [AC-01：实施改动程序采集](../acceptance/机器事实由程序采集进工作记录表_验收计划.md#ac-01) | <a id="tc-08"></a>[TC-08 采集位置值与门禁行号格式同源](#tc-08) | 无 | 自动化测试 | workflow collect 命令 | `src/workflow_loop/machine_collect.py::collect_diff_facts` | `tests/test_machine_collect.py::test_collect_location_values_pass_gate_format` | 新文件与多块差异文件并存 | 执行采集生成位置值 | 位置值能否被 _parse_recorded_line_range 接受 | 新文件 L1-L行数、多块写覆盖全部差异的连续范围，全部通过门禁格式 | 位置值含文字描述或顿号连接被门禁拒绝 | pytest junitxml 报告与退出码 |
+
+<a id="2-针对性回归范围"></a>
+## 2. 针对性回归范围
+
+- tests/test_records.py、tests/test_workflow_guidance.py、tests/test_gate_rework_stability.py 的表行为回归（3 处报错文案断言已随 R46 更新）。
+
+<a id="3-测试条件要求"></a>
+## 3. 测试条件要求
+
+- 测试运行需可写临时目录与 git 命令可用（本仓库满足）。
+
+<a id="4-未决测试条件"></a>
+## 4. 未决测试条件
+
+- 暂无
+
+<a id="5-上下游文档"></a>
+## 5. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [机器事实由程序采集进工作记录表验收计划](../acceptance/机器事实由程序采集进工作记录表_验收计划.md) | 本测试计划依据的验收条件 |
+| 上游 | [实施记录](../impl/机器事实由程序采集进工作记录表_实施记录.md) | 测试入口和观察位置来自已确认实施与真实代码 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整交付关系和状态 |
+| 下游 | [机器事实由程序采集进工作记录表测试结果](./机器事实由程序采集进工作记录表_测试结果.md) | 记录正式执行的结构化报告事实 |

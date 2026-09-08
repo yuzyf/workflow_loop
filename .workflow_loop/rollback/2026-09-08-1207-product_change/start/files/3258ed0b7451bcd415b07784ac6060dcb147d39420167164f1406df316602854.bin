@@ -1,0 +1,119 @@
+# 【实施】同轮多个缺陷各自留证并独立验收
+
+- 工作流编号：2026-09-07-0700-product_change
+- 验收主题：同轮多个缺陷各自留证并独立验收
+
+<a id="1-实施依据"></a>
+## 1. 实施依据
+
+| 依据类型 | 依据编号 | 具体内容 | 文档位置 |
+|---|---|---|---|
+| 产品设计 | JU-01 | 同轮每个缺陷都能保留独立事实、凭据和验收结果，不需要因为缺陷数量增加而重新开工。 | [复现产品缺陷 R11](../spec/功能_复现产品缺陷.md#r-11)、[R18](../spec/功能_复现产品缺陷.md#r-18)、[R19](../spec/功能_复现产品缺陷.md#r-19)、[R20](../spec/功能_复现产品缺陷.md#r-20) |
+| 验收条件 | JU-02 | AC-01：两份都能首次生成且重复生成稳定；没有凭据冲突，未改主题的事实和入口保留。 | [独立生成多份缺陷](../acceptance/同轮多个缺陷各自留证并独立验收_验收计划.md#ac-01) |
+| 验收条件 | JU-03 | AC-02：旧表版本一至三均可继续；有效新表独立处理；重复、缺失、标识冲突和篡改均拒绝且不覆盖正式事实。 | [旧表兼容且错误零覆盖](../acceptance/同轮多个缺陷各自留证并独立验收_验收计划.md#ac-02) |
+| 验收条件 | JU-04 | AC-03：原始复现事实保留，未受影响主题不被清空；任一主题未完成时整轮不能完成。 | [退回只清除受影响主题](../acceptance/同轮多个缺陷各自留证并独立验收_验收计划.md#ac-03) |
+| 现有代码设计 | JU-05 | 沿用命令编排、阶段门禁、记录生成、追加日志和状态分工；只修改本主题对应职责。 | [命令编排层](../spec/代码架构设计.md#43-命令编排层) |
+
+<a id="2-实施前计划"></a>
+<a id="2-实施前计划代码计划"></a>
+## 2. 实施前计划（代码计划）
+
+
+<a id="21-预期产品结果"></a>
+### 2.1 预期产品结果
+
+- 同轮每个缺陷都能保留独立事实、凭据和验收结果，不需要因为缺陷数量增加而重新开工。
+
+<a id="22-最低实现设计"></a>
+### 2.2 最低实现设计
+
+| 设计项 | 已确认做法 | 选择理由 | 对应验收条件 |
+|---|---|---|---|
+| 模块与职责 | create_or_complete_table（建表）、sync_stage_tables（阶段生成）、_generation_receipt_path（凭据路径）、_bug_defect_documents（缺陷正文与索引）；validate_reproduce_documents（复现文档校验）；cmd_scaffold（补建工作记录表入口）；缺陷复现规范中的主题和表使用说明，不改变本主题之外的产品规则。 | 修改集中在真实故障发生的调用链，保留既有阶段和文件约定。 | AC-01、AC-02、AC-03 |
+| 数据、状态与副作用 | 验收多主题建表、正式缺陷生成、索引合并、凭据隔离、旧表兼容、错误拒绝和按主题退回。；不改变已确认产品行为的定义，不取消整轮回归；其他四项遗留问题由各自主题验收。 | 只读诊断和写前检查保留已有历史，实际生成和状态写入仍由程序负责。 | AC-01、AC-02、AC-03 |
+| 错误与边界 | 第二份因第一份凭据被拒绝，重生成覆盖其他缺陷，或索引丢失任一入口均不通过。；旧表被强制迁移，已登记但不完整的主题被跳过，或非法输入改写正式事实均不通过。；退回一个主题清除另一主题，旧结论复活，或未完成全部主题即允许收工均不通过。 | 错误必须保留证据并指出具体输入，不用覆盖历史或降低门禁换取通过。 | AC-01、AC-02、AC-03 |
+
+<a id="23-代码修改计划"></a>
+### 2.3 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改内容 | 数据、状态或输出变化 | 对应验收条件 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | src/workflow_loop/records.py | create_or_complete_table（建表）、sync_stage_tables（阶段生成）、_generation_receipt_path（凭据路径）、_bug_defect_documents（缺陷正文与索引） | 缺陷主题虽可建表，文档和凭据却按轮次覆盖；阶段只读取基础表，索引只追加整行。 | 统一发现基础和主题缺陷表，写前检查身份、重复、缺表及手改；凭据按实际表路径隔离，索引只比较本主题事实并保留状态。 | 两份缺陷均可生成和独立重生成，旧单表原路径保留，错误时正式文档不变。 | AC-01、AC-02 | 无 |
+| 2 | src/workflow_loop/artifact_validation.py | validate_reproduce_documents（复现文档校验） | 只读取一份基础缺陷事实表，新增主题表不能逐份对应校验。 | 按本轮全部已登记缺陷表建立主题与文档对应关系，逐份验证固定事实和当前轮次，保留旧文档模式。 | 每个缺陷文档使用自己的复现事实，不会将第二主题套用第一主题的表。 | AC-01、AC-02 | 无 |
+| 3 | src/workflow_loop/cli.py | cmd_scaffold（补建工作记录表入口） | 显式传主题时所有表都按主题生成，关系表也会被错误分拆。 | 只让主题表与缺陷表使用显式主题；关系表等轮次级表仍只有一份，已有表身份冲突写前拒绝。 | 多主题复现入口可直接建独立表，验收关系表不会分裂。 | AC-01、AC-02 | 无 |
+| 4 | src/workflow_loop/data/Standardized_Repository/reproduce/reproduce.md | 缺陷复现规范中的主题和表使用说明 | 复现规范按一份缺陷记录描述，没有明确多份表的独立生成约束。 | 说明同轮多个缺陷各填一张主题表，各留复现证据，按主题验收和退回，最后共用整轮回归。 | 安装包下发规范与多缺陷实现一致，旧单表继续按原路径处理。 | AC-01、AC-02、AC-03 | 无 |
+| 5 | src/workflow_loop/records.py | 新增 _fill_acceptance_record_ids（从当前有效验收状态回填程序编号），接入 sync_stage_tables（阶段按表生成）与 sync_documents（直接按表生成） | 验收结果生成直接输出表中编号；按填写说明留空后，正式文档编号仍为空，没有回填当前状态已存在的记录。 | 生成前按主题和验收条件取得当前有效记录，核对结论、方式和机器依据，回填程序记录编号；证据缺失时保留正式文档并报告。 | 每个主题的验收文档包含独立且有效的程序编号；直接生成与阶段生成使用相同来源，不能靠手填编号弥补。 | AC-01、AC-03 | 无 |
+
+<a id="开发检查计划"></a>
+#### 开发检查计划
+
+| 检查命令或方法 | 检查范围 | 预期观察结果 |
+|---|---|---|
+| env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py -p no:cacheprovider | 验收多主题建表、正式缺陷生成、索引合并、凭据隔离、旧表兼容、错误拒绝和按主题退回。 | 两份都能首次生成且重复生成稳定；没有凭据冲突，未改主题的事实和入口保留。；旧表版本一至三均可继续；有效新表独立处理；重复、缺失、标识冲突和篡改均拒绝且不覆盖正式事实。；原始复现事实保留，未受影响主题不被清空；任一主题未完成时整轮不能完成。 |
+| env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-acceptance-id-probe.py tests/test_records.py tests/test_acceptance_records.py -p no:cacheprovider | 验收结果留空程序编号后的生成，以及记录缺失、失效、主题隔离和既有表兼容。 | 有效记录自动回填，缺少或不匹配的依据明确拒绝且不覆盖文档；既有测试继续通过。 |
+
+<a id="24-未决问题"></a>
+### 2.4 未决问题
+
+- 暂无
+
+<a id="3-实施后记录"></a>
+<a id="3-实施后记录代码实施与代码结果"></a>
+## 3. 实施后记录（代码实施与代码结果）
+
+<a id="31-实施动作记录"></a>
+### 3.1 实施动作记录
+
+| 实施顺序 | 对应计划步骤 | 文件 | 代码位置（最终文件） | 实际执行的动作 | 当步反馈 | 状态 |
+|---|---|---|---|---|---|---|
+| 1 | 1 | src/workflow_loop/records.py | L263-L3424 | 新增缺陷表统一发现和整批预检；新主题按表路径隔离凭据，旧基础表保持原路径；索引凭据只绑定本主题事实列，生成时保留其他入口和后续状态；首次验收建表不再依赖尚未生成的本轮索引。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 2 | 2 | src/workflow_loop/artifact_validation.py | L1526-L1578 | 复现检查按各表的验收主题建立对应关系，检查本轮全部缺陷文档、逐份事实表以及缺失和重复主题。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 3 | 3 | src/workflow_loop/cli.py | L5219-L5221 | 显式按主题建表时仅主题表和缺陷表使用主题参数，关系表等轮次级表只生成一份。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 4 | 4 | src/workflow_loop/data/Standardized_Repository/reproduce/reproduce.md | L47-L50 | 复现规范说明多主题建表、独立证据、旧单表兼容、错误拒绝以及共用整轮回归。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 5 | 额外 | src/workflow_loop/bug_record.py | L7-L145 | 新增按 Markdown（文档结构）解析索引的入口定位与行替换，状态更新与记录生成共用它；保留旧两列索引，正确保留管道符与反斜线事实。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 6 | 5 | src/workflow_loop/records.py | L2107-L3607 | 在两种按表生成入口写文档前校验当前验收记录，检查轮次、主题、验收条件、记录有效性、结论、方式和机器依据；编号只取当前状态并回填表中，任一证据错误则不生成该主题正式文档。 | 退出码 0，37 项局部开发检查通过；原编号缺失探针已通过，新增直接生成、重复生成、缺记录、失效记录和机器依据不匹配检查也通过。 | 已完成 |
+
+<a id="32-实施中问题与处理"></a>
+### 3.2 实施中问题与处理
+
+- 用户已授权 AI 持续完成流程，本轮确认由 AI 代行；不声称用户亲自执行开发检查或验收。
+- 第 22 号缺陷通过隔离临时项目复现：真实自动验收记录存在，但按表生成后文档的验收编号为空。先返回实施再修复，同一生成器影响五个主题的正式验收文档。
+- 第 22 号缺陷补充修复完成；程序编号不信任手填值，只从有效记录取得。下一测试阶段用真实生成文档替换临时项目测试中的简化验收样本，并重新正式执行全部主题。
+
+<a id="33-未完成内容"></a>
+### 3.3 未完成内容
+
+状态：无
+
+<a id="34-代码结果"></a>
+### 3.4 代码结果
+
+<a id="341-实际代码修改"></a>
+#### 3.4.1 实际代码修改
+
+| 文件 | 代码位置（最终文件） | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 修改理由 | 对应验收条件 | 测试证据 |
+|---|---|---|---|---|---|---|
+| src/workflow_loop/records.py | L263-L3607 | 新增缺陷表统一发现和整批预检；新主题按表路径隔离凭据，旧基础表保持原路径；索引凭据只绑定本主题事实列，生成时保留其他入口和后续状态；首次验收建表不再依赖尚未生成的本轮索引。 验收结果在阶段及直接生成入口共用当前记录检查与程序编号回填；缺失或失效证据、错误结论和机器依据均阻止写入，冻结版本一保留原结构。 | 第二份缺陷表可首次生成；改一份不覆盖另一份；无效身份、缺表或手改时整批正式输出不变。 各主题验收文档含有效独立编号，不再输出空编号；重复生成稳定，缺证据时保留原文。 | 同轮每个缺陷都能保留独立事实、凭据和验收结果，不需要因为缺陷数量增加而重新开工。 | AC-01、AC-02、AC-03 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。；补充：env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-acceptance-id-probe.py tests/test_records.py tests/test_acceptance_records.py -p no:cacheprovider；退出码 0，37 项局部开发检查通过；原编号缺失探针已通过，新增直接生成、重复生成、缺记录、失效记录和机器依据不匹配检查也通过。 |
+| src/workflow_loop/artifact_validation.py | L1526-L1578 | 复现检查按各表的验收主题建立对应关系，检查本轮全部缺陷文档、逐份事实表以及缺失和重复主题。 | 第二主题不会套用基础表事实，旧轮次文档不会冒充本轮复现材料。 | 同轮每个缺陷都能保留独立事实、凭据和验收结果，不需要因为缺陷数量增加而重新开工。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+| src/workflow_loop/cli.py | L5219-L5221 | 显式按主题建表时仅主题表和缺陷表使用主题参数，关系表等轮次级表只生成一份。 | 同轮可直接建立多份缺陷表，验收关系表不因主题数量被分拆。 | 同轮每个缺陷都能保留独立事实、凭据和验收结果，不需要因为缺陷数量增加而重新开工。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+| src/workflow_loop/data/Standardized_Repository/reproduce/reproduce.md | L47-L50 | 复现规范说明多主题建表、独立证据、旧单表兼容、错误拒绝以及共用整轮回归。 | 新安装项目与本项目材料给出相同的多缺陷处理要求。 | 同轮每个缺陷都能保留独立事实、凭据和验收结果，不需要因为缺陷数量增加而重新开工。 | AC-01、AC-02、AC-03 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+| src/workflow_loop/bug_record.py | L7-L145 | 新增按 Markdown（文档结构）解析索引的入口定位与行替换，状态更新与记录生成共用它；保留旧两列索引，正确保留管道符与反斜线事实。 | 更新状态只影响指定行，重复入口明确拒绝，其他主题与索引结构保持不变。 | 索引状态与复现生成共同修改同一条目，必须共用结构解析以保护其他缺陷；属于已确认多主题边界。 | AC-01、AC-02、AC-03 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+
+<a id="342-开发检查记录"></a>
+#### 3.4.2 开发检查记录
+
+| 检查命令或方法 | 检查范围 | 实际反馈 | 是否需要继续修改 |
+|---|---|---|---|
+| env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider | 验收多主题建表、正式缺陷生成、索引合并、凭据隔离、旧表兼容、错误拒绝和按主题退回。 | 命令退出码 0，33 项局部检查通过；原三项探针和补齐真实前置状态后的架构探针均通过。 | 否 |
+| env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-acceptance-id-probe.py tests/test_records.py tests/test_acceptance_records.py -p no:cacheprovider | 验收程序编号回填、直接生成与阶段生成一致、无效证据不覆盖和既有记录兼容。 | 退出码 0，37 项局部开发检查通过；原编号缺失探针已通过，新增直接生成、重复生成、缺记录、失效记录和机器依据不匹配检查也通过。 | 否 |
+
+<a id="4-上下游文档"></a>
+## 4. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/同轮多个缺陷各自留证并独立验收_验收计划.md) | 本主题要达到的用户结果和验收条件 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整交付链路 |
+| 下游 | [同轮多个缺陷各自留证并独立验收 测试计划](../qa/同轮多个缺陷各自留证并独立验收_测试计划.md) | 代码结果确认后，在测试验证开始时确认范围和通过标准 |
+| 下游 | [同轮多个缺陷各自留证并独立验收 测试结果](../qa/同轮多个缺陷各自留证并独立验收_测试结果.md) | 同一测试验证阶段连续完成测试代码、登记、执行和结果 |
+| 下游 | [同轮多个缺陷各自留证并独立验收 验收结果](../acceptance/同轮多个缺陷各自留证并独立验收_验收结果.md) | 正式测试后执行主题验收 |

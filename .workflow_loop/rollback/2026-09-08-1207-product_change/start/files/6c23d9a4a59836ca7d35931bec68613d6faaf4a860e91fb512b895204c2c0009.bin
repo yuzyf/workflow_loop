@@ -1,0 +1,195 @@
+# 【主题测试结果】登记测试项时入口填不对当场说清而不是测完才失败
+
+- 工作流编号：2026-09-03-0231-bugfix
+- 验收主题：登记测试项时入口填不对当场说清而不是测完才失败
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 测试完成时间：2026-09-03T03:23:55+00:00
+
+## 1. 测试依据
+
+- [验收计划](../acceptance/登记测试项时入口填不对当场说清而不是测完才失败_验收计划.md)
+- [测试计划](./登记测试项时入口填不对当场说清而不是测完才失败_测试计划.md)
+- [代码计划、实施和结果](../impl/登记测试项时入口填不对当场说清而不是测完才失败_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+## 2. 测试环境和执行说明
+
+- 本主题执行范围：tests/test_table_entry_registration.py 里的 5 个测试函数，一个测试项一条命令。
+- 执行顺序：5 个测试项互相没有前置依赖，按登记顺序执行，全部在一次 workflow test run 中完成。
+- 未执行项：无，本主题没有人工验收测试项。
+
+## 3. 测试项结果
+
+### TC-01：两列说明写清怎么填
+
+- 对应验收条件：AC-01
+- 机器记录编号：RUN-20260903T032353+0000-7eddf0c5
+- 工作目录：项目根
+- 测试入口：["tests/test_table_entry_registration.py::test_official_target_hint_states_shape_example_and_multi_entry"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_table_entry_registration.py::test_official_target_hint_states_shape_example_and_multi_entry","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-03-0231-bugfix/登记测试项时入口填不对当场说清而不是测完才失败/TC-01.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-03T03:23:53+00:00
+- 结束时间：2026-09-03T03:23:54+00:00
+- 时长（秒）：0.698
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.58s\n"
+- 输出哈希：8afe2471606046b386cbefd7224d475f9d94ddb804d914ca3a5b3472c14d8f5c
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：0eed96f356977e73dd97fc50483ef8d23fb480ff18e862b1e3e5b65dd02faed6
+- 报告字节数：585
+- 精确匹配测试入口：["tests/test_table_entry_registration.py::test_official_target_hint_states_shape_example_and_multi_entry"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7643d623ac154d938c5eebb82894c1d91bb0439baa693fcb27672a229a50fd8a
+- 测试代码哈希：ad52cba1694cf15621f1c5896e5deaddf5c3920060e717ed115b9f659e5eff0b
+- 自动化测试结果：通过
+- 实际结果：在隔离临时项目里让程序生成测试计划工作记录表后，读出的“正式目标名称”说明确实同时含有必须形状、可照抄的例子、多入口的 JSON 数组写法和“唯一来源”四项，“测试入口”说明含“不是登记入口”。这证明 AC-01 要求的四件事和两列分工都写进了程序真实写入的说明文字里。
+- 证据：机器记录 RUN-20260903T032353+0000-7eddf0c5；结构化报告哈希 0eed96f356977e73dd97fc50483ef8d23fb480ff18e862b1e3e5b65dd02faed6
+
+### TC-02：填纯标题当场被拒绝
+
+- 对应验收条件：AC-02
+- 机器记录编号：RUN-20260903T032354+0000-a6eb0e59
+- 工作目录：项目根
+- 测试入口：["tests/test_table_entry_registration.py::test_prepare_from_tables_rejects_bare_title_without_registering"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_table_entry_registration.py::test_prepare_from_tables_rejects_bare_title_without_registering","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-03-0231-bugfix/登记测试项时入口填不对当场说清而不是测完才失败/TC-02.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-03T03:23:54+00:00
+- 结束时间：2026-09-03T03:23:54+00:00
+- 时长（秒）：0.137
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：ec957aaae1bb0df373730a2c20922540f91c2ab44d9365834444c7d1a7b7c57f
+- 报告字节数：587
+- 精确匹配测试入口：["tests/test_table_entry_registration.py::test_prepare_from_tables_rejects_bare_title_without_registering"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7643d623ac154d938c5eebb82894c1d91bb0439baa693fcb27672a229a50fd8a
+- 测试代码哈希：ad52cba1694cf15621f1c5896e5deaddf5c3920060e717ed115b9f659e5eff0b
+- 自动化测试结果：通过
+- 实际结果：把“正式目标名称”填成纯测试标题后按表登记，命令以退出码 1 结束，输出里同时出现验收主题、TC-01、列名“正式目标名称”、实际填的“验证上传写入与覆盖”和正确形状“项目相对路径::报告里的目标名”；重新读状态文件时该主题的登记任务是空字典。这证明 AC-02 要求的当场拒绝、说清位置和不留下登记任务三点都成立。
+- 证据：机器记录 RUN-20260903T032354+0000-a6eb0e59；结构化报告哈希 ec957aaae1bb0df373730a2c20922540f91c2ab44d9365834444c7d1a7b7c57f
+
+### TC-03：表校验报出同一问题
+
+- 对应验收条件：AC-02
+- 机器记录编号：RUN-20260903T032354+0000-5fa9ab98
+- 工作目录：项目根
+- 测试入口：["tests/test_table_entry_registration.py::test_table_gate_reports_bare_title_as_format_problem"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_table_entry_registration.py::test_table_gate_reports_bare_title_as_format_problem","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-03-0231-bugfix/登记测试项时入口填不对当场说清而不是测完才失败/TC-03.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-03T03:23:54+00:00
+- 结束时间：2026-09-03T03:23:54+00:00
+- 时长（秒）：0.131
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：ac9fec72845ddd1da45b53f376a296f75d564c2d3967fd42e3f79726559b9bf1
+- 报告字节数：565
+- 精确匹配测试入口：["tests/test_table_entry_registration.py::test_table_gate_reports_bare_title_as_format_problem"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7643d623ac154d938c5eebb82894c1d91bb0439baa693fcb27672a229a50fd8a
+- 测试代码哈希：ad52cba1694cf15621f1c5896e5deaddf5c3920060e717ed115b9f659e5eff0b
+- 自动化测试结果：通过
+- 实际结果：对同一张填错的表执行测试验证环节的表校验，得到且只得到一条与“正式目标名称”有关的格式问题，位置写到“测试项 第 1 行（测试项编号 TC-01）”，文字里带实际值和正确形状。这证明 AC-02 中“同一问题在第二道门的表校验里也报出”这部分成立。
+- 证据：机器记录 RUN-20260903T032354+0000-5fa9ab98；结构化报告哈希 ac9fec72845ddd1da45b53f376a296f75d564c2d3967fd42e3f79726559b9bf1
+
+### TC-04：一格登记两个入口并通过
+
+- 对应验收条件：AC-03
+- 机器记录编号：RUN-20260903T032354+0000-d8613d11
+- 工作目录：项目根
+- 测试入口：["tests/test_table_entry_registration.py::test_two_entries_in_one_cell_register_and_pass"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_table_entry_registration.py::test_two_entries_in_one_cell_register_and_pass","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-03-0231-bugfix/登记测试项时入口填不对当场说清而不是测完才失败/TC-04.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-03T03:23:54+00:00
+- 结束时间：2026-09-03T03:23:55+00:00
+- 时长（秒）：0.283
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.20s\n"
+- 输出哈希：93c97c10af4fc8b54296201243c032c5e8295479ca6b4adc06019033d6f9e282
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：2df868811075f9fa8c85cc04f26f4664bb31be605ad8c71bef3a7b0adcae1916
+- 报告字节数：553
+- 精确匹配测试入口：["tests/test_table_entry_registration.py::test_two_entries_in_one_cell_register_and_pass"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7643d623ac154d938c5eebb82894c1d91bb0439baa693fcb27672a229a50fd8a
+- 测试代码哈希：ad52cba1694cf15621f1c5896e5deaddf5c3920060e717ed115b9f659e5eff0b
+- 自动化测试结果：通过
+- 实际结果：一个测试项由同文件两个测试函数覆盖、“正式目标名称”按 JSON 数组写两个入口时，登记出的入口正是这两条；真实执行后判定 passed，机器记录的精确匹配入口同样是这两条，实际执行数为 2，跳过数、失败数和错误数都是 0。这证明 AC-03 要求的多入口登记与执行判定成立。
+- 证据：机器记录 RUN-20260903T032354+0000-d8613d11；结构化报告哈希 2df868811075f9fa8c85cc04f26f4664bb31be605ad8c71bef3a7b0adcae1916
+
+### TC-05：填对的表结论不变
+
+- 对应验收条件：AC-04
+- 机器记录编号：RUN-20260903T032355+0000-c3b99440
+- 工作目录：项目根
+- 测试入口：["tests/test_table_entry_registration.py::test_single_correct_entry_still_registers_and_passes"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_table_entry_registration.py::test_single_correct_entry_still_registers_and_passes","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-03-0231-bugfix/登记测试项时入口填不对当场说清而不是测完才失败/TC-05.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-03T03:23:55+00:00
+- 结束时间：2026-09-03T03:23:55+00:00
+- 时长（秒）：0.267
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.18s\n"
+- 输出哈希：fa8e3e1f0a4b084326a7027307e5cc3a94f799f9733ea598c3b878fa3c70f37c
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：54c7edaaa13265d99307478610ca04fd0f4ad8b4424434a78eee5a626d367571
+- 报告字节数：565
+- 精确匹配测试入口：["tests/test_table_entry_registration.py::test_single_correct_entry_still_registers_and_passes"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7643d623ac154d938c5eebb82894c1d91bb0439baa693fcb27672a229a50fd8a
+- 测试代码哈希：ad52cba1694cf15621f1c5896e5deaddf5c3920060e717ed115b9f659e5eff0b
+- 自动化测试结果：通过
+- 实际结果：“正式目标名称”写成单个 项目相对路径::标识 时，登记入口仍是原来那一条，执行前的登记校验返回通过，真实执行判定 passed，机器记录的精确匹配入口与登记入口一一对应，实际执行数为 1。这证明 AC-04 要求的“已经填对的表结论不变”成立。
+- 证据：机器记录 RUN-20260903T032355+0000-c3b99440；结构化报告哈希 54c7edaaa13265d99307478610ca04fd0f4ad8b4424434a78eee5a626d367571
+
+## 4. 人工验收交接
+
+- 本主题没有人工验收或混合测试项，四条验收条件都由机器判断，不需要用户逐项复核操作步骤。
+
+## 5. 未通过或阻塞
+
+- 暂无
+
+### 结果说明
+
+- 本主题 5 个自动化测试项全部通过，四条验收条件各自至少有一个测试项给出机器事实：AC-01 由 TC-01 覆盖，AC-02 由 TC-02 和 TC-03 从按表登记和表校验两个入口分别覆盖，AC-03 由 TC-04 覆盖，AC-04 由 TC-05 覆盖。
+- 每个测试项都在自己的隔离临时项目里通过真实产品入口执行，没有使用固定返回值或替身绕过被测逻辑；两个涉及真实执行的测试项在临时项目里启动了 pytest 子进程并读取它自己写出的 junit 报告。
+
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/登记测试项时入口填不对当场说清而不是测完才失败_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](./登记测试项时入口填不对当场说清而不是测完才失败_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/登记测试项时入口填不对当场说清而不是测完才失败_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | [登记测试项时入口填不对当场说清而不是测完才失败验收结果](../acceptance/登记测试项时入口填不对当场说清而不是测完才失败_验收结果.md) | 混合测试在这里接收人工确认 |

@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "7e2807bda5129802b753bbd35b4f9b4b7674e75f78d83ffa6deef5d98647a634",
+    "生成文档路径": "acceptance/代码符号自动定位_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/代码符号自动定位_验收计划.md": {
+      "body_hash": "7d62f6e6504fe3d800a10f1cc18792b2d860d4f63325fd8682e2e5435eecb2fe"
+    }
+  }
+}

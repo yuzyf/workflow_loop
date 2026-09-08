@@ -1,0 +1,123 @@
+# 【实施】测试登记按表指引首次执行即可成功
+
+- 工作流编号：2026-09-07-0700-product_change
+- 验收主题：测试登记按表指引首次执行即可成功
+
+<a id="1-实施依据"></a>
+## 1. 实施依据
+
+| 依据类型 | 依据编号 | 具体内容 | 文档位置 |
+|---|---|---|---|
+| 产品设计 | JU-01 | AI 原样执行程序给出的下一步就能登记已填测试，不再猜测参数或通过失败寻找入口。 | [编写并执行测试 R33](../spec/功能_编写并执行测试.md#r-33)、[推进并确认工作环节 R24](../spec/功能_推进并确认工作环节.md#r-24) |
+| 验收条件 | JU-02 | AC-01：下一步明确选择从表读取，首次执行退出成功并登记全部缺少项目；阶段规范与程序一致。 | [从表指引首次即可登记](../acceptance/测试登记按表指引首次执行即可成功_验收计划.md#ac-01) |
+| 验收条件 | JU-03 | AC-02：两种模式的指引与实际登记行为一致，旧参数接口继续可用。 | [逐条登记保留完整要求](../acceptance/测试登记按表指引首次执行即可成功_验收计划.md#ac-02) |
+| 现有代码设计 | JU-04 | 沿用命令编排、阶段门禁、记录生成、追加日志和状态分工；只修改本主题对应职责。 | [命令编排层](../spec/代码架构设计.md#43-命令编排层) |
+
+<a id="2-实施前计划"></a>
+<a id="2-实施前计划代码计划"></a>
+## 2. 实施前计划（代码计划）
+
+
+<a id="21-预期产品结果"></a>
+### 2.1 预期产品结果
+
+- AI 原样执行程序给出的下一步就能登记已填测试，不再猜测参数或通过失败寻找入口。
+
+<a id="22-最低实现设计"></a>
+### 2.2 最低实现设计
+
+| 设计项 | 已确认做法 | 选择理由 | 对应验收条件 |
+|---|---|---|---|
+| 模块与职责 | current_stage_next_instruction（当前下一步指引）、cmd_test_prepare（登记测试入口）；测试准备和登记说明；测试准备和登记说明；测试准备和登记说明；测试准备和登记说明，不改变本主题之外的产品规则。 | 修改集中在真实故障发生的调用链，保留既有阶段和文件约定。 | AC-01、AC-02 |
+| 数据、状态与副作用 | 测试范围已确认后的状态提示、内部检查提示、表模式批量登记和旧逐条登记指引。；不改变测试报告真实性要求，不将登记成功当作测试已经执行或通过。 | 只读诊断和写前检查保留已有历史，实际生成和状态写入仍由程序负责。 | AC-01、AC-02 |
+| 错误与边界 | 裸命令缺参数失败、少登记项目、重复登记破坏已有任务或登记时伪造结果均不通过。；旧逐条入口失效、给出无法执行的裸命令或不说明参数缺失均不通过。 | 错误必须保留证据并指出具体输入，不用覆盖历史或降低门禁换取通过。 | AC-01、AC-02 |
+
+<a id="23-代码修改计划"></a>
+### 2.3 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改内容 | 数据、状态或输出变化 | 对应验收条件 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | src/workflow_loop/cli.py | current_stage_next_instruction（当前下一步指引）、cmd_test_prepare（登记测试入口）、cmd_discuss（加载当前材料） | 表模式下一步已补齐从表选项；但旧文档模式加载材料时仍自动建空表，缺参数报错后的下一步也总是指向表模式。 | 材料加载只为已经启用表模式的轮次补表；状态与缺参数报错共用按模式选择的完整登记指引，旧模式保留逐条参数。 | 原样执行表模式下一步可一次登记全部计划项，不运行测试，不破坏已有任务。 | AC-01、AC-02 | 无 |
+| 2 | src/workflow_loop/data/Standardized_Repository/qa/test_code.md | 测试准备和登记说明 | 阶段规范中的登记引导没有一致区分从表读取与逐条参数模式。 | 统一说明表模式使用从表登记选项，旧文档模式填写完整逐条参数，登记和正式执行分开。 | 程序和安装包材料给出同样可执行的下一步，不把登记当作测试通过。 | AC-01、AC-02 | 无 |
+| 3 | src/workflow_loop/data/Standardized_Repository/qa/test_code_implementation.md | 测试准备和登记说明 | 阶段规范中的登记引导没有一致区分从表读取与逐条参数模式。 | 统一说明表模式使用从表登记选项，旧文档模式填写完整逐条参数，登记和正式执行分开。 | 程序和安装包材料给出同样可执行的下一步，不把登记当作测试通过。 | AC-01、AC-02 | 无 |
+| 4 | src/workflow_loop/data/Standardized_Repository/qa/test_plan.md | 测试准备和登记说明 | 阶段规范中的登记引导没有一致区分从表读取与逐条参数模式。 | 统一说明表模式使用从表登记选项，旧文档模式填写完整逐条参数，登记和正式执行分开。 | 程序和安装包材料给出同样可执行的下一步，不把登记当作测试通过。 | AC-01、AC-02 | 无 |
+| 5 | src/workflow_loop/data/Standardized_Repository/qa/test.md | 测试准备和登记说明 | 阶段规范中的登记引导没有一致区分从表读取与逐条参数模式。 | 统一说明表模式使用从表登记选项，旧文档模式填写完整逐条参数，登记和正式执行分开。 | 程序和安装包材料给出同样可执行的下一步，不把登记当作测试通过。 | AC-01、AC-02 | 无 |
+| 6 | src/workflow_loop/test_execution.py | prepare_task（登记一个待执行任务） | 相同任务每次登记都创建新对象，清除已通过记录并重置为待执行。 | 逐项比较测试入口、命令、工作目录、依赖、超时和报告设置；全部未变时保留原任务和证据，实际输入变化时才重新登记。 | 重复批量登记不清空成功记录；修改一个任务只重置该任务，真实执行仍校验当前代码和报告。 | AC-01 | 无 |
+
+<a id="开发检查计划"></a>
+#### 开发检查计划
+
+| 检查命令或方法 | 检查范围 | 预期观察结果 |
+|---|---|---|
+| env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q tests/test_registration_guidance.py tests/test_test_execution.py tests/test_table_entry_registration.py -p no:cacheprovider | 测试范围已确认后的状态提示、内部检查提示、表模式批量登记和旧逐条登记指引。 | 下一步明确选择从表读取，首次执行退出成功并登记全部缺少项目；阶段规范与程序一致。；两种模式的指引与实际登记行为一致，旧参数接口继续可用。 |
+
+<a id="24-未决问题"></a>
+### 2.4 未决问题
+
+- 暂无
+
+<a id="3-实施后记录"></a>
+<a id="3-实施后记录代码实施与代码结果"></a>
+## 3. 实施后记录（代码实施与代码结果）
+
+<a id="31-实施动作记录"></a>
+### 3.1 实施动作记录
+
+| 实施顺序 | 对应计划步骤 | 文件 | 代码位置（最终文件） | 实际执行的动作 | 当步反馈 | 状态 |
+|---|---|---|---|---|---|---|
+| 1 | 1 | src/workflow_loop/cli.py | L314-L318 | 缺少测试任务时根据冻结表模式选择从表批量登记命令；旧文档模式显示主题、测试项、报告适配器和实际命令等必要参数。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 2 | 2 | src/workflow_loop/data/Standardized_Repository/qa/test_code.md | L107-L107 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 3 | 3 | src/workflow_loop/data/Standardized_Repository/qa/test_code_implementation.md | L68-L68 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 4 | 4 | src/workflow_loop/data/Standardized_Repository/qa/test_plan.md | L106-L106 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 5 | 5 | src/workflow_loop/data/Standardized_Repository/qa/test.md | L29-L31 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 局部检查共 33 项通过，包含原故障探针、正文冲突与旧表兼容；这些是开发反馈，不是正式测试结论。 | 已完成 |
+| 6 | 1 | src/workflow_loop/cli.py | L268-L277 | 增加按当前轮次模式生成登记说明的函数，表模式返回从表读取选项，旧模式列出逐条登记必需参数。 | 命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 | 已完成 |
+| 7 | 1 | src/workflow_loop/cli.py | L1693-L1699 | 加载材料仅为已启用记录表的轮次补齐表；旧文档模式只读取材料，不自动建表。 | 命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 | 已完成 |
+| 8 | 1 | src/workflow_loop/cli.py | L3227-L3227 | 仅从表批量登记调用启用未变化任务复用，逐条登记保留原有重建行为。 | 命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 | 已完成 |
+| 9 | 1 | src/workflow_loop/cli.py | L3306-L3306 | 缺参数错误之后按当前轮次模式给出完整登记入口，不再一律推荐从表登记。 | 命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 | 已完成 |
+| 10 | 6 | src/workflow_loop/test_execution.py | L215-L342 | 登记函数增加默认关闭的未变化任务复用选项，读取表中前置测试项，比较入口、命令、目录、依赖、超时和报告设置；只有显式开启且全部相同才返回已有任务。 | 命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 | 已完成 |
+
+<a id="32-实施中问题与处理"></a>
+### 3.2 实施中问题与处理
+
+- 用户已授权 AI 持续完成流程，本轮确认由 AI 代行；不声称用户亲自执行开发检查或验收。
+- 2026-09-07 正式测试代码的局部开发执行为 10 项通过、2 项失败：重复登记清掉成功记录，旧文档模式加载材料被空表切换。先通过返回命令退回本主题，再补计划实施；这些是开发反馈，不是正式测试结果。
+- 补充修复完成；旧文档样本的代码入口文字尚需在测试阶段补齐反引号以匹配正式计划。仅修改测试准备数据，不降低产品追踪校验。
+
+<a id="33-未完成内容"></a>
+### 3.3 未完成内容
+
+状态：无
+
+<a id="34-代码结果"></a>
+### 3.4 代码结果
+
+<a id="341-实际代码修改"></a>
+#### 3.4.1 实际代码修改
+
+| 文件 | 代码位置（最终文件） | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 修改理由 | 对应验收条件 | 测试证据 |
+|---|---|---|---|---|---|---|
+| src/workflow_loop/cli.py | L268-L3306 | 缺少测试任务时根据冻结表模式选择从表批量登记命令；旧文档模式显示主题、测试项、报告适配器和实际命令等必要参数。 增加按当前轮次模式生成登记说明的函数，表模式返回从表读取选项，旧模式列出逐条登记必需参数。 加载材料仅为已启用记录表的轮次补齐表；旧文档模式只读取材料，不自动建表。 仅从表批量登记调用启用未变化任务复用，逐条登记保留原有重建行为。 缺参数错误之后按当前轮次模式给出完整登记入口，不再一律推荐从表登记。 | 表模式下一步含完整读取选项；登记不会被描述为已经执行或通过测试。 状态提示与缺参数错误使用同一份模式判断，不把旧模式引向不存在的记录表。 旧文档轮次读取材料后仍可按完整逐条参数登记。 相同表重复登记保留机器结果；逐条重新登记仍使旧结果失效。 旧模式错误输出不会隐式要求迁移记录表。 | AI 原样执行程序给出的下一步就能登记已填测试，不再猜测参数或通过失败寻找入口。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q tests/test_registration_guidance.py::test_table_next_step_registers_every_task_first_time tests/test_test_execution.py tests/test_table_entry_registration.py -p no:cacheprovider；命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 |
+| src/workflow_loop/data/Standardized_Repository/qa/test_code.md | L107-L107 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 安装包规范和当前项目规范均与程序下一步输出一致。 | AI 原样执行程序给出的下一步就能登记已填测试，不再猜测参数或通过失败寻找入口。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+| src/workflow_loop/data/Standardized_Repository/qa/test_code_implementation.md | L68-L68 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 安装包规范和当前项目规范均与程序下一步输出一致。 | AI 原样执行程序给出的下一步就能登记已填测试，不再猜测参数或通过失败寻找入口。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+| src/workflow_loop/data/Standardized_Repository/qa/test_plan.md | L106-L106 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 安装包规范和当前项目规范均与程序下一步输出一致。 | AI 原样执行程序给出的下一步就能登记已填测试，不再猜测参数或通过失败寻找入口。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+| src/workflow_loop/data/Standardized_Repository/qa/test.md | L29-L31 | 登记说明明确区分从表批量读取和旧逐条参数模式，保留登记与真实执行的边界。 | 安装包规范和当前项目规范均与程序下一步输出一致。 | AI 原样执行程序给出的下一步就能登记已填测试，不再猜测参数或通过失败寻找入口。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider；33 项局部开发检查通过，正式测试在测试验证阶段登记执行。 |
+| src/workflow_loop/test_execution.py | L215-L342 | 登记函数增加默认关闭的未变化任务复用选项，读取表中前置测试项，比较入口、命令、目录、依赖、超时和报告设置；只有显式开启且全部相同才返回已有任务。 | 批量重复登记不清除成功记录；输入实际变化时仅重建对应任务；逐条登记仍可主动重新执行。 | 修复正式测试代码局部执行发现的重复登记丢失结果和旧模式被隐式转换问题，保持已确认登记行为。 | AC-01、AC-02 | env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q tests/test_registration_guidance.py::test_table_next_step_registers_every_task_first_time tests/test_test_execution.py tests/test_table_entry_registration.py -p no:cacheprovider；命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 |
+
+<a id="342-开发检查记录"></a>
+#### 3.4.2 开发检查记录
+
+| 检查命令或方法 | 检查范围 | 实际反馈 | 是否需要继续修改 |
+|---|---|---|---|
+| env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q /private/tmp/workflow-loop-current-defect-probes.py tests/test_gate_plan_path_diagnostics.py tests/test_workflow_guidance.py tests/test_bug_record.py tests/test_architecture_validation.py -p no:cacheprovider | 测试范围已确认后的状态提示、内部检查提示、表模式批量登记和旧逐条登记指引。 | 命令退出码 0，33 项局部检查通过；原三项探针和补齐真实前置状态后的架构探针均通过。 | 否 |
+| env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests .venv/bin/python -m pytest -q tests/test_registration_guidance.py::test_table_next_step_registers_every_task_first_time tests/test_test_execution.py tests/test_table_entry_registration.py -p no:cacheprovider | 从表首次和重复登记、既有测试执行器及登记入口兼容性。 | 命令退出码 0，19 项局部开发检查通过，覆盖首次从表登记、重复登记留证、既有执行器失败重跑和表登记；不是正式测试结论。 | 否 |
+
+<a id="4-上下游文档"></a>
+## 4. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/测试登记按表指引首次执行即可成功_验收计划.md) | 本主题要达到的用户结果和验收条件 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整交付链路 |
+| 下游 | [测试登记按表指引首次执行即可成功 测试计划](../qa/测试登记按表指引首次执行即可成功_测试计划.md) | 代码结果确认后，在测试验证开始时确认范围和通过标准 |
+| 下游 | [测试登记按表指引首次执行即可成功 测试结果](../qa/测试登记按表指引首次执行即可成功_测试结果.md) | 同一测试验证阶段连续完成测试代码、登记、执行和结果 |
+| 下游 | [测试登记按表指引首次执行即可成功 验收结果](../acceptance/测试登记按表指引首次执行即可成功_验收结果.md) | 正式测试后执行主题验收 |

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 
 from . import process_runner as process_runner_mod
 from . import test_entry as test_entry_mod
@@ -52,6 +53,53 @@ def resolve_regression_entry(project_root: str) -> tuple[list[str] | None, str]:
             "项目全量测试入口；请先在测试计划阶段登记入口配置"
         )
     return argv, f"使用入口 {argv}"
+
+
+def should_skip_final_regression(
+    project_root: str,
+    workflow_state: WorkflowState,
+) -> tuple[bool, str]:
+    """R9：按实施前基线与最终文件差异判定是否跳过全量回归执行。
+
+    产品代码差异与测试代码差异都为空才跳过；仅测试代码变化、仅构建或
+    依赖配置变化不跳过；受管文档变化不影响判定。回退清单缺失、差异计算
+    失败或 Git 不可用时一律返回不跳过（差异无法确认时一律运行）。
+    返回 (是否跳过, 依据文本)。
+    """
+    from . import rollback as rollback_mod
+    from . import verification as verification_mod
+    from .state import now_iso
+
+    manifest_relative = rollback_mod._manifest_rel_path(workflow_state.workflow_id)
+    if not os.path.isfile(os.path.join(project_root, manifest_relative)):
+        return False, f"差异无法确认：缺少实施前回退清单 {manifest_relative}，按规则一律运行"
+    try:
+        manifest, _ = rollback_mod._read_manifest(project_root, manifest_relative)
+        changed = rollback_mod.changed_paths_since_prepare(project_root, manifest)
+    except (OSError, ValueError) as exc:
+        return False, f"差异无法确认：读取回退清单或计算差异失败（{exc}），按规则一律运行"
+    managed = set(rollback_mod.managed_document_paths(project_root))
+    code_changes = sorted(path for path in changed if path not in managed)
+    product_changes = [
+        path
+        for path in code_changes
+        if not verification_mod.is_test_related_path(project_root, path)
+    ]
+    test_changes = [
+        path
+        for path in code_changes
+        if verification_mod.is_test_related_path(project_root, path)
+    ]
+    if product_changes or test_changes:
+        return False, (
+            f"本轮存在代码差异，照常运行全量回归：产品代码差异 {product_changes}；"
+            f"测试代码差异 {test_changes}；受管文档差异不参与判定"
+        )
+    return True, (
+        f"本轮产品代码差异与测试代码差异均为空（相对实施前回退清单 "
+        f"{manifest_relative}；受管文档变化不参与判定），跳过全量回归执行；"
+        f"判定时间 {now_iso()}"
+    )
 
 
 def run_final_regression(project_root: str, workflow_state: WorkflowState) -> tuple[bool, str]:

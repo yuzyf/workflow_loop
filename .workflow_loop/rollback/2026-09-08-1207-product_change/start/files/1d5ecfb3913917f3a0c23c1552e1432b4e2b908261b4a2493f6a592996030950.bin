@@ -1,0 +1,21 @@
+# 【工作记录】验收结果：表模式消灭格式反复
+
+- 工作流编号：2026-08-29-1238-product_change
+- 验收结果：通过
+- 验收主题：表模式消灭格式反复
+
+## 验收结果
+
+<a id="ac-01"></a>
+<a id="ac-02"></a>
+<a id="ac-03"></a>
+<a id="ac-04"></a>
+
+| 验收条件编号 | 验收结论 | 实际观察结果 | 证据 |
+|---|---|---|---|
+| AC-01 | passed | 生成 impl 文档并检测手改，单元格含管道符/换行不坏表 | 机器记录 RUN-20260829T215351+0000-ccf906eb；测试 tests/test_records.py::test_generate_impl_doc_and_detect_tamper |
+| AC-02 | passed | 非数组/非整数/非枚举逐列报具体栏目与预期类型 | 机器记录 RUN-20260829T215351+0000-1af2c3d6；测试 tests/test_records.py::test_validate_reports_category_and_all_problems |
+| AC-03 | passed | impl 门禁文件清单和计划哈希从 impl_record 表取，不读生成 md | 机器记录 RUN-20260829T215351+0000-946816d5；测试 tests/test_rollback.py::test_planned_code_paths_and_plan_hash_read_from_impl_record_table |
+| AC-04 | passed | 测试计划解析测试方式/主验收条件/直接依赖，人工条件可选项处理正确 | 机器记录 RUN-20260829T215352+0000-2a0f873b；测试 tests/test_test_mapping.py::test_test_plan_parses_method_primary_criterion_and_direct_dependencies |
+
+## 验收说明

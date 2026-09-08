@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "8377122de7cbbf223d2ff5dcb82cea851987296abc0a1b0933f640f031016fc9",
+    "生成文档路径": "acceptance/门禁失败输出支持自修复_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/门禁失败输出支持自修复_验收计划.md": {
+      "body_hash": "0fa5c0400b0e6826a956cd05e95002096d9ac88afb824647d245b23cf1e59c2c"
+    }
+  }
+}

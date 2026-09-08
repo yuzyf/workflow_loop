@@ -1,0 +1,256 @@
+# 【主题测试结果】计划路径非法时门禁一次说清而不是抛异常
+
+- 工作流编号：2026-09-02-1012-bugfix
+- 验收主题：计划路径非法时门禁一次说清而不是抛异常
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 测试完成时间：2026-09-02T10:23:34+00:00
+
+## 1. 测试依据
+
+- [验收计划](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md)
+- [测试计划](./计划路径非法时门禁一次说清而不是抛异常_测试计划.md)
+- [代码计划、实施和结果](../impl/计划路径非法时门禁一次说清而不是抛异常_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+## 2. 测试环境和执行说明
+
+- 本主题执行范围：测试计划表登记的全部七个自动化测试项，没有未登记的测试项，也没有纯人工测试项。
+- 执行顺序：七项之间没有前置依赖，由程序按登记顺序各启动一次测试进程并生成独立的结构化报告。
+- 未执行项：没有。测试计划表登记的七项在本次执行中全部产生了当前有效的机器记录。
+
+## 3. 测试项结果
+
+### TC-01：计划路径问题带完整诊断
+
+- 对应验收条件：AC-01
+- 机器记录编号：RUN-20260902T102333+0000-082c055f
+- 工作目录：项目根
+- 测试入口：["tests/test_gate_plan_path_diagnostics.py::test_planned_path_problem_carries_full_diagnostic"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_gate_plan_path_diagnostics.py::test_planned_path_problem_carries_full_diagnostic","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-02-1012-bugfix/计划路径非法时门禁一次说清而不是抛异常/TC-01.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-02T10:23:33+00:00
+- 结束时间：2026-09-02T10:23:33+00:00
+- 时长（秒）：0.675
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.56s\n"
+- 输出哈希：63203b4ec2b29e7ab8c45616e4d500960794bb60488784fb13fb7fe05b0386bf
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：a666ad6ef64e97e1993f0e99f98c320b92a4d2a85dc1d4ebf23fa91d8988eaf0
+- 报告字节数：563
+- 精确匹配测试入口：["tests/test_gate_plan_path_diagnostics.py::test_planned_path_problem_carries_full_diagnostic"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7b06aa7094f0cba1e5e20b42d0bc22cb6a86b82abc24b4b5294ee37606a2f05d
+- 测试代码哈希：e3eec3a5cc3ee1059e1c12ed322b35073ca915e3129a472575385d3d574f2b3a
+- 自动化测试结果：通过
+- 实际结果：非法计划路径的失败以专用异常给出，异常携带 1 条诊断，检查标识为 impl.implementation_plan.path_invalid，位置精确到表文件行号与文件列，预期、实际、证据、影响和下一动作六项都非空。
+- 证据：机器记录 RUN-20260902T102333+0000-082c055f；结构化报告哈希 a666ad6ef64e97e1993f0e99f98c320b92a4d2a85dc1d4ebf23fa91d8988eaf0
+
+### TC-02：第二道门报告含计划路径问题
+
+- 对应验收条件：AC-01
+- 机器记录编号：RUN-20260902T102333+0000-027544d0
+- 工作目录：项目根
+- 测试入口：["tests/test_gate_plan_path_diagnostics.py::test_gate_report_lists_planned_path_problem"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_gate_plan_path_diagnostics.py::test_gate_report_lists_planned_path_problem","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-02-1012-bugfix/计划路径非法时门禁一次说清而不是抛异常/TC-02.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-02T10:23:33+00:00
+- 结束时间：2026-09-02T10:23:33+00:00
+- 时长（秒）：0.118
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.04s\n"
+- 输出哈希：f4c77b58e2280613a49ba18da1c4a02d440e862c49a6c8fe5daaf277333ff99d
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：827e14af5a8266a4bf438b0acc6274449f6fc543bf1a945f71070aa9bb513b1a
+- 报告字节数：551
+- 精确匹配测试入口：["tests/test_gate_plan_path_diagnostics.py::test_gate_report_lists_planned_path_problem"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7b06aa7094f0cba1e5e20b42d0bc22cb6a86b82abc24b4b5294ee37606a2f05d
+- 测试代码哈希：e3eec3a5cc3ee1059e1c12ed322b35073ca915e3129a472575385d3d574f2b3a
+- 自动化测试结果：通过
+- 实际结果：实施门禁的结构化报告里出现该条计划路径错误，渲染文本含文件列位置和下一动作，整个过程没有以异常形式中断。
+- 证据：机器记录 RUN-20260902T102333+0000-027544d0；结构化报告哈希 827e14af5a8266a4bf438b0acc6274449f6fc543bf1a945f71070aa9bb513b1a
+
+### TC-03：兜底处理按诊断渲染
+
+- 对应验收条件：AC-01
+- 机器记录编号：RUN-20260902T102334+0000-8a2265d9
+- 工作目录：项目根
+- 测试入口：["tests/test_gate_plan_path_diagnostics.py::test_command_layer_renders_carried_diagnostics"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_gate_plan_path_diagnostics.py::test_command_layer_renders_carried_diagnostics","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-02-1012-bugfix/计划路径非法时门禁一次说清而不是抛异常/TC-03.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-02T10:23:34+00:00
+- 结束时间：2026-09-02T10:23:34+00:00
+- 时长（秒）：0.102
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.02s\n"
+- 输出哈希：a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：cc84ed24664540a475500e8ac4d815f0df7d5860a6783a950668e971f620e6e4
+- 报告字节数：557
+- 精确匹配测试入口：["tests/test_gate_plan_path_diagnostics.py::test_command_layer_renders_carried_diagnostics"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7b06aa7094f0cba1e5e20b42d0bc22cb6a86b82abc24b4b5294ee37606a2f05d
+- 测试代码哈希：e3eec3a5cc3ee1059e1c12ed322b35073ca915e3129a472575385d3d574f2b3a
+- 自动化测试结果：通过
+- 实际结果：把携带的诊断按命令层做法渲染，输出逐项包含位置、预期、实际、证据、影响和下一动作，不再是压缩成一行的文字。
+- 证据：机器记录 RUN-20260902T102334+0000-8a2265d9；结构化报告哈希 cc84ed24664540a475500e8ac4d815f0df7d5860a6783a950668e971f620e6e4
+
+### TC-04：两类问题一次列全
+
+- 对应验收条件：AC-02
+- 机器记录编号：RUN-20260902T102334+0000-9bd570cc
+- 工作目录：项目根
+- 测试入口：["tests/test_gate_plan_path_diagnostics.py::test_planned_and_actual_problems_reported_together"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_gate_plan_path_diagnostics.py::test_planned_and_actual_problems_reported_together","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-02-1012-bugfix/计划路径非法时门禁一次说清而不是抛异常/TC-04.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-02T10:23:34+00:00
+- 结束时间：2026-09-02T10:23:34+00:00
+- 时长（秒）：0.112
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.03s\n"
+- 输出哈希：35d86279d96ed65491ba8ff0748e1c8e7891711531404dc5d4b9cd6ae33de3ec
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：6ffecb44fd238607c668834beb3de118272bbcd5c68392f596c90b8f6da57cc6
+- 报告字节数：565
+- 精确匹配测试入口：["tests/test_gate_plan_path_diagnostics.py::test_planned_and_actual_problems_reported_together"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7b06aa7094f0cba1e5e20b42d0bc22cb6a86b82abc24b4b5294ee37606a2f05d
+- 测试代码哈希：e3eec3a5cc3ee1059e1c12ed322b35073ca915e3129a472575385d3d574f2b3a
+- 自动化测试结果：通过
+- 实际结果：同一份实施记录表里计划行和实际改动行各填一个非法路径时，一次报告同时出现两侧的路径类错误，不需要改完一类再跑一次。
+- 证据：机器记录 RUN-20260902T102334+0000-9bd570cc；结构化报告哈希 6ffecb44fd238607c668834beb3de118272bbcd5c68392f596c90b8f6da57cc6
+
+### TC-05：合法计划路径仍正常返回
+
+- 对应验收条件：AC-03
+- 机器记录编号：RUN-20260902T102334+0000-92e3d664
+- 工作目录：项目根
+- 测试入口：["tests/test_gate_plan_path_diagnostics.py::test_legal_plan_path_still_returns_without_diagnostic"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_gate_plan_path_diagnostics.py::test_legal_plan_path_still_returns_without_diagnostic","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-02-1012-bugfix/计划路径非法时门禁一次说清而不是抛异常/TC-05.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-02T10:23:34+00:00
+- 结束时间：2026-09-02T10:23:34+00:00
+- 时长（秒）：0.123
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.04s\n"
+- 输出哈希：f4c77b58e2280613a49ba18da1c4a02d440e862c49a6c8fe5daaf277333ff99d
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：ead61fda7a666875c9133c494b9d80d823d5e7b6a7387499fa1c9aa209b21af6
+- 报告字节数：571
+- 精确匹配测试入口：["tests/test_gate_plan_path_diagnostics.py::test_legal_plan_path_still_returns_without_diagnostic"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7b06aa7094f0cba1e5e20b42d0bc22cb6a86b82abc24b4b5294ee37606a2f05d
+- 测试代码哈希：e3eec3a5cc3ee1059e1c12ed322b35073ca915e3129a472575385d3d574f2b3a
+- 自动化测试结果：通过
+- 实际结果：计划行填项目内真实源码路径时正常返回该路径，实施门禁报告里没有任何计划路径类错误。
+- 证据：机器记录 RUN-20260902T102334+0000-92e3d664；结构化报告哈希 ead61fda7a666875c9133c494b9d80d823d5e7b6a7387499fa1c9aa209b21af6
+
+### TC-06：非法计划路径仍被拦下
+
+- 对应验收条件：AC-03
+- 机器记录编号：RUN-20260902T102334+0000-ae6c8d90
+- 工作目录：项目根
+- 测试入口：["tests/test_gate_plan_path_diagnostics.py::test_illegal_plan_path_is_still_rejected"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_gate_plan_path_diagnostics.py::test_illegal_plan_path_is_still_rejected","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-02-1012-bugfix/计划路径非法时门禁一次说清而不是抛异常/TC-06.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-02T10:23:34+00:00
+- 结束时间：2026-09-02T10:23:34+00:00
+- 时长（秒）：0.102
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.02s\n"
+- 输出哈希：a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：e48b85629f352d92daa6936e3e29b49653222e5047ee89865f5cf8a8d043ad3f
+- 报告字节数：545
+- 精确匹配测试入口：["tests/test_gate_plan_path_diagnostics.py::test_illegal_plan_path_is_still_rejected"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7b06aa7094f0cba1e5e20b42d0bc22cb6a86b82abc24b4b5294ee37606a2f05d
+- 测试代码哈希：e3eec3a5cc3ee1059e1c12ed322b35073ca915e3129a472575385d3d574f2b3a
+- 自动化测试结果：通过
+- 实际结果：非法计划路径仍被判为错误，失败对象仍可被原有的通用异常捕获方式接住，异常文字仍包含该路径。
+- 证据：机器记录 RUN-20260902T102334+0000-ae6c8d90；结构化报告哈希 e48b85629f352d92daa6936e3e29b49653222e5047ee89865f5cf8a8d043ad3f
+
+### TC-07：现有捕获方行为不变
+
+- 对应验收条件：AC-04
+- 机器记录编号：RUN-20260902T102334+0000-4e99bfff
+- 工作目录：项目根
+- 测试入口：["tests/test_gate_plan_path_diagnostics.py::test_existing_callers_keep_swallowing_the_failure"]
+- 执行命令：[".venv/bin/python","-m","pytest","tests/test_gate_plan_path_diagnostics.py::test_existing_callers_keep_swallowing_the_failure","-q","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-09-02-1012-bugfix/计划路径非法时门禁一次说清而不是抛异常/TC-07.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-09-02T10:23:34+00:00
+- 结束时间：2026-09-02T10:23:34+00:00
+- 时长（秒）：0.101
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.02s\n"
+- 输出哈希：a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：97e66b403fb929f83ed6f4c08e6a7ddcae1550c77f30e5bd28ede8e5d5245554
+- 报告字节数：563
+- 精确匹配测试入口：["tests/test_gate_plan_path_diagnostics.py::test_existing_callers_keep_swallowing_the_failure"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：7b06aa7094f0cba1e5e20b42d0bc22cb6a86b82abc24b4b5294ee37606a2f05d
+- 测试代码哈希：e3eec3a5cc3ee1059e1c12ed322b35073ca915e3129a472575385d3d574f2b3a
+- 自动化测试结果：通过
+- 实际结果：阶段责任文件清单和既有实现路径校验两处入口都没有把异常抛给调用方，返回值类型正常且责任清单里不含那个非法路径。
+- 证据：机器记录 RUN-20260902T102334+0000-4e99bfff；结构化报告哈希 97e66b403fb929f83ed6f4c08e6a7ddcae1550c77f30e5bd28ede8e5d5245554
+
+## 4. 人工验收交接
+
+- 本主题四条验收条件全部由自动化测试判定，没有需要用户人工操作或人工判断的部分。
+
+## 5. 未通过或阻塞
+
+- 暂无
+
+### 结果说明
+
+- 七个自动化测试项在本轮当前代码上一次真实执行全部通过，覆盖 AC-01 至 AC-04 四条验收条件。
+- 每项都在结构化报告中精确匹配到登记的测试入口，实际执行数为 1，跳过数、失败数和错误数均为 0，退出码为 0。
+- TC-05、TC-06 和 TC-07 是反向条件：分别确认合法路径仍正常返回、非法路径仍被拦下、现有捕获该失败的调用方行为不变，用来证明本轮只改失败的报告方式而没有改判定口径。
+
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](./计划路径非法时门禁一次说清而不是抛异常_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/计划路径非法时门禁一次说清而不是抛异常_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | [计划路径非法时门禁一次说清而不是抛异常验收结果](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收结果.md) | 混合测试在这里接收人工确认 |

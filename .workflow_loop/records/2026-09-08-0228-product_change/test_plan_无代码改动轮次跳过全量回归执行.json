@@ -1,0 +1,112 @@
+{
+  "表版本": "3",
+  "工作流编号": "2026-09-08-0228-product_change",
+  "验收主题": "无代码改动轮次跳过全量回归执行",
+  "生成文档哈希": "58c9303b7fd4e47f40a75b94cd49512aa8a108c8e62f62ead69904ae9b09e2a4",
+  "生成文档路径": "qa/无代码改动轮次跳过全量回归执行_测试计划.md",
+  "测试项": [
+    {
+      "测试项编号": "TC-01",
+      "直白测试名称": "差异全空跳过并留依据且文档变化不影响判定",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow gate regression_test 第二道门",
+      "代码入口": "src/workflow_loop/test_runner.py::should_skip_final_regression",
+      "测试入口": "tests/test_regression_skip.py::test_skip_when_no_code_changes",
+      "准备数据": "回退清单存在；产品与测试代码差异为空但受管文档有变化",
+      "执行动作": "执行最终回归第二道门的跳过判定",
+      "观察位置": "返回的跳过布尔值与依据文本",
+      "预期结果": "返回跳过且依据含产品代码差异与测试代码差异均为空和判定时间；受管文档变化不影响判定",
+      "不通过表现": "文档变化导致不跳过；依据缺少判定时间",
+      "证据要求": "pytest junitxml 报告与退出码",
+      "对应验收条件": "AC-01",
+      "命令参数数组": "[\".venv/bin/python\", \"-m\", \"pytest\", \"tests/test_regression_skip.py::test_skip_when_no_code_changes\", \"tests/test_regression_skip.py::test_managed_document_changes_do_not_affect_judgement\", \"-q\", \"--basetemp=/tmp/wf-test-tmp/TC-01\"]",
+      "工作目录": "",
+      "超时秒数": 600,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "[\"tests/test_regression_skip.py::test_skip_when_no_code_changes\", \"tests/test_regression_skip.py::test_managed_document_changes_do_not_affect_judgement\"]"
+    },
+    {
+      "测试项编号": "TC-02",
+      "直白测试名称": "仅测试代码变化不跳过且清单缺失一律运行",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow gate regression_test 第二道门",
+      "代码入口": "src/workflow_loop/test_runner.py::should_skip_final_regression",
+      "测试入口": "tests/test_regression_skip.py::test_no_skip_when_test_code_changed",
+      "准备数据": "仅测试代码有差异；或回退清单缺失两种场景",
+      "执行动作": "执行跳过判定",
+      "观察位置": "返回的跳过布尔值与依据文本",
+      "预期结果": "仅测试代码变化返回不跳过并照常运行；清单缺失返回不跳过且依据含差异无法确认与一律运行",
+      "不通过表现": "仅测试代码变化被跳过；清单缺失被跳过或报错中断",
+      "证据要求": "pytest junitxml 报告与退出码",
+      "对应验收条件": "AC-02",
+      "命令参数数组": "[\".venv/bin/python\", \"-m\", \"pytest\", \"tests/test_regression_skip.py::test_no_skip_when_test_code_changed\", \"tests/test_regression_skip.py::test_no_skip_when_manifest_missing\", \"-q\", \"--basetemp=/tmp/wf-test-tmp/TC-02\"]",
+      "工作目录": "",
+      "超时秒数": 600,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "[\"tests/test_regression_skip.py::test_no_skip_when_test_code_changed\", \"tests/test_regression_skip.py::test_no_skip_when_manifest_missing\"]"
+    },
+    {
+      "测试项编号": "TC-03",
+      "直白测试名称": "跳过状态有依据通过校验缺依据失败且序列化兼容",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow gate regression_test 与后续设计同步",
+      "代码入口": "src/workflow_loop/artifact_validation.py::validate_final_regression_state",
+      "测试入口": "tests/test_regression_skip.py::test_skipped_regression_passes_state_validation",
+      "准备数据": "跳过状态的回归记录（有依据与缺依据两种）",
+      "执行动作": "执行最终回归状态校验与序列化往返",
+      "观察位置": "校验返回值与反序列化字段",
+      "预期结果": "有依据的跳过状态通过校验；缺依据失败并报缺少跳过依据；skip_reason/skipped_at 序列化往返不丢",
+      "不通过表现": "缺依据仍通过；序列化丢字段",
+      "证据要求": "pytest junitxml 报告与退出码",
+      "对应验收条件": "AC-03",
+      "命令参数数组": "[\".venv/bin/python\", \"-m\", \"pytest\", \"tests/test_regression_skip.py::test_skipped_regression_passes_state_validation\", \"tests/test_regression_skip.py::test_skipped_regression_without_reason_fails\", \"tests/test_regression_skip.py::test_regression_state_serialization_roundtrip\", \"-q\", \"--basetemp=/tmp/wf-test-tmp/TC-03\"]",
+      "工作目录": "",
+      "超时秒数": 600,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "[\"tests/test_regression_skip.py::test_skipped_regression_passes_state_validation\", \"tests/test_regression_skip.py::test_skipped_regression_without_reason_fails\", \"tests/test_regression_skip.py::test_regression_state_serialization_roundtrip\"]"
+    }
+  ],
+  "测试范围说明": [
+    "覆盖 R9 跳过判定三分支与 R9a 状态校验；设计同步免 REG 编号的放行在 artifact_validation 单元测试内一并验证。"
+  ],
+  "测试条件要求": [
+    "测试运行需可写临时目录。"
+  ],
+  "未决测试条件": [
+    "暂无"
+  ],
+  "针对性回归范围": [
+    "tests/test_test_runner.py、tests/test_commands.py 的正常回归路径回归。"
+  ],
+  "填写说明": {
+    "测试项": {
+      "测试项编号": "主题内唯一，例如 TC-01；生成文档锚点和追踪表引用该编号",
+      "直白测试名称": "一句话说明测什么行为，读者不看代码也能懂，例如 空表主题门禁报尚未填写不退回文档模式",
+      "前置测试项": "本主题内必须先通过的直接 TC 编号；无依赖写“无”；不重复间接依赖",
+      "测试方式": "自动化测试、人工验收或 自动化测试 + 人工验收 三选一；能自动化判断的内容不能为省事写纯人工",
+      "产品入口": "用户或调用方实际使用的入口，例如 workflow gate impl 命令；取自产品设计使用过程",
+      "代码入口": "项目相对文件::可定位标识，例如 src/workflow_loop/stages/stages.py::ImplStage.discussion_validate；不接受目录或模块泛称",
+      "测试入口": "tests/文件::测试函数；测试文件可以尚未创建，但路径和目标必须明确；本列只进入生成的测试计划文档，不是登记入口，登记入口取“正式目标名称”列；人工验收行可留空",
+      "准备数据": "执行前要建立的具体数据和状态，例如 建一张空 impl_record 表；取自执行动作需要的前提",
+      "执行动作": "通过产品入口执行的具体动作一句话；与验收条件“触发动作”语义一致但写到可执行粒度",
+      "观察位置": "检查返回值、状态文件、生成文档或输出的具体位置；与验收条件“可检查结果”对应",
+      "预期结果": "必须出现的具体值、数量、存在性或状态；与验收条件“通过标准”逐项一致，不新增标准",
+      "不通过表现": "出现哪些缺失、错误值或错误状态即失败；与预期结果对应",
+      "证据要求": "需要保存的结构化报告和可复核事实，例如 pytest junitxml 报告与退出码",
+      "对应验收条件": "本测试项主要服务的 AC 编号；一个测试项只对应一条主要验收条件",
+      "命令参数数组": "JSON 数组，例如 [\"pytest\", \"tests/test_a.py\"]；人工验收行留空",
+      "工作目录": "项目内相对路径；留空表示项目根",
+      "超时秒数": "整数，例如 600；人工验收行留空",
+      "报告适配器": "pytest-junitxml 或 vitest-junit；人工验收行留空",
+      "正式目标名称": "本列是登记入口的唯一来源：必须写成 项目相对路径::报告里的目标名，与报告适配器输出的目标名逐字一致，例如 tests/test_records.py::test_table_rejects_bad_entry（pytest 写 nodeid，vitest 写 测试文件路径::测试标题）。只写测试标题不带路径会被登记拒绝。一个测试项覆盖多个测试函数时，把多个入口写成 JSON 数组，例如 [\"tests/a.test.ts::读取返回 15 组\",\"tests/a.test.ts::升级文案存在\"]；同行“测试入口”列填了也不参与登记。人工验收行留空"
+    },
+    "测试范围说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "测试条件要求": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "未决测试条件": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "针对性回归范围": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "程序专用字段": "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
+  }
+}

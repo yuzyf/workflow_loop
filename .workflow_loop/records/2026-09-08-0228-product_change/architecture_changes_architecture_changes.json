@@ -1,0 +1,48 @@
+{
+  "表版本": "3",
+  "工作流编号": "2026-09-08-0228-product_change",
+  "验收主题": "",
+  "生成文档哈希": "794776536c83a476c6a11fcd25f9684bc5ed7c22d40a17ae879882eb8eccaccf",
+  "生成文档路径": ".workflow_loop/records/2026-09-08-0228-product_change/architecture_changes_architecture_changes.md",
+  "正文变更": [
+    {
+      "章节": "4.6 实施、测试与验收层",
+      "原文": "`src/workflow_loop/verification.py::list_actual_test_changes()`（读取实际测试改动函数）列出 Git 可见的测试代码、夹具、辅助脚本和配置变化。",
+      "新文": "`src/workflow_loop/verification.py::list_actual_test_changes()`（读取实际测试改动函数）列出 Git 可见的测试代码、夹具、辅助脚本和配置变化。`src/workflow_loop/machine_collect.py`（机器事实采集模块）按实施前回退副本与进场 Git 基线提交号计算差异事实（回退副本优先、其次进场提交号、无登记按新文件全部新增），`collect_implementation_changes()`（采集实施改动函数）把文件与代码位置两列写入实施记录表并记录采集指纹，`verify_collection_fingerprint()`（核对采集指纹函数）供 impl 第二道门重算比对；位置值与门禁行号格式同源（新文件写 L1-L行数，多块写覆盖全部差异的连续范围）。",
+      "依据": "src/workflow_loop/machine_collect.py::collect_diff_facts、collect_implementation_changes、verify_collection_fingerprint；tests/test_machine_collect.py 19 项通过"
+    },
+    {
+      "章节": "6.3 【功能】推进并确认工作环节",
+      "原文": "`impl` 第二道门列出本次实际文件、是否属于本轮、修改理由、验收关联、测试证据和缺失项；文件未出现在最初计划中不算错误；默认下一步不要求 `--prepare-code`（准备代码回退基线）或 `--rebaseline`（重设基线）",
+      "新文": "`impl` 第二道门列出本次实际文件、是否属于本轮、修改理由、验收关联、测试证据和缺失项；文件未出现在最初计划中不算错误；默认下一步不要求 `--prepare-code`（准备代码回退基线）或 `--rebaseline`（重设基线）。机器采集由 `src/workflow_loop/cli.py::cmd_collect`（机器采集命令函数）和 `src/workflow_loop/machine_collect.py::collect_implementation_changes`（采集实施改动函数）承担：`workflow collect` 命令只适用于 impl 环节，按差异事实写实施记录表的文件与代码位置两列并记录采集指纹（AI 叙述列保留；进场代码干净时由 `src/workflow_loop/rollback.py::prepare_impl` 调用 `record_entry_git_baseline`（记录进场基线提交号函数）记 Git 提交号供计划外文件取进场内容），第二道门对表内已有指纹的主题重算差异并比对，不一致报请重新采集",
+      "依据": "src/workflow_loop/cli.py::cmd_collect；src/workflow_loop/machine_collect.py；R25 采集与门禁闭环；tests/test_machine_collect.py 采集与指纹测试通过"
+    },
+    {
+      "章节": "6.11 【功能】验收并完成交付",
+      "原文": "选择当前系统入口，在项目根执行一次并保存参数、时间、退出码、输出和代码哈希",
+      "新文": "选择当前系统入口，在项目根执行一次并保存参数、时间、退出码、输出和代码哈希。执行前先由 `src/workflow_loop/test_runner.py::should_skip_final_regression`（判定是否跳过最终回归函数）做跳过判定：按实施前回退清单计算差异并排除受管文档，产品代码与测试代码差异均为空才跳过（依据与时间写入 state 的 skip_reason/skipped_at，状态 skipped-by-no-change，不产生机器执行记录；设计同步不要求 REG 编号）；仅测试代码变化不跳过；清单缺失或差异计算失败一律运行",
+      "依据": "src/workflow_loop/test_runner.py::should_skip_final_regression；src/workflow_loop/cli.py 回归第二道门跳过分支；src/workflow_loop/artifact_validation.py::validate_final_regression_state 跳过状态分支；R9/R9a"
+    },
+    {
+      "章节": "6.18 【功能】工作记录表与正式文档生成",
+      "原文": "是否启用表流程由开工冻结信息决定；已启用的轮次即使表为空也保持表流程并指出尚未填写，不能静默退回文档模式。没有启用工作记录表的历史轮次沿用旧文档检查；加载材料不会为这类轮次创建空表，也不会使其隐式切换模式。",
+      "新文": "是否启用表流程由开工冻结信息决定；已启用的轮次即使表为空也保持表流程并指出尚未填写，不能静默退回文档模式。测试结果行清单 required_at_gate 为 True，空 test_result 表在 qa 第二道门立即报尚未填写（2026-09-08 实证修复）。新轮次生成版本 4 表：实施记录表放行采集指纹程序专用键（AI 不填写）；验收结果表五列（验收方式、验收结论、机器测试记录编号、用户实际回答、人工确认）由 `_fill_acceptance_record_ids`（从有效状态回填验收编号函数）版本 4 分支从当前有效验收记录直接回填，失效条目标记待重做；版本 1 至 3 按开工冻结版本原样校验不接受新键。没有启用工作记录表的历史轮次沿用旧文档检查。",
+      "依据": "src/workflow_loop/records.py::validate_table 版本 4 放行分支、_fill_acceptance_record_ids；R26/R29；tests/test_empty_result_table_guard.py 2 项通过"
+    },
+    {
+      "章节": "6.18 【功能】工作记录表与正式文档生成",
+      "原文": "`tests/test_records.py::test_pristine_table_activates_table_path_and_reports_unfilled` |",
+      "新文": "`tests/test_records.py::test_pristine_table_activates_table_path_and_reports_unfilled`；`tests/test_empty_result_table_guard.py::test_empty_test_result_table_reports_unfilled`（空表守卫测试）；`tests/test_machine_collect.py::test_v4_impl_record_accepts_collection_fingerprint`、`tests/test_machine_collect.py::test_fill_acceptance_row_columns_automated`（版本 4 与五列回填测试） |",
+      "依据": "tests/test_empty_result_table_guard.py 2 项通过；tests/test_machine_collect.py 19 项通过"
+    }
+  ],
+  "填写说明": {
+    "正文变更": {
+      "章节": "填写正式架构中唯一存在的完整章节标题，不带井号；不能填写最终同步结论章节",
+      "原文": "从该章节复制需变更的原事实，必须唯一匹配；多行原文保留换行；不能仅填已替换后的新文",
+      "新文": "填写已经实现并核实的新事实，不改原章节标题、表格结构或定位锚点",
+      "依据": "填写真实代码位置、核对结果或验收依据；无正文变化时正文变更留空数组"
+    },
+    "程序专用字段": "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
+  }
+}

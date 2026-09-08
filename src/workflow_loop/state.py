@@ -313,6 +313,9 @@ class RegressionTestState:
     output_bytes: int | None = None
     platform: str = ""
     executable: str = ""
+    # R9：无代码改动跳过的判定依据（程序写入；跳过时不产生机器执行记录）
+    skip_reason: str | None = None
+    skipped_at: str | None = None
 
 
 # 穿刺阶段开始时的设计文档基线
@@ -632,6 +635,8 @@ def _regression_state_from_dict(data: dict) -> RegressionTestState:
         output_bytes=data.get("output_bytes"),
         platform=data.get("platform", ""),
         executable=data.get("executable", ""),
+        skip_reason=data.get("skip_reason"),
+        skipped_at=data.get("skipped_at"),
     )
 
 

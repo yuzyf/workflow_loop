@@ -1,0 +1,112 @@
+{
+  "表版本": "3",
+  "工作流编号": "2026-09-08-0228-product_change",
+  "验收主题": "门禁失败输出支持自修复",
+  "生成文档哈希": "ea1059081104f9632a3b13f6cdbcacf6dc09d6f92b08d57c2eba73500117470f",
+  "生成文档路径": "qa/门禁失败输出支持自修复_测试计划.md",
+  "测试项": [
+    {
+      "测试项编号": "TC-01",
+      "直白测试名称": "退回成功输出包含产物修改时序提示",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow return 命令",
+      "代码入口": "src/workflow_loop/cli.py::cmd_return",
+      "测试入口": "tests/test_gate_self_heal_output.py::test_return_output_contains_sequence_hint",
+      "准备数据": "退回目标为 spec/acceptance_plan/reproduce 任一产物环节",
+      "执行动作": "执行退回命令查看成功输出",
+      "观察位置": "退回成功输出文本",
+      "预期结果": "输出含产物修改时序段：先过第一道门再改产物文件、先改会被记进基线、无需修改不要求制造变化",
+      "不通过表现": "输出缺时序段或缺原因说明",
+      "证据要求": "pytest junitxml 报告与退出码",
+      "对应验收条件": "AC-01",
+      "命令参数数组": "[\".venv/bin/python\", \"-m\", \"pytest\", \"tests/test_gate_self_heal_output.py::test_return_output_contains_sequence_hint\", \"-q\", \"--basetemp=/tmp/wf-test-tmp/TC-01\"]",
+      "工作目录": "",
+      "超时秒数": 600,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "[\"tests/test_gate_self_heal_output.py::test_return_output_contains_sequence_hint\"]"
+    },
+    {
+      "测试项编号": "TC-02",
+      "直白测试名称": "基线类失败报错含四项对比数据",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow gate spec 第二道门",
+      "代码入口": "src/workflow_loop/stages/stages.py::_baseline_conflict_facts",
+      "测试入口": "tests/test_gate_self_heal_output.py::test_baseline_conflict_facts_includes_all_four_items",
+      "准备数据": "产物基线已拍摄且产品总说明与基线一致（修改被记进基线场景）或无基线",
+      "执行动作": "构造基线类失败取报错事实段",
+      "观察位置": "_baseline_conflict_facts 返回的文本",
+      "预期结果": "含产物基线拍摄时间、基线哈希、当前哈希、对比结论四项；一致时含修改被记进基线与先过第一道门的修正方法；无基线时含无法提供对比数据",
+      "不通过表现": "缺任一项；无基线时崩溃",
+      "证据要求": "pytest junitxml 报告与退出码",
+      "对应验收条件": "AC-02",
+      "命令参数数组": "[\".venv/bin/python\", \"-m\", \"pytest\", \"tests/test_gate_self_heal_output.py::test_baseline_conflict_facts_includes_all_four_items\", \"tests/test_gate_self_heal_output.py::test_baseline_conflict_facts_when_baseline_missing\", \"-q\", \"--basetemp=/tmp/wf-test-tmp/TC-02\"]",
+      "工作目录": "",
+      "超时秒数": 600,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "[\"tests/test_gate_self_heal_output.py::test_baseline_conflict_facts_includes_all_four_items\", \"tests/test_gate_self_heal_output.py::test_baseline_conflict_facts_when_baseline_missing\"]"
+    },
+    {
+      "测试项编号": "TC-03",
+      "直白测试名称": "表文档不一致报错按表是否更新区分修复路径",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow gate 各第二道门",
+      "代码入口": "src/workflow_loop/records.py::_table_document_conflict_facts",
+      "测试入口": "tests/test_gate_self_heal_output.py::test_conflict_facts_table_updated_path",
+      "准备数据": "带生成凭据的表环境；表已更新与未更新两种；文档被手改",
+      "执行动作": "构造表文档不一致取报错事实段",
+      "观察位置": "_table_document_conflict_facts 返回的文本",
+      "预期结果": "含差异章节块、程序凭据指纹、当前指纹；表已更新提示恢复文档由程序按表重写且不要再改表；表未更新提示写回工作记录表；无凭据保守双查提示",
+      "不通过表现": "笼统归为写回表；缺指纹对比",
+      "证据要求": "pytest junitxml 报告与退出码",
+      "对应验收条件": "AC-03",
+      "命令参数数组": "[\".venv/bin/python\", \"-m\", \"pytest\", \"tests/test_gate_self_heal_output.py::test_conflict_facts_table_updated_path\", \"tests/test_gate_self_heal_output.py::test_conflict_facts_table_not_updated_path\", \"tests/test_gate_self_heal_output.py::test_conflict_facts_no_receipt_fallback\", \"-q\", \"--basetemp=/tmp/wf-test-tmp/TC-03\"]",
+      "工作目录": "",
+      "超时秒数": 600,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": "[\"tests/test_gate_self_heal_output.py::test_conflict_facts_table_updated_path\", \"tests/test_gate_self_heal_output.py::test_conflict_facts_table_not_updated_path\", \"tests/test_gate_self_heal_output.py::test_conflict_facts_no_receipt_fallback\"]"
+    }
+  ],
+  "测试范围说明": [
+    "覆盖退回时序提示、基线四项事实、表文档不一致两路径区分；输出稳定性（同状态重复一致）由 R22/R23 既有机制保证。"
+  ],
+  "测试条件要求": [
+    "测试运行需可写临时目录。"
+  ],
+  "未决测试条件": [
+    "暂无"
+  ],
+  "针对性回归范围": [
+    "tests/test_commands.py、tests/test_return_rework_flow.py、tests/test_gate_rework_stability.py 的退回与门禁回归（含 3 处报错文案断言更新）。"
+  ],
+  "填写说明": {
+    "测试项": {
+      "测试项编号": "主题内唯一，例如 TC-01；生成文档锚点和追踪表引用该编号",
+      "直白测试名称": "一句话说明测什么行为，读者不看代码也能懂，例如 空表主题门禁报尚未填写不退回文档模式",
+      "前置测试项": "本主题内必须先通过的直接 TC 编号；无依赖写“无”；不重复间接依赖",
+      "测试方式": "自动化测试、人工验收或 自动化测试 + 人工验收 三选一；能自动化判断的内容不能为省事写纯人工",
+      "产品入口": "用户或调用方实际使用的入口，例如 workflow gate impl 命令；取自产品设计使用过程",
+      "代码入口": "项目相对文件::可定位标识，例如 src/workflow_loop/stages/stages.py::ImplStage.discussion_validate；不接受目录或模块泛称",
+      "测试入口": "tests/文件::测试函数；测试文件可以尚未创建，但路径和目标必须明确；本列只进入生成的测试计划文档，不是登记入口，登记入口取“正式目标名称”列；人工验收行可留空",
+      "准备数据": "执行前要建立的具体数据和状态，例如 建一张空 impl_record 表；取自执行动作需要的前提",
+      "执行动作": "通过产品入口执行的具体动作一句话；与验收条件“触发动作”语义一致但写到可执行粒度",
+      "观察位置": "检查返回值、状态文件、生成文档或输出的具体位置；与验收条件“可检查结果”对应",
+      "预期结果": "必须出现的具体值、数量、存在性或状态；与验收条件“通过标准”逐项一致，不新增标准",
+      "不通过表现": "出现哪些缺失、错误值或错误状态即失败；与预期结果对应",
+      "证据要求": "需要保存的结构化报告和可复核事实，例如 pytest junitxml 报告与退出码",
+      "对应验收条件": "本测试项主要服务的 AC 编号；一个测试项只对应一条主要验收条件",
+      "命令参数数组": "JSON 数组，例如 [\"pytest\", \"tests/test_a.py\"]；人工验收行留空",
+      "工作目录": "项目内相对路径；留空表示项目根",
+      "超时秒数": "整数，例如 600；人工验收行留空",
+      "报告适配器": "pytest-junitxml 或 vitest-junit；人工验收行留空",
+      "正式目标名称": "本列是登记入口的唯一来源：必须写成 项目相对路径::报告里的目标名，与报告适配器输出的目标名逐字一致，例如 tests/test_records.py::test_table_rejects_bad_entry（pytest 写 nodeid，vitest 写 测试文件路径::测试标题）。只写测试标题不带路径会被登记拒绝。一个测试项覆盖多个测试函数时，把多个入口写成 JSON 数组，例如 [\"tests/a.test.ts::读取返回 15 组\",\"tests/a.test.ts::升级文案存在\"]；同行“测试入口”列填了也不参与登记。人工验收行留空"
+    },
+    "测试范围说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "测试条件要求": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "未决测试条件": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "针对性回归范围": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "程序专用字段": "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
+  }
+}

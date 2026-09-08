@@ -1,0 +1,18 @@
+# 【工作记录】验收结果：工作记录表生成校验与文档生成
+
+- 工作流编号：2026-08-29-0852-product_change
+- 验收结果：通过
+- 验收主题：工作记录表生成校验与文档生成
+
+## 验收结果
+
+| 验收条件编号 | 验收结论 | 实际观察结果 | 证据 |
+|---|---|---|---|
+| AC-01 | passed | 环节加载材料时生成预填表：表版本/工作流编号/主题已填，栏目带填写说明与示例 | tests/test_records.py::test_table_create_then_recreate_keeps_filled_content 通过；本轮 qa discuss 真实生成 6 张测试计划表 |
+| AC-02 | passed | 重复生成保留已填内容，仅补缺失固定栏目 | tests/test_records.py::test_table_create_then_recreate_keeps_filled_content 通过 |
+| AC-03 | passed | 栏目名错误、必填空、编号重复一次列全并标注格式/内容类别；同输入重复校验清单一致 | tests/test_records.py::test_validate_reports_category_and_all_problems 通过 |
+| AC-04 | passed | 文档按表生成；手改被检出且不覆盖，写回表后恢复；表更新时正常重新生成 | tests/test_records.py::test_generate_impl_doc_and_detect_tamper 通过 |
+
+## 验收说明
+
+- 验收结论基于真实执行的测试机器记录、门禁真实运行结果和本轮真实使用证据；每行证据可复核。

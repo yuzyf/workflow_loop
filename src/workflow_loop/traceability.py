@@ -157,6 +157,72 @@ def _read_traceability(project_root: str) -> tuple[str, str]:
     return path.read_text(encoding="utf-8"), relative_path
 
 
+def backfill_spike_facts_from_state(
+    project_root: str,
+    workflow_id: str,
+    topics: list[str],
+) -> bool:
+    """R29：穿刺列的机器事实由程序从状态记录的资产登记回填，AI 不逐字抄写。
+
+    只补 AI 尚未填写的穿刺列：单元格为空或占位时，按当前工作流资产登记
+    组装"结论文档、用途、运行方法、当前重跑结论"文本写回；已有内容
+    （含历史资产引用）不覆盖。返回是否写入了修改。
+    """
+    state = load_state(project_root)
+    if state is None or state.workflow_id != workflow_id:
+        return False
+    assets = [asset for asset in state.spike_assets if asset.workflow_id == workflow_id]
+    if not assets:
+        return False
+    try:
+        content, relative_path = _read_traceability(project_root)
+        match = _workflow_match(content, workflow_id)
+    except ValueError:
+        return False
+    section = match.group(1)
+    lines = content.splitlines(keepends=True)
+    changed = False
+    for topic in topics:
+        rows = _topic_rows(project_root, section, topic)
+        for line_index, cells in rows:
+            headers = _headers_for_row(cells)
+            if "穿刺结论与可复用内容" not in headers:
+                continue
+            current = _cell(cells, "穿刺结论与可复用内容").strip()
+            if current and current not in {"待填写", "待补充"}:
+                continue
+            associated = [
+                asset
+                for asset in assets
+                if not asset.acceptance_conditions
+                or any(topic in condition for condition in asset.acceptance_conditions)
+            ]
+            if not associated:
+                continue
+            parts: list[str] = []
+            for asset in associated:
+                parts.append(f"[穿刺结论]({asset.conclusion_document})")
+                parts.append(f"用途：{asset.purpose}")
+                parts.append(f"运行方法：{asset.run_method}")
+                if asset.last_rerun_conclusion:
+                    parts.append(f"当前重跑结论：{asset.last_rerun_conclusion}")
+                parts.append(f"资产目录：{asset.relative_path}")
+            new_value = "；".join(parts)
+            column_index = headers.index("穿刺结论与可复用内容")
+            cells[column_index] = new_value
+            line = lines[line_index]
+            split = line.split("|")
+            # 单元格按 | 分割后：split[0] 是行首空白，split[i+1] 是第 i 列
+            if column_index + 1 < len(split):
+                split[column_index + 1] = f" {new_value} "
+                lines[line_index] = "|".join(split)
+                changed = True
+    if changed:
+        path = Path(project_root) / relative_path
+        path.write_text("".join(lines), encoding="utf-8")
+    return changed
+
+
 def _workflow_match(content: str, workflow_id: str) -> re.Match[str]:
     match = _workflow_heading_pattern(workflow_id).search(content)
     if match is None:
@@ -322,9 +388,16 @@ def collect_spike_asset_acceptance_links(
     if state is None or state.workflow_id != workflow_id:
         raise ValueError("找不到当前工作流状态，不能核对穿刺资产与验收条件的关联")
 
-    content, _relative_path = _read_traceability(project_root)
-    match = _workflow_match(content, workflow_id)
-    section = match.group(1)
+    # R29：先按状态登记回填未填写的穿刺列机器事实，再校验；回填与校验同源
+    try:
+        backfill_spike_facts_from_state(project_root, workflow_id, topics)
+        content, _relative_path = _read_traceability(project_root)
+        match = _workflow_match(content, workflow_id)
+        section = match.group(1)
+    except ValueError:
+        content, _relative_path = _read_traceability(project_root)
+        match = _workflow_match(content, workflow_id)
+        section = match.group(1)
     errors: list[str] = []
     associations: dict[str, list[str]] = {}
     assets_by_path = {

@@ -1,0 +1,18 @@
+# 【工作记录】测试计划：门禁与状态命令出错有明确出路
+
+- 工作流编号：2026-08-29-0852-product_change
+- 验收主题：门禁与状态命令出错有明确出路
+
+## 测试项
+
+<a id="tc-01"></a><a id="tc-02"></a><a id="tc-03"></a>
+
+| 测试项编号 | 命令参数数组 | 工作目录 | 超时秒数 | 报告适配器 | 正式目标名称 | 对应验收条件 |
+|---|---|---|---|---|---|---|
+| TC-01 | ['uv', 'run', 'python', '-m', 'pytest', '-q', 'tests/test_records.py::test_status_after_completed_does_not_point_to_done'] |  | 600 | pytest-junitxml | tests/test_records.py::test_status_after_completed_does_not_point_to_done | AC-01 |
+| TC-02 | ['uv', 'run', 'python', '-m', 'pytest', '-q', 'tests/test_records.py::test_gate_with_non_utf8_document_reports_structured_failure'] |  | 600 | pytest-junitxml | tests/test_records.py::test_gate_with_non_utf8_document_reports_structured_failure | AC-02 |
+| TC-03 | ['uv', 'run', 'python', '-m', 'pytest', '-q', 'tests/test_records.py::test_corrupted_state_file_reports_clean_error'] |  | 600 | pytest-junitxml | tests/test_records.py::test_corrupted_state_file_reports_clean_error | AC-03 |
+
+## 测试范围说明
+
+- 测试范围由验收计划表的自动化项决定；执行结论与机器记录编号由程序回填。

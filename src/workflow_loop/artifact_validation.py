@@ -614,6 +614,10 @@ def _required_final_machine_record_ids(wf_state) -> tuple[set[str] | None, str]:
             required.update(record.test_record_ids)
 
     regression = wf_state.regression_test
+    if regression.status == "skipped-by-no-change":
+        # R9/R9a：无代码改动跳过的轮次没有机器执行记录；设计同步照常，
+        # 结论按真实差异为无需修改，不要求不存在的 REG 编号。
+        return required, ""
     if regression.status != "passed" or not regression.record_id:
         return None, "最终全量回归没有当前有效的机器记录编号"
     required.add(regression.record_id)
@@ -2680,6 +2684,11 @@ def validate_final_regression_state(
         return (False, "找不到当前工作流状态，不能确认最终全量回归")
     result = state.regression_test
     failures: list[str] = []
+    if result.status == "skipped-by-no-change":
+        # R9：无代码改动跳过的轮次按判定依据核对，不要求不存在的执行事实
+        if not result.skip_reason or not result.skipped_at:
+            return (False, "最终全量回归标记为无代码改动跳过，但缺少跳过依据或判定时间")
+        return (True, f"最终全量回归按无代码改动跳过（依据已记录：{result.skipped_at}）")
     if result.status == "unavailable":
         failures.append("最终全量回归明确失败：当前平台没有可执行的项目全量测试入口")
     elif result.status != "passed":

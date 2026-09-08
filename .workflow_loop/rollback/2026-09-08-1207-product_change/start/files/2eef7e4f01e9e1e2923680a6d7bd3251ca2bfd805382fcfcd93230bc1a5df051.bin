@@ -1,0 +1,79 @@
+# 【缺陷】门禁把真实格式错误说成没有主题或缺少内容
+
+- 工作流编号：2026-08-13-0346-bugfix
+- 复现状态：已复现
+- 根因状态：已确认
+- 验收主题：所有阶段门禁失败时一次指出全部真实原因和改法
+
+## 1. 缺陷现象
+
+任意阶段写正式文档时，真实问题是路径格式、字段格式、代码基线对不上，或位置列写了文件里找不到的泛称。门禁却报“没有找到本次新增的验收主题”“缺少具体内容”“实施计划确认前代码已经变化”或“代码位置无法在当前文件中定位”。按这句去补主题、补内容、再 commit，仍然失败，只能反复试。验收范围是所有阶段：验收计划、缺陷复现、实施、测试计划和其它共用同一套解析与诊断包装的环节，都必须一次给出真实原因和改法。
+
+## 2. 真实复现条件
+
+- 运行环境：本仓库当前代码；Python 使用项目虚拟环境 `.venv/bin/python`；在临时项目中调用真实校验函数，不改生产代码。
+- 真实输入：按用户实际踩过的写法构造文档和状态。一是 `acceptance/索引.md` 的“主题验收结果”写成 `[验收结果](acceptance/上传文件_验收结果.md)`，而不是 `./上传文件_验收结果.md`。二是验收条件字段写成标签单独一行、值缩进写在下一行。三是缺陷记录把 `验收主题` 留空，下一行写另一个字段。四是进入实施后先记下代码基线哈希 `code_baseline_hash`，再改已登记的产品文件，不执行 `workflow gate impl --rebaseline`。五是实施记录代码结果表“类、函数或配置项”列写成“组件”，目标文件里只有函数 `upload`，没有“组件”这两个字。
+
+## 3. 复现步骤
+
+1. 用 `create_project` 和 `save_state` 建临时项目，工作流编号为 `wf`，意图为 `product_change`。
+2. 写入错误索引：主题验收结果链接目标为 `acceptance/上传文件_验收结果.md`。分别调用 `read_topic_index`、`list_acceptance_index_topics`、`AcceptancePlanStage.code_validate`。
+3. 另建一份索引正确的临时项目，把 `开始前状态` 的值写到下一行。调用 `_field`、`validate_acceptance_plan_documents`、`AcceptancePlanStage.code_validate`。
+4. 再写一份缺陷记录，把 `验收主题` 留空，下一行写另一个字段。调用 `list_reproduce_topics`。
+5. 用 `_impl_fixture` 建实施夹具。进入实施后 `ensure_impl_recovery_baseline` 记下哈希。再写入已登记文件 `src/upload.py`。再次调用 `ensure_impl_recovery_baseline`，并调用 `ImplStage.discussion_validate`。
+6. 同一夹具中把代码结果表位置列写成“组件”，目标文件内容为 `def upload():`。调用 `_location_exists` 和 `_recorded_code_changes`。
+
+## 4. 实际结果
+
+索引路径写错时，`read_topic_index` 已经报出“应指向 `./上传文件_验收结果.md`，实际是 `acceptance/上传文件_验收结果.md`”。`list_acceptance_index_topics` 捕获这个错误后返回空列表。验收计划门禁因此报“没有找到本次新增的验收主题；主题名称不能复用项目历史中的名称”，并声明验收计划文档“未检查”。确认路径会改口说“没有找到 `acceptance/索引.md` 中的本次验收主题”。对外诊断再把期望改成“当前检查所需前置事实存在，且具体内容满足门禁规则”。
+
+字段值写在下一行时，`_field('开始前状态')` 返回空。门禁报“acceptance/上传文件_验收计划.md AC-01“开始前状态”字段：缺少具体内容”。标签缺失、同行空值、值在下一行三种情况，报错都是这同一句。测试计划标记和架构过程表也复用“缺少具体内容”。
+
+缺陷记录主题写在下一行时，`list_reproduce_topics` 不报错，直接把下一行“- 别的字段：不该被当成主题”当成主题名。
+
+进入实施后改已登记产品文件时，`ensure_impl_recovery_baseline` 第二次返回 False，已存哈希不变。`ImplStage.discussion_validate` 只报“实施计划确认前代码已经变化，不能通过 impl 的第一道门”。这句话不列出变化文件，不说明基线是进入实施时冻结的，不说明 `workflow discuss` 和 `git commit` 都不会重写这个哈希，也不提示必须执行 `workflow gate impl --rebaseline`。第一次 `workflow discuss` 进入实施时只写 journal 条目“实施代码入场基线”，不向用户打印基线已冻结。
+
+位置列写成“组件”时，`_location_candidates` 只得到 `['组件']`，`_location_exists` 为 False。`_recorded_code_changes` 报“impl/上传文件_实施记录.md:50，“类、函数或配置项”列：代码位置无法在当前文件中定位；文件='src/upload.py'，记录位置='组件'”。这句话不说明必须写文件里能找到的函数名、类名或配置项，也不说明“组件”这种泛称无效。
+
+## 5. 期望结果
+
+所有阶段的验收都按同一标准：门禁失败时要把当前输入下全部真实原因和改法一次说全，每条都写清位置、期望、实际、证据、影响和下一步。不能先报一句假结论，让人改一轮再撞下一项。这个标准覆盖验收计划、缺陷复现、实施、测试计划和其它正式门禁，不只覆盖验收计划阶段。
+
+索引写成 `acceptance/xxx.md` 时，必须指出应写成 `./xxx.md`。字段值写在下一行时，必须指出值必须写在标签同一行。缺陷记录主题换行时，必须指出格式错误，不能把下一字段吞成主题名。
+
+实施第一道门发现代码基线对不上时，必须说明：基线是进入实施时冻结的工作区产品文件内容哈希，不是 git 提交；`workflow discuss` 和 `git commit` 都不会覆盖已存的 `code_baseline_hash`；要列出相对冻结基线发生变化的已登记产品文件；上轮遗留或入场后改过代码时，应先收完遗留或立刻执行 `workflow gate impl --rebaseline`。第一次进入实施的 `workflow discuss` 必须主动打印基线已冻结，提醒未提交遗留要先处理或马上重设基线。
+
+实施记录位置列写成“组件”这类文件里找不到的泛称时，必须指出该列要写当前文件内可定位的函数名、类名或配置项，泛称无效。
+
+解析规则保持现在这样：固定字段的值只认标签同一行；位置列必须能在文件里定位。不放宽解析。验收、测试、实施、缺陷记录模板都要写明这些比示例更严的规则。
+
+## 6. 根因
+
+- 根因说明：底层已经能判断路径、字段、基线哈希和文件内定位，上层却把异常、空值或总哈希差异换成另一句结论。索引解析失败被当成“没有主题”；字段没读到被当成“没写内容”；缺陷记录主题正则会跨行，把下一字段吞成主题名；实施基线只存一个总哈希，入场后不再覆盖，失败时既不列文件也不说重设办法；位置检查只做子串查找，失败时不说明必须写文件内真实名称。模板只在穿刺里写了同行规则，实施模板只写“精确位置”，看起来像可以换行写值或写“组件”。
+- 根因位置：`src/workflow_loop/topic.py` 的 `list_acceptance_index_topics` 捕获 `ValueError` 后返回空列表；`src/workflow_loop/artifact_validation.py` 的 `_field` 只读同行，调用方把空结果一律写成“缺少具体内容”；`src/workflow_loop/cli.py` 的 `_diagnostics_from_failure_details` 使用固定空话期望，所有仍走旧字符串的阶段都会被盖住；`src/workflow_loop/topic.py` 的 `list_reproduce_topics` 和 `src/workflow_loop/bug_record.py` 的 `TOPIC_RE` 用会跨行的空白匹配读取验收主题；`src/workflow_loop/cli.py` 的 `ensure_impl_recovery_baseline` 只在 `code_baseline_hash` 为空时写入；`src/workflow_loop/stages/stages.py` 的 `ImplStage.discussion_validate` 只报代码已经变化；`src/workflow_loop/rollback.py` 的 `_location_exists` 失败时只说无法定位。
+- 根因证据：已用真实校验器跑通上述输入。`read_topic_index` 输出包含“应指向 ./上传文件_验收结果.md，实际是 acceptance/上传文件_验收结果.md”；同一次运行里 `list_acceptance_index_topics` 返回空列表，`AcceptancePlanStage.code_validate` 只报没有新增主题。换行字段时 `_field` 为空，校验原文是“缺少具体内容”。缺陷记录跨行时 `list_reproduce_topics` 返回 `['- 别的字段：不该被当成主题']`。实施夹具中第二次 `ensure_impl_recovery_baseline` 返回 False，`discussion_validate` 原文只有“实施计划确认前代码已经变化，不能通过 impl 的第一道门”。位置列写“组件”时，`_recorded_code_changes` 原文是“代码位置无法在当前文件中定位；文件='src/upload.py'，记录位置='组件'”。
+
+## 7. 修复仍存在的不确定性
+
+暂无。修复边界已确定：不放宽解析规则；所有阶段把门禁失败时换成假结论或藏起改法的入口都要一次报出全部真实原因；模板补写“字段值必须在标签同一行”和“位置列必须是文件内可定位名称”；实施基线失败要列出变化文件、说明冻结时机和 `workflow gate impl --rebaseline`；第一次进入实施的 `workflow discuss` 要打印基线已冻结。
+
+## 8. 修复与验收结果
+
+本节由后续阶段按实际结果追加。缺陷复现阶段不得填写，也不能改写前七节。
+
+### 主题验收结果（工作流 2026-08-13-0346-bugfix）
+- 最终状态：主题验收通过，待全量回归
+- 实施记录：[实施记录](../impl/所有阶段门禁失败时一次指出全部真实原因和改法_实施记录.md)
+- 主题测试结果：[测试结果](../qa/所有阶段门禁失败时一次指出全部真实原因和改法_测试结果.md)
+- 主题验收结果：[验收结果](../acceptance/所有阶段门禁失败时一次指出全部真实原因和改法_验收结果.md)
+- 最终全量回归：待执行
+
+### 最终全量回归结果（工作流 2026-08-13-0346-bugfix）
+- 最终状态：全量回归通过，待整体验收
+- 回归结果：统一测试入口执行通过，详情见当前工作流 state.json 和 journal
+- 后续处理：等待用户进行整体验收
+
+### 整体验收确认（工作流 2026-08-13-0346-bugfix）
+- 最终状态：已修复并验收
+- 最终全量回归：统一测试入口已通过，详情见当前工作流 state.json 和 journal
+- 整体验收：用户已确认

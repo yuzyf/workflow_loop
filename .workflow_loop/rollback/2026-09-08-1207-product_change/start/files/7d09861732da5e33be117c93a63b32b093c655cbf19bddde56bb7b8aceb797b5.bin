@@ -1,0 +1,38 @@
+# 计划路径非法时门禁一次说清而不是抛异常测试计划
+
+- 工作流编号：2026-09-02-1012-bugfix
+- 上游验收计划：[计划路径非法时门禁一次说清而不是抛异常验收计划](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md)
+
+## 1. 验收条件覆盖
+
+| 验收条件链接 | 测试项 | 前置测试项 | 测试方式 | 产品入口 | 代码入口 | 测试入口 | 准备数据 | 执行动作 | 观察位置 | 预期结果 | 不通过表现 | 证据要求 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [AC-01：计划路径问题进问题清单](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md#ac-01) | <a id="tc-01"></a>[TC-01 计划路径问题带完整诊断](#tc-01) | 无 | 自动化测试 | workflow gate impl 第二道门 | `src/workflow_loop/rollback.py::planned_code_paths` | `tests/test_gate_plan_path_diagnostics.py::test_planned_path_problem_carries_full_diagnostic` | 隔离项目的实施记录表把工作流过程文档路径填在代码修改计划的文件列 | 取本主题的计划路径集合 | 专用异常携带的诊断列表及其每个字段 | 失败以携带诊断的专用异常给出，每条诊断的位置、预期、实际、证据、影响和下一动作齐全 | 失败仍以只有文字的通用异常给出，或任一字段为空 | pytest 结构化 junit 报告 1 条通过且退出码 0 |
+| [AC-01：计划路径问题进问题清单](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md#ac-01) | <a id="tc-02"></a>[TC-02 第二道门报告含计划路径问题](#tc-02) | 无 | 自动化测试 | workflow gate impl 第二道门 | `src/workflow_loop/rollback.py::validate_actual_implementation_changes_report` | `tests/test_gate_plan_path_diagnostics.py::test_gate_report_lists_planned_path_problem` | 隔离项目的实施记录表把工作流过程文档路径填在代码修改计划的文件列 | 生成实施门禁的结构化报告 | 实施门禁结构化报告的诊断标识集合与渲染文本 | 报告里出现该条计划路径错误，渲染文本含位置和下一动作，且没有以异常形式中断 | 报告里没有该条计划路径错误，或渲染文本缺少位置和下一动作 | pytest 结构化 junit 报告 1 条通过且退出码 0 |
+| [AC-01：计划路径问题进问题清单](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md#ac-01) | <a id="tc-03"></a>[TC-03 兜底处理按诊断渲染](#tc-03) | 无 | 自动化测试 | workflow 命令的未预期失败兜底输出 | `src/workflow_loop/rollback.py::PlannedPathError` | `tests/test_gate_plan_path_diagnostics.py::test_command_layer_renders_carried_diagnostics` | 构造一条带七个字段的诊断并放进专用异常 | 按命令层的做法取出异常携带的诊断并渲染 | 按命令层做法渲染出的报告文本 | 渲染结果逐项包含位置、预期、实际、证据、影响和下一动作 | 渲染文本缺少位置、预期、实际、证据、影响或下一动作中的任意一项 | pytest 结构化 junit 报告 1 条通过且退出码 0 |
+| [AC-02：与其它问题一次列全](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md#ac-02) | <a id="tc-04"></a>[TC-04 两类问题一次列全](#tc-04) | 无 | 自动化测试 | workflow gate impl 第二道门 | `src/workflow_loop/rollback.py::validate_actual_implementation_changes_report` | `tests/test_gate_plan_path_diagnostics.py::test_planned_and_actual_problems_reported_together` | 同一份实施记录表里计划行和实际改动行各填一个工作流过程文档路径 | 生成一次实施门禁的结构化报告 | 同一次实施门禁报告里的诊断标识集合 | 同一次报告里同时出现计划一侧和实际改动一侧的路径问题 | 两类路径问题只出现其中一类，另一类要下一轮才出现 | pytest 结构化 junit 报告 1 条通过且退出码 0 |
+| [AC-03：判定本身不变](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md#ac-03) | <a id="tc-05"></a>[TC-05 合法计划路径仍正常返回](#tc-05) | 无 | 自动化测试 | workflow gate impl 第二道门 | `src/workflow_loop/rollback.py::planned_code_paths` | `tests/test_gate_plan_path_diagnostics.py::test_legal_plan_path_still_returns_without_diagnostic` | 隔离项目的实施记录表把项目内真实源码路径填在代码修改计划的文件列 | 取本主题的计划路径集合，并生成一次实施门禁报告 | 计划路径集合的返回值与报告中的诊断标识集合 | 正常返回该路径，报告里没有计划路径类错误 | 合法路径被判为错误，或返回值缺少该路径 | pytest 结构化 junit 报告 1 条通过且退出码 0 |
+| [AC-03：判定本身不变](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md#ac-03) | <a id="tc-06"></a>[TC-06 非法计划路径仍被拦下](#tc-06) | 无 | 自动化测试 | workflow gate impl 第二道门 | `src/workflow_loop/rollback.py::planned_code_paths` | `tests/test_gate_plan_path_diagnostics.py::test_illegal_plan_path_is_still_rejected` | 隔离项目的实施记录表把工作流过程文档路径填在代码修改计划的文件列 | 取本主题的计划路径集合 | 失败是否发生以及失败对象的类型和文字 | 仍被判为错误，且失败类型仍可被原有的通用异常捕获方式接住 | 非法路径被放过，或失败类型不再能被原有捕获方式接住 | pytest 结构化 junit 报告 1 条通过且退出码 0 |
+| [AC-04：现有调用方行为不变](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md#ac-04) | <a id="tc-07"></a>[TC-07 现有捕获方行为不变](#tc-07) | 无 | 自动化测试 | workflow gate impl 第二道门读取阶段责任文件 | `src/workflow_loop/verification.py::stage_responsibility_paths` | `tests/test_gate_plan_path_diagnostics.py::test_existing_callers_keep_swallowing_the_failure` | 隔离项目的计划路径非法且实施记录文档已经生成 | 调用阶段责任文件清单和既有实现路径校验两处入口 | 两处入口各自的返回值类型与是否抛出异常 | 两处都不把异常抛给调用方，也不返回全项目扫描结果 | 任一处把异常抛给调用方，或返回全项目扫描结果 | pytest 结构化 junit 报告 1 条通过且退出码 0 |
+
+## 2. 针对性回归范围
+
+- 本轮改动触及计划路径解析、实施门禁报告和命令层兜底输出三处既有链路，其直接影响由仓库既有测试覆盖；跨主题与间接影响交给最终全量回归统一检查。
+
+## 3. 测试条件要求
+
+- 运行环境为仓库内 .venv 的 Python 3.13，测试执行器为 pytest 并加载 workflow_loop.test_report 插件生成结构化报告。
+- 七个测试项都在 pytest 临时目录中新建隔离项目并写入实施记录工作记录表，互不共享状态；非法路径取真实存在的包内规范文件路径。
+
+## 4. 未决测试条件
+
+- 暂无
+
+## 5. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [计划路径非法时门禁一次说清而不是抛异常验收计划](../acceptance/计划路径非法时门禁一次说清而不是抛异常_验收计划.md) | 本测试计划依据的验收条件 |
+| 上游 | [实施记录](../impl/计划路径非法时门禁一次说清而不是抛异常_实施记录.md) | 测试入口和观察位置来自已确认实施与真实代码 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整交付关系和状态 |
+| 下游 | [计划路径非法时门禁一次说清而不是抛异常测试结果](./计划路径非法时门禁一次说清而不是抛异常_测试结果.md) | 记录正式执行的结构化报告事实 |

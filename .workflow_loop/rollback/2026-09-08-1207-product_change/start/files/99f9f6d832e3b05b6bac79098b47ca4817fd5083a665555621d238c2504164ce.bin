@@ -1,0 +1,118 @@
+# 【实施】无代码改动轮次跳过全量回归执行
+
+- 工作流编号：2026-09-08-0228-product_change
+- 验收主题：无代码改动轮次跳过全量回归执行
+
+<a id="1-实施依据"></a>
+## 1. 实施依据
+
+| 依据类型 | 依据编号 | 具体内容 | 文档位置 |
+|---|---|---|---|
+| 产品设计 | JU-01 | 最终回归第二道门按实施前基线与最终文件差异判定：产品代码差异与测试代码差异都为空才跳过；差异无法确认时一律运行；判定依据写入状态记录 | [验收并完成交付 R9](../spec/功能_验收并完成交付.md#r-9) |
+| 产品设计 | JU-02 | 跳过只免测试执行，整体验收与最终设计同步照常，无改动时设计同步结论为无需修改 | [验收并完成交付 R9a](../spec/功能_验收并完成交付.md#r-9a) |
+| 验收条件 | JU-03 | AC-01 差异为空跳过并留依据；AC-02 无法确认一律运行；AC-03 跳过不免除确认门 | [AC-01](../acceptance/无代码改动轮次跳过全量回归执行_验收计划.md#ac-01) |
+| 现有代码设计 | JU-04 | run_final_regression 已选择入口并保存机器记录；changed_paths_since_prepare 已能按回退清单算差异；is_test_related_path 已区分测试相关文件；受管文档目录已在哈希扫描时排除 | [代码架构设计 6.11](../spec/代码架构设计.md#611-功能验收并完成交付) |
+| 穿刺结论 | JU-05 | 本轮未执行穿刺，无可复用资产 | 暂无 |
+
+<a id="2-实施前计划"></a>
+<a id="2-实施前计划代码计划"></a>
+## 2. 实施前计划（代码计划）
+
+
+<a id="21-预期产品结果"></a>
+### 2.1 预期产品结果
+
+- 只改文档、不改代码的轮次，最终回归不再空跑一次全量测试；判定依据由程序写入状态，用户在确认门可查；确认门一个都不少。
+
+<a id="22-最低实现设计"></a>
+### 2.2 最低实现设计
+
+| 设计项 | 已确认做法 | 选择理由 | 对应验收条件 |
+|---|---|---|---|
+| 模块与职责 | 在 test_runner.py 新增 should_skip_final_regression(project_root, wf_state)→(跳过与否, 依据文本)：复用 changed_paths_since_prepare 得到差异清单，按 is_test_related_path 拆分为产品代码差异与测试代码差异两组，两组都为空才返回跳过，并组装依据（差异为空事实、判定时间、拆分口径）。cli.py 的 regression_test 第二道门先调它，跳过时把依据写入 state.regression_test 并标记 skipped，不运行统一入口 | 判定逻辑集中一个纯函数，门禁调用和依据记录同源；不新建模块，与现有 run_final_regression 同文件便于一起理解 | AC-01、AC-02 |
+| 接口与调用顺序 | cmd_gate 的 regression_test 分支：先 should_skip_final_regression；返回跳过→写 state（skipped 状态+依据）、第二道门直接通过、输出说明跳过原因与依据位置；返回不跳过或无法确认→走原 run_final_regression 路径不变 | 改动点收敛在一个分支内，原执行路径零变化，回归风险最小 | AC-01、AC-02 |
+| 数据、状态与副作用 | state.regression_test 增加跳过依据字段（差异为空事实、产品/测试差异清单、判定时间）；跳过时 status 写 skipped-by-no-change，不产生机器执行记录编号；整体验收和最终设计同步代码不改——它们本来就不依赖回归的机器编号，只依赖全部主题验收通过 | 跳过轮次没有真实执行，不造机器记录；确认门链路现状已满足 R9a，无需改动 | AC-01、AC-03 |
+| 错误与边界 | 回退清单缺失、差异计算抛错、Git 不可用且无快照时，一律返回不跳过并如实运行；仅测试代码变化、仅构建或依赖配置变化时返回不跳过；受管文档变化不参与判定（沿用现有排除目录） | R9 明文规定差异无法确认时一律运行；边界口径直接取自规则文本 | AC-02 |
+
+<a id="23-代码修改计划"></a>
+### 2.3 代码修改计划
+
+| 顺序 | 文件 | 类、函数或配置项 | 当前逻辑 | 计划修改内容 | 数据、状态或输出变化 | 对应验收条件 | 前置步骤 |
+|---|---|---|---|---|---|---|---|
+| 1 | src/workflow_loop/test_runner.py | 新增 should_skip_final_regression | 暂无现有逻辑（新函数）；run_final_regression 无条件执行统一入口 | 新增判定函数：按回退清单算差异、拆产品与测试两组、都为空返回跳过与依据文本；清单缺失或计算失败返回不跳过 | 调用方可获得跳过判定与机器依据文本 | AC-01、AC-02 | 无 |
+| 2 | src/workflow_loop/state.py | RegressionTestState（回归状态类） | 字段有 status、record_id、命令与输出事实；无跳过依据字段 | 增加 skip_reason（跳过依据）与 skipped_at（判定时间）字段，默认 None；序列化兼容旧状态 | 跳过轮次的 state 里可查判定依据 | AC-01 | 1 |
+| 3 | src/workflow_loop/cli.py | cmd_gate 的 regression_test 第二道门分支 | 第二道门无条件调用 run_final_regression，退出码 0 才通过 | 进入执行前先调 should_skip_final_regression；跳过时写 state（skipped-by-no-change、依据、时间）并直接通过第二道门，输出打印跳过说明与依据；不跳过走原路径 | 只改文档的轮次第二道门秒过并显示依据；正常轮次行为不变 | AC-01、AC-02、AC-03 | 2 |
+| 4 | tests/test_regression_skip.py | 新增测试文件 | 暂无现有逻辑（新文件） | 覆盖：差异全空跳过且依据入库、仅测试代码变化不跳过、仅配置变化不跳过、文档变化不影响判定、清单缺失时运行、跳过后整体验收与设计同步门仍按原逻辑走 | 新增测试全部通过 | AC-01、AC-02、AC-03 | 3 |
+
+<a id="开发检查计划"></a>
+#### 开发检查计划
+
+| 检查命令或方法 | 检查范围 | 预期观察结果 |
+|---|---|---|
+| uv run python -m pytest tests/test_regression_skip.py -q | 跳过判定与门禁分支全部行为 | 全部测试通过，退出码 0 |
+| uv run python -m pytest tests/test_test_runner.py tests/test_commands.py -q | 正常轮次回归执行路径无回归 | 既有测试全部通过 |
+
+<a id="24-未决问题"></a>
+### 2.4 未决问题
+
+- 暂无
+
+<a id="3-实施后记录"></a>
+<a id="3-实施后记录代码实施与代码结果"></a>
+## 3. 实施后记录（代码实施与代码结果）
+
+<a id="31-实施动作记录"></a>
+### 3.1 实施动作记录
+
+| 实施顺序 | 对应计划步骤 | 文件 | 代码位置（最终文件） | 实际执行的动作 | 当步反馈 | 状态 |
+|---|---|---|---|---|---|---|
+| 1 | 1 | src/workflow_loop/test_runner.py | L11-L11 | 新增 should_skip_final_regression：读回退清单、算差异、排除受管文档、按 is_test_related_path 拆产品/测试两组，都为空返回跳过与依据；清单缺失或计算失败返回不跳过 | tests/test_regression_skip.py 7 项通过 | 已完成 |
+| 2 | 1 | src/workflow_loop/test_runner.py | L58-L104 | （续前一行）新增 should_skip_final_regression：读回退清单、算差异、排除受管文档、按 is_test_related_path 拆产品/测试两组，都为空返回跳过与依据；清单缺失或计算失败返回不跳过 | tests/test_regression_skip.py 7 项通过 | 已完成 |
+| 3 | 2 | src/workflow_loop/state.py | L316-L318 | RegressionTestState 增加 skip_reason 与 skipped_at 字段，_regression_state_from_dict 反序列化兼容旧状态（缺省 None） | 序列化往返测试通过 | 已完成 |
+| 4 | 2 | src/workflow_loop/state.py | L638-L639 | （续前一行）RegressionTestState 增加 skip_reason 与 skipped_at 字段，_regression_state_from_dict 反序列化兼容旧状态（缺省 None） | 序列化往返测试通过 | 已完成 |
+| 5 | 3 | src/workflow_loop/cli.py | L2281-L2322 | 回归第二道门执行前先判定：跳过时写 state（skipped-by-no-change、依据、时间）、journal 登记、直接通过并输出依据与 R9a 说明；不跳过走原 run_final_regression 路径 | tests/test_commands.py 既有回归路径测试通过 | 已完成 |
+| 6 | 4 | src/workflow_loop/artifact_validation.py | L617-L620 | validate_final_regression_state 认识跳过状态（有依据即通过）；_required_final_machine_record_ids 跳过轮次不要求 REG 编号（设计同步照常） | test_regression_skip.py 状态校验两项通过 | 已完成 |
+| 7 | 4 | src/workflow_loop/artifact_validation.py | L2687-L2691 | （续前一行）validate_final_regression_state 认识跳过状态（有依据即通过）；_required_final_machine_record_ids 跳过轮次不要求 REG 编号（设计同步照常） | test_regression_skip.py 状态校验两项通过 | 已完成 |
+| 8 | 4 | tests/test_regression_skip.py | L1-L189 | 新建测试：差异全空跳过留依据、仅测试代码变化不跳过、清单缺失一律运行、受管文档不影响判定、序列化往返、跳过状态校验通过与缺依据失败 | 7 passed in 0.19s | 已完成 |
+
+<a id="32-实施中问题与处理"></a>
+### 3.2 实施中问题与处理
+
+- 实施中发现跳过状态会连带影响最终设计同步的机器记录核对（_required_final_machine_record_ids 要求 REG 编号），按 R9a 设计同步照常的要求一并放行跳过轮次，配套两项测试。
+
+<a id="33-未完成内容"></a>
+### 3.3 未完成内容
+
+状态：无
+
+<a id="34-代码结果"></a>
+### 3.4 代码结果
+
+<a id="341-实际代码修改"></a>
+#### 3.4.1 实际代码修改
+
+| 文件 | 代码位置（最终文件） | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 修改理由 | 对应验收条件 | 测试证据 |
+|---|---|---|---|---|---|---|
+| src/workflow_loop/test_runner.py | L11-L104 | should_skip_final_regression 判定函数：回退清单缺失/读取失败/差异计算异常时返回 (False, 差异无法确认…一律运行)；差异按 managed_document_paths 排除受管文档、is_test_related_path 拆分两组；两组都空返回 (True, 依据含清单路径与判定时间) | 调用方可获得跳过判定与完整机器依据文本 | R9 跳过判定的核心实现；无法确认时一律运行来自规则明文 | AC-01、AC-02 | tests/test_regression_skip.py 7 项通过 |
+| src/workflow_loop/state.py | L316-L639 | RegressionTestState 增加 skip_reason、skipped_at 可空字段；_regression_state_from_dict 读取两字段缺省 None，旧 state.json 反序列化不报错 | 跳过轮次的 state 可查判定依据与时间 | R9 判定依据写入状态记录 | AC-01 | test_regression_skip.py::test_regression_state_serialization_roundtrip |
+| src/workflow_loop/cli.py | L2281-L2322 | 回归第二道门在 run_final_regression 前调 should_skip_final_regression：跳过分支写 skip_reason/skipped_at/status=skipped-by-no-change、journal 记录最终全量回归跳过（无代码改动）、stage 校验通过后返回含依据与 R9a 说明的成功消息；不跳过原路径零变化 | 只改文档的轮次第二道门直接通过并显示依据；正常轮次行为不变 | R9 门禁分支与 R9a 说明输出 | AC-01、AC-02、AC-03 | tests/test_commands.py 全通过（正常回归路径无回归） |
+| src/workflow_loop/artifact_validation.py | L617-L2691 | validate_final_regression_state：status=skipped-by-no-change 时只核对 skip_reason 与 skipped_at 存在即通过；_required_final_machine_record_ids：跳过轮次返回已有记录集合、不要求不存在的 REG 编号 | 跳过轮次的阶段产出校验和最终设计同步照常，不因无 REG 编号失败 | R9a 跳过不免除确认门（设计同步照常、无改动结论无需修改） | AC-03 | test_regression_skip.py::test_skipped_regression_passes_state_validation、test_skipped_regression_without_reason_fails |
+
+<a id="342-开发检查记录"></a>
+#### 3.4.2 开发检查记录
+
+| 检查命令或方法 | 检查范围 | 实际反馈 | 是否需要继续修改 |
+|---|---|---|---|
+| .venv/bin/python -m pytest tests/test_regression_skip.py -q --basetemp=/tmp/pytest-basetemp | 跳过判定与门禁分支全部行为 | 7 passed in 0.19s，退出码 0 | 否 |
+| .venv/bin/python -m pytest tests/test_test_runner.py tests/test_commands.py -q --basetemp=/tmp/pytest-basetemp | 正常轮次回归执行路径无回归 | 全部通过（test_commands.py 36 项含回归门禁路径），退出码 0 | 否 |
+
+<a id="4-上下游文档"></a>
+## 4. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/无代码改动轮次跳过全量回归执行_验收计划.md) | 本主题要达到的用户结果和验收条件 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整交付链路 |
+| 下游 | [无代码改动轮次跳过全量回归执行 测试计划](../qa/无代码改动轮次跳过全量回归执行_测试计划.md) | 代码结果确认后，在测试验证开始时确认范围和通过标准 |
+| 下游 | [无代码改动轮次跳过全量回归执行 测试结果](../qa/无代码改动轮次跳过全量回归执行_测试结果.md) | 同一测试验证阶段连续完成测试代码、登记、执行和结果 |
+| 下游 | [无代码改动轮次跳过全量回归执行 验收结果](../acceptance/无代码改动轮次跳过全量回归执行_验收结果.md) | 正式测试后执行主题验收 |

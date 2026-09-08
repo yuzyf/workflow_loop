@@ -1,0 +1,19 @@
+# 【工作记录】验收结果：表模式不删减原有校验
+
+- 工作流编号：2026-08-29-1238-product_change
+- 验收结果：通过
+- 验收主题：表模式不删减原有校验
+
+## 验收结果
+
+<a id="ac-01"></a>
+<a id="ac-02"></a>
+<a id="ac-03"></a>
+
+| 验收条件编号 | 验收结论 | 实际观察结果 | 证据 |
+|---|---|---|---|
+| AC-01 | passed | impl 门禁按真实改动核对，承接文档模式全部校验无一跳过 | 机器记录 RUN-20260829T215352+0000-bb7eb0a6；测试 tests/test_stages.py::test_impl_gate_prefers_real_changes_over_existing_code_marker |
+| AC-02 | passed | 真实改动与记录不符即报，表通过不提前 return 跳过后续检查 | 机器记录 RUN-20260829T215353+0000-6948a287；测试 tests/test_stages.py::test_impl_gate_reports_real_change_mismatch_even_with_existing_code_marker |
+| AC-03 | passed | impl 规范引用 impl_record 表路径、引导填表不手写固定部分 | 机器记录 RUN-20260829T215353+0000-fff073d4；测试 tests/test_stages.py::test_qa_materials_include_plan_and_result_documents_without_duplicates |
+
+## 验收说明

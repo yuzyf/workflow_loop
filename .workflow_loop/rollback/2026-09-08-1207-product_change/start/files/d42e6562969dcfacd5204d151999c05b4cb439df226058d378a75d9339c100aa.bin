@@ -1,0 +1,164 @@
+# 【主题测试结果】可复用穿刺资产保留并与验收条件全局追踪
+
+- 工作流编号：2026-08-10-0817-product_change
+- 验收主题：可复用穿刺资产保留并与验收条件全局追踪
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 测试完成时间：2026-08-12T02:28:50+00:00
+
+## 1. 测试依据
+
+- [验收计划](../acceptance/可复用穿刺资产保留并与验收条件全局追踪_验收计划.md)
+- [测试计划](./可复用穿刺资产保留并与验收条件全局追踪_测试计划.md)
+- [代码计划、实施和结果](../impl/可复用穿刺资产保留并与验收条件全局追踪_实施记录.md)
+- [需求交付追踪表](../需求交付追踪表.md)
+
+## 2. 测试环境和执行说明
+
+- 本主题执行范围：TC-01 已登记穿刺资产在确认、收工和作废后保留、TC-02 穿刺资产只绑定实际支撑的 AC、TC-03 当前轮清理不改历史穿刺资产、TC-04 历史穿刺只有当前重跑成功才能复用
+- 执行顺序：本主题测试项均无前置测试项；主题执行顺序按 qa/索引.md 中的主题关系处理。
+- 未执行项：暂无
+
+## 3. 测试项结果
+
+### TC-01：已登记穿刺资产在确认、收工和作废后保留
+
+- 对应验收条件：[AC-01：能产生结论的穿刺代码和最小依赖在结束后保留](../acceptance/可复用穿刺资产保留并与验收条件全局追踪_验收计划.md#ac-01)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_spike_ac01_registered_assets_survive_confirmation_done_and_abort"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_spike_ac01_registered_assets_survive_confirmation_done_and_abort","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-01.xml"]
+- 机器记录编号：RUN-20260812T022850+0000-d4c7b55f
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T02:28:50+00:00
+- 结束时间：2026-08-12T02:28:50+00:00
+- 时长（秒）：0.142
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.06s\n"
+- 输出哈希：3605abb09038ce24e90d81df8f7c0d87bb6f647a5e016bf461d8a8fcb408f6e9
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：77755c9c74b2afc153b705943c94405909754202a0e204b4d438849ce394297d
+- 报告字节数：589
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_spike_ac01_registered_assets_survive_confirmation_done_and_abort"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：e886bdb6280d711eec28c5c39c01cdea24299c741e2e23c4cd9a21ea68649a89
+- 测试代码哈希：ac35e54f42836e5fb10d102ca6703ea1bc924d26f53e3245a7658c03bda7a1c9
+- 实际结果：登记的“已登记穿刺资产在确认、收工和作废后保留”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-01.xml`；机器记录编号为 `RUN-20260812T022850+0000-d4c7b55f`。
+
+### TC-02：穿刺资产只绑定实际支撑的 AC
+
+- 对应验收条件：[AC-02：可复用穿刺资产只与实际支撑的验收条件关联](../acceptance/可复用穿刺资产保留并与验收条件全局追踪_验收计划.md#ac-02)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_spike_ac02_assets_bind_only_supported_acceptance_conditions"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_spike_ac02_assets_bind_only_supported_acceptance_conditions","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-02.xml"]
+- 机器记录编号：RUN-20260812T022850+0000-511fa26a
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T02:28:50+00:00
+- 结束时间：2026-08-12T02:28:50+00:00
+- 时长（秒）：0.159
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.08s\n"
+- 输出哈希：99a24796443a1d07f66a424f8116a06a2079063af758e7d3c87801c191ad2ecd
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：2c48ba23c867a6a85354be8be2af3b47c7b2bdb4738a788c1a354db9023c4036
+- 报告字节数：579
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_spike_ac02_assets_bind_only_supported_acceptance_conditions"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：e886bdb6280d711eec28c5c39c01cdea24299c741e2e23c4cd9a21ea68649a89
+- 测试代码哈希：ac35e54f42836e5fb10d102ca6703ea1bc924d26f53e3245a7658c03bda7a1c9
+- 实际结果：登记的“穿刺资产只绑定实际支撑的 AC”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-02.xml`；机器记录编号为 `RUN-20260812T022850+0000-511fa26a`。
+
+### TC-03：当前轮清理不改历史穿刺资产
+
+- 对应验收条件：[AC-03：不同工作流的穿刺资产相互隔离且不被覆盖](../acceptance/可复用穿刺资产保留并与验收条件全局追踪_验收计划.md#ac-03)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_spike_ac03_current_cleanup_preserves_historical_assets"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_spike_ac03_current_cleanup_preserves_historical_assets","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-03.xml"]
+- 机器记录编号：RUN-20260812T022850+0000-23645be8
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T02:28:50+00:00
+- 结束时间：2026-08-12T02:28:50+00:00
+- 时长（秒）：0.128
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：6b882d7026dd0ddd25964e721d25c252aba2b75eee50c3d1a434a2748e377dcc
+- 报告字节数：569
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_spike_ac03_current_cleanup_preserves_historical_assets"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：e886bdb6280d711eec28c5c39c01cdea24299c741e2e23c4cd9a21ea68649a89
+- 测试代码哈希：ac35e54f42836e5fb10d102ca6703ea1bc924d26f53e3245a7658c03bda7a1c9
+- 实际结果：登记的“当前轮清理不改历史穿刺资产”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-03.xml`；机器记录编号为 `RUN-20260812T022850+0000-23645be8`。
+
+### TC-04：历史穿刺只有当前重跑成功才能复用
+
+- 对应验收条件：[AC-04：后续复用历史穿刺资产必须在当前环境重新运行](../acceptance/可复用穿刺资产保留并与验收条件全局追踪_验收计划.md#ac-04)
+- 测试方式：自动化测试
+- 测试入口：["tests/test_current_workflow_qa.py::test_spike_ac04_historical_asset_requires_current_rerun"]
+- 执行命令：[".venv/bin/python","-m","pytest","-q","tests/test_current_workflow_qa.py::test_spike_ac04_historical_asset_requires_current_rerun","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-04.xml"]
+- 机器记录编号：RUN-20260812T022850+0000-1e41b5b0
+- 工作目录：项目根
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=.venv/bin/python
+- 开始时间：2026-08-12T02:28:50+00:00
+- 结束时间：2026-08-12T02:28:50+00:00
+- 时长（秒）：0.165
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.09s\n"
+- 输出哈希：59907462a8d5fd93406cdf4c7d1eb2f7b7a96664ae85c4ec202693d419cd019e
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：b21c3d220911ff92f6ed13602af4f26576f804f7468e1e472438a7c6baabe0ec
+- 报告字节数：561
+- 精确匹配测试入口：["tests/test_current_workflow_qa.py::test_spike_ac04_historical_asset_requires_current_rerun"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：e886bdb6280d711eec28c5c39c01cdea24299c741e2e23c4cd9a21ea68649a89
+- 测试代码哈希：ac35e54f42836e5fb10d102ca6703ea1bc924d26f53e3245a7658c03bda7a1c9
+- 实际结果：登记的“历史穿刺只有当前重跑成功才能复用”测试入口完成正式执行；结构化报告精确匹配该入口，实际执行数为 1，跳过、失败和错误均为 0，进程退出码为 0，并绑定执行时的产品代码和测试代码。
+- 自动化测试结果：通过
+- 证据：结构化报告路径为 `.workflow_loop/test_reports/2026-08-10-0817-product_change/可复用穿刺资产保留并与验收条件全局追踪/TC-04.xml`；机器记录编号为 `RUN-20260812T022850+0000-1e41b5b0`。
+
+## 4. 人工验收交接
+
+无需人工验收。
+
+## 5. 未通过或阻塞
+
+暂无
+
+## 6. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [验收计划](../acceptance/可复用穿刺资产保留并与验收条件全局追踪_验收计划.md) | 说明什么算完成 |
+| 上游 | [测试计划](./可复用穿刺资产保留并与验收条件全局追踪_测试计划.md) | 说明本次覆盖哪些测试项 |
+| 上游 | [实施记录](../impl/可复用穿刺资产保留并与验收条件全局追踪_实施记录.md) | 说明本次代码怎样实现 |
+| 全局 | [需求交付追踪表](../需求交付追踪表.md) | 查看完整链路 |
+| 下游 | `acceptance/可复用穿刺资产保留并与验收条件全局追踪_验收结果.md`（待生成） | 本主题验收在这里记录 |

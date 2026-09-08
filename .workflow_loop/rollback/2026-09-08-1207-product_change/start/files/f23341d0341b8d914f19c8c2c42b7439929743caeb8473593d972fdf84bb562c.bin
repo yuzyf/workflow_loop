@@ -1,0 +1,61 @@
+# 实施记录：实施记录表完整且表驱动
+
+- 工作流编号：2026-08-29-1238-product_change
+- 验收主题：实施记录表完整且表驱动
+
+## 1. 实施依据
+
+- 本记录由工作记录表按栏目自动生成；实施依据为已确认的产品设计、验收计划和穿刺结论。
+
+<a id="2-实施前计划"></a>
+## 2. 实施前计划
+
+### 2.2 最低实现设计
+
+本记录的最低实现设计由代码计划行承载；从零开发的设计说明填在代码修改计划的“计划修改内容”列。
+
+### 2.3 代码修改计划
+
+| 文件 | 计划修改内容 | 对应验收条件 |
+|---|---|---|
+| src/workflow_loop/stages/stages.py | ImplStage discussion_validate 走表路径时给 topics 赋值，后续 len(topics) 不报 UnboundLocalError（断言四） | AC-01 |
+| src/workflow_loop/records.py | impl_record 表实际代码修改栏补对应计划步骤等模板全列、代码修改计划按模板补齐、设计项与开发检查记录为行清单由表生成不留占位句（R16/R32） | AC-02 |
+| src/workflow_loop/verification.py | compute_impl_hash 表存在时从 impl_record 表算哈希（_table_document_hash），不读生成 md（断言十三哈希部分，已完成） | AC-03 |
+
+### 2.4 未决问题
+
+暂无
+
+<a id="3-实施后记录"></a>
+## 3. 实施后记录
+
+### 3.1 实施动作记录
+
+
+### 3.2 实施中问题与处理
+
+- 暂无
+
+### 3.3 未完成内容
+
+状态：无
+
+#### 3.4.2 开发检查记录
+
+- 开发检查记录填在工作记录表的“实施动作记录”叙述栏；此处由程序按表保留位置。
+
+#### 3.4.1 实际代码修改
+
+| 文件 | 代码位置（最终文件） | 实际修改的代码逻辑 | 数据、状态或输出的实际变化 | 修改理由 | 对应验收条件 | 测试证据 |
+|---|---|---|---|---|---|---|
+| src/workflow_loop/stages/stages.py | L769-L801 | ImplStage discussion_validate 走表路径时给 topics 赋值 | 表模式分支后续 len(topics) 不再报 UnboundLocalError | 断言四 ImplStage topics 赋值不崩 | AC-01 | tests/test_stages.py |
+| src/workflow_loop/records.py | L33-L516 | impl_record 表栏目含对应计划步骤等模板全列、代码修改计划按模板补齐、设计项与开发检查记录为行清单 | 表覆盖模板全部字段、生成器逐表渲染不留占位句 | R16/R32 实施记录表完整且表驱动 | AC-02 | tests/test_records.py |
+| src/workflow_loop/verification.py | L1581-L1661 | compute_impl_hash 表存在时从 impl_record 表算哈希（_table_document_hash），不读生成 md | 实施综合哈希从表内容算 | 断言十三计划哈希从表算（哈希部分） | AC-03 | tests/test_verification.py |
+| src/workflow_loop/rollback.py | L1247-L1560 | planned_code_paths/_recorded_code_changes/compute_plan_hash 从 impl_record 表取文件清单和哈希 | 门禁以表为唯一输入、不读生成 md | 断言十三实施门禁文件清单从表取 | AC-03 | tests/test_rollback.py |
+
+## 4. 上下游文档
+
+| 关系 | 文档 | 说明 |
+|---|---|---|
+| 上游 | [需求交付追踪表](../需求交付追踪表.md) | 本主题的完整交付关系 |
+| 全局 | `acceptance/实施记录表完整且表驱动_验收计划.md` | 本主题验收依据 |

@@ -1,0 +1,131 @@
+# 测试结果：凭据日志删除与命令
+
+- 工作流编号：2026-08-29-1238-product_change
+- 验收主题：凭据日志删除与命令
+- 自动化测试结果：通过
+- 人工验收状态：无需人工验收
+- 验收结果：通过
+
+本文档由程序按测试工作记录表和当前机器记录生成；固定事实不由 AI 手写。
+
+## 3. 测试项结果
+
+### TC-01：impl_record 内容变化即凭据失效，程序专用键不计
+
+- 对应验收条件：AC-01
+- 机器记录编号：RUN-20260829T215349+0000-d70ce790
+- 工作目录：项目根
+- 测试入口：["tests/test_verification.py::test_impl_credential_invalidates_when_impl_record_content_changes"]
+- 执行命令：["uv","run","python","-m","pytest","-q","tests/test_verification.py::test_impl_credential_invalidates_when_impl_record_content_changes","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-29-1238-product_change/凭据日志删除与命令/TC-01.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=/Users/yu/.local/bin/uv
+- 开始时间：2026-08-29T21:53:49+00:00
+- 结束时间：2026-08-29T21:53:49+00:00
+- 时长（秒）：0.236
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.05s\n"
+- 输出哈希：5b19689a97d618d5cdfce632de67285a8efa3c57100a80350a5bb7ca9e05ae34
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：a5fce6041afb21769a051d19cf9ba4587a72e82aca4dedf9f111a96579b58712
+- 报告字节数：567
+- 精确匹配测试入口：["tests/test_verification.py::test_impl_credential_invalidates_when_impl_record_content_changes"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：4165b2cc6e917e657ad4869b84a22878edce3fcc70e2a34426740ab02b1206da
+- 测试代码哈希：d488da21e50e6b3e01e02a557c898bdc4f556a9b27e22bce751722b0ba0f03d2
+- 自动化测试结果：通过
+- 实际结果：impl_record 内容变化即凭据失效，程序专用键不计
+- 证据：机器记录 RUN-20260829T215349+0000-d70ce790；结构化报告哈希 a5fce6041afb21769a051d19cf9ba4587a72e82aca4dedf9f111a96579b58712
+
+### TC-02：测试代码多处失败不绕过必要修复
+
+- 对应验收条件：AC-02
+- 机器记录编号：RUN-20260829T215349+0000-5f61a784
+- 工作目录：项目根
+- 测试入口：["tests/test_commands.py::test_test_code_multiple_failures_do_not_bypass_required_fixes"]
+- 执行命令：["uv","run","python","-m","pytest","-q","tests/test_commands.py::test_test_code_multiple_failures_do_not_bypass_required_fixes","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-29-1238-product_change/凭据日志删除与命令/TC-02.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=/Users/yu/.local/bin/uv
+- 开始时间：2026-08-29T21:53:49+00:00
+- 结束时间：2026-08-29T21:53:49+00:00
+- 时长（秒）：0.17
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.06s\n"
+- 输出哈希：3605abb09038ce24e90d81df8f7c0d87bb6f647a5e016bf461d8a8fcb408f6e9
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：5732429c5c84cff7d40a7e62dc07c4628aac365533850d123ba0007c77314a3f
+- 报告字节数：551
+- 精确匹配测试入口：["tests/test_commands.py::test_test_code_multiple_failures_do_not_bypass_required_fixes"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：4165b2cc6e917e657ad4869b84a22878edce3fcc70e2a34426740ab02b1206da
+- 测试代码哈希：d488da21e50e6b3e01e02a557c898bdc4f556a9b27e22bce751722b0ba0f03d2
+- 自动化测试结果：通过
+- 实际结果：测试代码多处失败不绕过必要修复
+- 证据：机器记录 RUN-20260829T215349+0000-5f61a784；结构化报告哈希 5732429c5c84cff7d40a7e62dc07c4628aac365533850d123ba0007c77314a3f
+
+### TC-03：records 生命周期作废递归删除并清理保留
+
+- 对应验收条件：AC-03
+- 机器记录编号：RUN-20260829T215350+0000-4d8ad92b
+- 工作目录：项目根
+- 测试入口：["tests/test_records.py::test_records_lifecycle_abort_deletes_and_clean_preserves"]
+- 执行命令：["uv","run","python","-m","pytest","-q","tests/test_records.py::test_records_lifecycle_abort_deletes_and_clean_preserves","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-29-1238-product_change/凭据日志删除与命令/TC-03.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=/Users/yu/.local/bin/uv
+- 开始时间：2026-08-29T21:53:50+00:00
+- 结束时间：2026-08-29T21:53:50+00:00
+- 时长（秒）：0.157
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.06s\n"
+- 输出哈希：3605abb09038ce24e90d81df8f7c0d87bb6f647a5e016bf461d8a8fcb408f6e9
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：dad89063547ea778ad4f313a45826fea2a05b24106cfe9d1e36c1ee061c34183
+- 报告字节数：539
+- 精确匹配测试入口：["tests/test_records.py::test_records_lifecycle_abort_deletes_and_clean_preserves"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：4165b2cc6e917e657ad4869b84a22878edce3fcc70e2a34426740ab02b1206da
+- 测试代码哈希：d488da21e50e6b3e01e02a557c898bdc4f556a9b27e22bce751722b0ba0f03d2
+- 自动化测试结果：通过
+- 实际结果：records 生命周期作废递归删除并清理保留
+- 证据：机器记录 RUN-20260829T215350+0000-4d8ad92b；结构化报告哈希 dad89063547ea778ad4f313a45826fea2a05b24106cfe9d1e36c1ee061c34183
+
+### TC-04：三道门按序推进，scaffold 等命令可用
+
+- 对应验收条件：AC-04
+- 机器记录编号：RUN-20260829T215350+0000-53b3dd0a
+- 工作目录：项目根
+- 测试入口：["tests/test_commands.py::test_three_gates_advance_in_the_required_order"]
+- 执行命令：["uv","run","python","-m","pytest","-q","tests/test_commands.py::test_three_gates_advance_in_the_required_order","-p","workflow_loop.test_report","--junitxml=/Users/yu/business_qt/ai_qt/workflow_loop/.workflow_loop/test_reports/2026-08-29-1238-product_change/凭据日志删除与命令/TC-04.xml"]
+- 超时（秒）：600
+- 运行环境：平台=darwin；可执行文件=/Users/yu/.local/bin/uv
+- 开始时间：2026-08-29T21:53:50+00:00
+- 结束时间：2026-08-29T21:53:51+00:00
+- 时长（秒）：0.658
+- 退出码：0
+- 输出摘要：".                                                                        [100%]\n1 passed in 0.55s\n"
+- 输出哈希：82c201bb904df7561785e93b567cf9f67336470fb20ba42c9846547bf1029aea
+- 输出字节数：98
+- 报告适配器：pytest-junitxml
+- 报告哈希：87b95c18ea95f9a311d2e974b5badeb2a55a12ccd1036aff35bc316be0f3229a
+- 报告字节数：521
+- 精确匹配测试入口：["tests/test_commands.py::test_three_gates_advance_in_the_required_order"]
+- 实际执行数：1
+- 跳过数：0
+- 失败数：0
+- 错误数：0
+- 产品代码哈希：4165b2cc6e917e657ad4869b84a22878edce3fcc70e2a34426740ab02b1206da
+- 测试代码哈希：d488da21e50e6b3e01e02a557c898bdc4f556a9b27e22bce751722b0ba0f03d2
+- 自动化测试结果：通过
+- 实际结果：三道门按序推进，scaffold 等命令可用
+- 证据：机器记录 RUN-20260829T215350+0000-53b3dd0a；结构化报告哈希 87b95c18ea95f9a311d2e974b5badeb2a55a12ccd1036aff35bc316be0f3229a
