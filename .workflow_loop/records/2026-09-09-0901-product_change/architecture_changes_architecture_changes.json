@@ -1,0 +1,42 @@
+{
+  "表版本": "4",
+  "工作流编号": "2026-09-09-0901-product_change",
+  "验收主题": "",
+  "生成文档哈希": "5f3271169cb94eb77249cade273957d36e6e32d528ae3a0134e23be9b72d3208",
+  "生成文档路径": ".workflow_loop/records/2026-09-09-0901-product_change/architecture_changes_architecture_changes.md",
+  "正文变更": [
+    {
+      "章节": "6.7 【功能】验证技术不确定性",
+      "原文": "| 设计基线 | `src/workflow_loop/cli.py::ensure_spike_baseline` | 进入穿刺前保存产品和现状架构哈希，供结论判断是否真实改变后续决定；代码计划随后读取结论，不要求穿刺阶段直接改未来计划 | 需要证明变化却没有可靠基线时不放行 | `tests/test_spike_validation.py::test_validate_spike_stage_requires_design_hash_change` |",
+      "新文": "| 设计基线与跳过复用分流 | `src/workflow_loop/cli.py::ensure_spike_baseline`、`src/workflow_loop/cli.py::cmd_gate`（含 `--skip`/`--reuse` 分支）与 `src/workflow_loop/state.py::WorkflowState`（含 `spike_reused` 复用状态字段） | 进入穿刺前保存产品和现状架构哈希，供结论判断是否真实改变后续决定；代码计划随后读取结论，不要求穿刺阶段直接改未来计划。跳过与复用分开：`--skip` 检测到本工作流已登记穿刺资产时先打印警告（数量、验收计划将无法引用、指路 `--reuse`）并退出，用户知情后再次执行才跳过；`--reuse` 校验复用依据（非占位词且不少于 12 字符）后置复用标记并记录依据，复用跳过的推进路径；`workflow discuss` 的 spike 材料清单输出返回重走决策树三条路径（重新穿刺 / skip / reuse）并列示已登记资产 | 需要证明变化却没有可靠基线时不放行；无资产时 `--reuse` 拒绝；无依据或占位词依据的 `--reuse` 按内容问题拒绝 | `tests/test_spike_validation.py::test_validate_spike_stage_requires_design_hash_change`、`tests/test_gate_spike_reuse.py::test_reused_state_releases_traceability_check`、`tests/test_gate_spike_reuse.py::test_discuss_prints_decision_tree` |",
+      "依据": "验证技术不确定性 R30/R31/R32；src/workflow_loop/cli.py::cmd_gate 的 --reuse 分支与 --skip 警告段、src/workflow_loop/state.py::WorkflowState 的 spike_reused 字段、src/workflow_loop/traceability.py 三处复用判定分支；tests/test_gate_spike_reuse.py 五项测试"
+    },
+    {
+      "章节": "6.9 【功能】实施并保护项目修改",
+      "原文": "保存计划文件原内容或“原本不存在”，同时把完整入场观察清单写入回退依据；准备前先确认入场后没有未授权变化——入场后已修改的文件可用 Git 自证放行：进场快照等于 HEAD 版本时用 HEAD 字节补首次副本，进场快照不存在的新文件直接放行，不能自证的按文件列出原因保持拒绝（不降低回退安全性）",
+      "新文": "保存计划文件原内容或“原本不存在”，同时把完整入场观察清单写入回退依据；准备前先确认入场后没有未授权变化——入场后已修改的文件可用 Git 自证放行：进场快照等于 HEAD 版本时用 HEAD 字节补首次副本，进场快照不存在的新文件直接放行，不能自证的按文件列出原因保持拒绝（不降低回退安全性）；被删除的文件同样放行——进场快照记录存在且 HEAD 有该路径时用进场快照哈希做 Git 自证补 HEAD 字节副本（哈希对比不依赖工作区状态），HEAD 也没有该路径（从未提交过）时回退清单登记无副本及原因放行，不要求恢复文件",
+      "依据": "实施并保护项目修改 R36；src/workflow_loop/rollback.py::prepare_impl 删除文件分支（no_copy_deleted 收集）与备份登记 no_copy_reason 字段；tests/test_gate_delete_files.py 两项测试"
+    },
+    {
+      "章节": "6.9 【功能】实施并保护项目修改",
+      "原文": "通过观察快照和 Git 可读差异取得代码、脚本、配置及包内流程材料的实际变化；计划确认前不把变化自动改写成计划错误",
+      "新文": "通过观察快照和 Git 可读差异取得代码、脚本、配置及包内流程材料的实际变化；Git 工作区清单按白名单过滤且与观察快照同源（`src/workflow_loop/verification.py::is_implementation_related_path`，支持项目级扩展后缀——`src/workflow_loop/project.py::ProjectState` 的 `extra_code_suffixes` 字段经 project.json 登记），非代码临时文件（原型图等）不算实际改动，疑似临时产物在输出中附存放约定提示（指向轮次草稿目录）不阻塞；计划确认前不把变化自动改写成计划错误",
+      "依据": "实施并保护项目修改 R34/R35；src/workflow_loop/rollback.py::list_actual_working_tree_changes 白名单化、src/workflow_loop/verification.py 的 extra_suffixes 参数与 looks_like_temporary_artifact、src/workflow_loop/project.py::ProjectState 扩展后缀字段；tests/test_gate_tmp_artifacts.py 三项测试"
+    },
+    {
+      "章节": "6.13 【功能】整轮作废并恢复",
+      "原文": "| 完整预检 | `src/workflow_loop/rollback.py::preflight_abort` | 合并开工与实施清单，检查副本、哈希、路径安全和恢复目标 | 任一问题都保持整轮进行中且不开始恢复 | `tests/test_rollback.py::test_tampered_backup_blocks_restore_before_project_change` |",
+      "新文": "| 完整预检 | `src/workflow_loop/rollback.py::preflight_abort` | 合并开工与实施清单，检查副本、哈希、路径安全和恢复目标；作废清单逐文件带出 `no_copy_reason`（删除时无 Git 提交记录等原因）并汇总 `no_copy_paths`，预检输出列出无副本文件清单并说明实施前内容无法取得、保持当前删除状态 | 任一问题都保持整轮进行中且不开始恢复；无副本文件不阻塞作废、不伪造恢复 | `tests/test_rollback.py::test_tampered_backup_blocks_restore_before_project_change`、`tests/test_rollback.py::test_full_abort_restores_managed_content_and_project_fields_only` |",
+      "依据": "整轮作废并恢复 R22；src/workflow_loop/rollback.py::preflight_abort 的 no_copy_paths 汇总与 abort_manifest 写入、src/workflow_loop/cli.py 无副本清单输出段"
+    }
+  ],
+  "填写说明": {
+    "正文变更": {
+      "章节": "填写正式架构中唯一存在的完整章节标题，不带井号；不能填写最终同步结论章节",
+      "原文": "从该章节复制需变更的原事实，必须唯一匹配；多行原文保留换行；不能仅填已替换后的新文",
+      "新文": "填写已经实现并核实的新事实，不改原章节标题、表格结构或定位锚点",
+      "依据": "填写真实代码位置、核对结果或验收依据；无正文变化时正文变更留空数组"
+    },
+    "程序专用字段": "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
+  }
+}

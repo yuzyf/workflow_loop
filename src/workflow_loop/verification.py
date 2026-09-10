@@ -1442,11 +1442,31 @@ def _is_standalone_test_config(relative_path: str, test_entry_path: str | None) 
     )
 
 
+def project_extra_code_suffixes(project_root: str) -> set[str]:
+    """读项目级扩展代码后缀；未登记或项目未安装时返回空集合。"""
+    try:
+        project = load_project(project_root)
+    except (OSError, ValueError):
+        return set()
+    if project is None:
+        return set()
+    return {
+        suffix.strip().lower()
+        for suffix in project.extra_code_suffixes
+        if isinstance(suffix, str) and suffix.strip()
+    }
+
+
 def is_implementation_related_path(
     relative_path: str,
     test_entry_path: str | None = None,
+    extra_suffixes: set[str] | None = None,
 ) -> bool:
-    """判断路径是否属于实施代码、脚本、测试或项目配置。"""
+    """判断路径是否属于实施代码、脚本、测试或项目配置。
+
+    extra_suffixes 是项目级扩展代码后缀（实施并保护项目修改 R34）：项目主要
+    产物不是常规代码格式时由维护者登记，判定与观察快照同源。
+    """
     normalized = relative_path.replace(os.sep, "/")
     filename = os.path.basename(normalized)
     suffix = os.path.splitext(filename)[1].lower()
@@ -1454,9 +1474,44 @@ def is_implementation_related_path(
         _is_test_path(normalized)
         or _is_standalone_test_config(normalized, test_entry_path)
         or suffix in CODE_SUFFIXES
+        or (extra_suffixes is not None and suffix in extra_suffixes)
         or filename in CONFIG_NAMES
         or suffix in CONFIG_SUFFIXES
     )
+
+
+def is_scratch_path(relative_path: str) -> bool:
+    """判断路径是否位于轮次草稿目录（实施并保护项目修改 R35）。"""
+    normalized = relative_path.replace(os.sep, "/")
+    return normalized.startswith(".workflow_loop/scratch/")
+
+
+# 疑似临时产物的提示用后缀：讨论期原型图、界面草图等常见非代码格式。
+# 提示只用于输出存放约定，不影响实际改动判定。
+_SUGGESTED_SCRATCH_SUFFIXES = {
+    ".html", ".htm", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    ".pdf", ".drawio", ".fig", ".sketch", ".psd", ".md",
+}
+
+
+def looks_like_temporary_artifact(
+    relative_path: str,
+    extra_suffixes: set[str] | None = None,
+) -> bool:
+    """判断未提交、非白名单的路径是否疑似讨论期临时产物（只用于提示）。"""
+    if is_scratch_path(relative_path):
+        return False
+    normalized = relative_path.replace(os.sep, "/")
+    top = normalized.split("/", 1)[0]
+    if top in {".workflow_loop", "spec", "acceptance", "qa", "impl", "bug"}:
+        return False
+    filename = os.path.basename(normalized)
+    suffix = os.path.splitext(filename)[1].lower()
+    if suffix in CODE_SUFFIXES or suffix in CONFIG_SUFFIXES or filename in CONFIG_NAMES:
+        return False
+    if extra_suffixes and suffix in extra_suffixes:
+        return False
+    return suffix in _SUGGESTED_SCRATCH_SUFFIXES
 
 
 def _snapshot_parts_registered(

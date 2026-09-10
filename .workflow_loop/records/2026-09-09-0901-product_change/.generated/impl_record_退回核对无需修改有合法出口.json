@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "7ce8e7b08c40e29a3bd62e1ddbe8b733e655ebdaa7370f7db1f68d3a5fb8faa1",
+    "生成文档路径": "impl/退回核对无需修改有合法出口_实施记录.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "impl/退回核对无需修改有合法出口_实施记录.md": {
+      "body_hash": "67f5cb65b407f8a05518a04f3a34fdf59b8dba7cf4795be7c52ef2ae7b8feca5"
+    }
+  }
+}

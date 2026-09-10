@@ -1467,7 +1467,11 @@ def planned_code_paths(project_root: str, topics: list[str]) -> list[str]:
 def list_actual_working_tree_changes(
     project_root: str,
 ) -> tuple[list[str] | None, str]:
-    """读取当前 Git 工作区可见的实际代码/测试改动。
+    """读取当前 Git 工作区可见的实际代码/测试改动（实施并保护项目修改 R34）。
+
+    过滤与实施观察快照同源（白名单制）：只认代码后缀、测试路径、脚本、项目
+    配置和项目级扩展后缀；原型图等非代码临时文件不算实际改动。轮次草稿目录
+    （.workflow_loop/scratch/）随 .workflow_loop 前缀天然排除（R35）。
 
     这份清单只用于展示和证据核对，不表示允许修改的文件集合。没有 Git
     或无法读取状态时返回 ``None``，调用方必须把限制显示给用户而不是猜测。
@@ -1476,18 +1480,36 @@ def list_actual_working_tree_changes(
     candidates, detail = verification_mod._git_changed_paths(project_root)
     if candidates is None:
         return None, detail
-    ignored_roots = {".workflow_loop", "spec", "acceptance", "qa", "impl", "bug"}
+    extra_suffixes = verification_mod.project_extra_code_suffixes(project_root)
+    _, test_entry_path = verification_mod._project_test_entry(project_root)
+    managed_roots = {".workflow_loop", "spec", "acceptance", "qa", "impl", "bug"}
     selected: list[str] = []
+    temporary_hints: list[str] = []
     for path in sorted(candidates):
         normalized = path.strip().replace("\\", "/")
-        if not normalized or normalized.split("/", 1)[0] in ignored_roots:
+        if not normalized or normalized.split("/", 1)[0] in managed_roots:
             continue
-        if normalized.endswith(".md") and not normalized.startswith(
-            "src/workflow_loop/data/"
+        if verification_mod.is_implementation_related_path(
+            normalized,
+            test_entry_path,
+            extra_suffixes,
         ):
+            selected.append(normalized)
             continue
-        selected.append(normalized)
-    return selected, f"{detail}；已筛出实际代码和测试改动"
+        if verification_mod.looks_like_temporary_artifact(normalized, extra_suffixes):
+            temporary_hints.append(normalized)
+    detail_suffix = (
+        f"；疑似临时产物 {len(temporary_hints)} 个（建议移入 .workflow_loop/scratch/<轮次编号>/，"
+        "该目录不参与任何检查）："
+        + "、".join(temporary_hints[:5])
+        + ("等" if len(temporary_hints) > 5 else "")
+        if temporary_hints
+        else ""
+    )
+    return (
+        selected,
+        f"{detail}；已按白名单筛出实际代码和测试改动（与观察快照同源）{detail_suffix}",
+    )
 
 
 def actual_implementation_paths_since_entry(
@@ -2153,12 +2175,39 @@ def prepare_impl(
                     if isinstance(item, dict)
                 }
                 unverifiable: list[str] = []
+                no_copy_deleted: list[str] = []
                 for path in sorted(changed_before_prepare):
                     record = snapshot_records.get(path)
                     exists_at_entry = bool(record and record.get("exists"))
+                    full_path = os.path.join(project_root, path)
+                    deleted_now = not os.path.lexists(full_path)
                     if not exists_at_entry:
                         # 进场快照记录该文件不存在（或未记录）：当前是本轮新增，
                         # 原状态就是"没有"，无需 Git 自证
+                        continue
+                    if deleted_now:
+                        # 删除文件（实施并保护项目修改 R36）：用进场快照记录的
+                        # 内容哈希做 Git 自证——哈希对比路径不依赖工作区状态，
+                        # HEAD 内容等于快照哈希时补副本；HEAD 没有该路径（从未
+                        # 提交过）或哈希对不上时，登记无副本放行，删除就删除了，
+                        # 不要求恢复文件。
+                        entry_hash = record.get("content_hash")
+                        baseline, baseline_detail = _trusted_git_head_baseline(
+                            project_root,
+                            path,
+                            expected_content_hash=(
+                                entry_hash
+                                if isinstance(entry_hash, str)
+                                else None
+                            ),
+                        )
+                        if baseline is not None:
+                            trusted_git_baselines[path] = baseline
+                        else:
+                            no_copy_deleted.append(
+                                f"{path}（进场时存在，Git 无法证明进场内容：{baseline_detail}；"
+                                "登记为无副本）"
+                            )
                         continue
                     expected_hash = record.get("content_hash")
                     baseline, baseline_detail = _trusted_git_head_baseline(
@@ -2210,7 +2259,15 @@ def prepare_impl(
         if path not in entries:
             trusted = trusted_git_baselines.get(path)
             if trusted is None:
-                entries[path] = _backup_entry(project_root, manifest_dir, path)
+                entry = _backup_entry(project_root, manifest_dir, path)
+                # 删除且从未提交过 Git 的文件（R36）：_backup_entry 记录
+                # original_exists=False；补记无副本原因，作废恢复按该字段
+                # 跳过恢复并列入无副本告知清单（整轮作废并恢复 R22）。
+                if not entry.get("original_exists") and not os.path.lexists(
+                    os.path.join(project_root, path)
+                ):
+                    entry["no_copy_reason"] = "删除时无 Git 提交记录，实施前内容无法取得"
+                entries[path] = entry
             else:
                 content, mode = trusted
                 entries[path] = _backup_entry_from_bytes(
@@ -3701,14 +3758,19 @@ def preflight_abort(
                 derived_managed_paths.append(path)
 
         items: list[dict] = []
+        no_copy_paths: list[str] = []
         for path in sorted(merged):
             entry, source_manifest = merged[path]
+            no_copy_reason = entry.get("no_copy_reason")
+            if isinstance(no_copy_reason, str) and no_copy_reason:
+                no_copy_paths.append(f"{path}（{no_copy_reason}）")
             items.append(
                 {
                     "id": f"file:{path}",
                     "kind": "file",
                     "path": path,
                     "original_exists": entry.get("original_exists"),
+                    "no_copy_reason": no_copy_reason if isinstance(no_copy_reason, str) else None,
                     "source_manifest": source_manifest,
                     "backup_path": entry.get("backup_path"),
                     "content_hash": entry.get("content_hash"),
@@ -3740,6 +3802,7 @@ def preflight_abort(
             "created_at": state_mod.now_iso(),
             "source_hashes": source_hashes,
             "derived_managed_paths": sorted(derived_managed_paths),
+            "no_copy_paths": no_copy_paths,
             "spike_cleanup_plan": spike_cleanup_plan,
             "items": items,
             "restored_at": None,

@@ -43,6 +43,9 @@ TRACEABILITY_HEADERS = [
 ]
 SPIKE_SKIPPED_TEXT = "本轮未执行穿刺，无可复用资产"
 SPIKE_RECHECK_TEXT = "待重新确认；已登记资产保留"
+# 复用文本（验证技术不确定性 R30/R31）：spike --reuse 后新补行的穿刺列初值；
+# 引用既有资产的行由 AI 按资产路径回填，无引用的新行写本文本。
+SPIKE_REUSED_TEXT = "本轮复用既有穿刺结论，未执行新穿刺"
 SPIKE_NO_SUPPORT_TEXT = "本验收条件没有直接支撑的穿刺结论或可复用资产"
 SUPPORTED_HEADERS = (TRACEABILITY_HEADERS, LEGACY_TRACEABILITY_HEADERS)
 
@@ -410,7 +413,7 @@ def collect_spike_asset_acceptance_links(
         if asset.workflow_id == workflow_id
     }
 
-    if state.spike_skipped:
+    if state.spike_skipped and not state.spike_reused:
         conclusion_documents: list[str] = []
     else:
         conclusion_documents = _current_spike_conclusion_documents(
@@ -437,7 +440,7 @@ def collect_spike_asset_acceptance_links(
             spike_value = _cell(cells, "穿刺结论与可复用内容").strip()
 
             mentioned_paths = set(_SPIKE_ASSET_PATH_RE.findall(spike_value))
-            if state.spike_skipped and not mentioned_paths:
+            if state.spike_skipped and not state.spike_reused and not mentioned_paths:
                 if spike_value != SPIKE_SKIPPED_TEXT:
                     errors.append(
                         f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id} 穿刺列："
@@ -453,7 +456,11 @@ def collect_spike_asset_acceptance_links(
                 )
             for relative_path in sorted(mentioned_paths & set(assets_by_path)):
                 asset = assets_by_path[relative_path]
-                if state.spike_skipped and asset.workflow_id == workflow_id:
+                if (
+                    state.spike_skipped
+                    and not state.spike_reused
+                    and asset.workflow_id == workflow_id
+                ):
                     errors.append(
                         f"{TRACEABILITY_PATH} 主题“{topic}”{criterion_id}："
                         "本轮已跳过新穿刺，不能引用当前工作流新登记的穿刺资产"
@@ -823,12 +830,16 @@ def _append_missing_topic_rows(
         return False
     _, last_row_index, headers = bounds
     # 补行只发生在退回重走路径：本轮已确认跳过穿刺时新行直接写跳过文本；
+    # 复用（spike_reused）时写复用文本，既有资产引用不被连坐（R30）；
     # 尚未重新确认（spike 未跑/未跳过）时写待复核文本，与旧行重置状态一致。
     spike_initial = SPIKE_RECHECK_TEXT
     try:
         state = load_state(project_root)
-        if state is not None and state.workflow_id == workflow_id and state.spike_skipped:
-            spike_initial = SPIKE_SKIPPED_TEXT
+        if state is not None and state.workflow_id == workflow_id:
+            if state.spike_skipped and not state.spike_reused:
+                spike_initial = SPIKE_SKIPPED_TEXT
+            elif state.spike_reused:
+                spike_initial = SPIKE_REUSED_TEXT
     except Exception:
         pass
     appended: list[str] = []

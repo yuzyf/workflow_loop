@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "33787a6d8327e8d0e188903d80c8b446f7e1cff650892d415f35e164a3a0f407",
+    "生成文档路径": "acceptance/删除文件不再阻塞基线准备_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/删除文件不再阻塞基线准备_验收计划.md": {
+      "body_hash": "5c50583a4fd3f9b28a4b427cc1af5874f049a23c99e6f137230af127adea41ac"
+    }
+  }
+}

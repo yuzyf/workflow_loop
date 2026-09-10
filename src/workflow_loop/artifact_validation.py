@@ -645,6 +645,11 @@ def changed_stage_paths(
     启用工作记录表的轮次里正式文档是程序按表的确定性输出：表没有变化时文档必然
     逐字节相同，"文档没变"不等于"本阶段没有产出"。这种情况下按表判断产出，并把
     本阶段登记的产物路径交给下游检查，不要求 AI 制造无实质内容的修改。
+
+    退回核对场景（推进 R47）：变化清单为空、且当前环节任一主题表填有有效的
+    "核对结论：无需修改"声明（核对对象和核对依据都有实质内容）时，返回通过并
+    标注声明放行——产物确实不用改也是合法完成状态。产物有实际变化时声明不参与
+    判定，按普通流程走。
     """
     state = load_state(project_root)
     if state is None or stage_name not in state.stages:
@@ -671,13 +676,88 @@ def changed_stage_paths(
             # 变化清单如实为空：确实没有文件变化。调用方要判断“本阶段的产出是哪些”时
             # 按内容识别，不能把未变化的文件当成本阶段改过——最终设计同步正是用这份
             # 清单确认产品文档没有被改动。
+            declaration = _valid_no_change_declaration(project_root, state, stage_name)
+            if declaration is not None:
+                return (
+                    True,
+                    "核对结论：无需修改——产物相对基线无变化，声明的核对依据有效"
+                    f"（核对对象：{declaration['核对对象']}）",
+                    [],
+                )
             return (
                 True,
                 "表模式：正式文档由程序按工作记录表生成，内容与上次相同时按表判断产出",
                 [],
             )
+        # 文档模式退回核对：声明同样适用（R47 不限于表模式）。
+        declaration = _valid_no_change_declaration(project_root, state, stage_name)
+        if declaration is not None:
+            return (
+                True,
+                "核对结论：无需修改——产物相对基线无变化，声明的核对依据有效"
+                f"（核对对象：{declaration['核对对象']}）",
+                [],
+            )
         return (False, "相关文件与讨论完成时相同，不能证明本阶段已经生成或修改产物", [])
     return (True, f"本阶段发生变化的文件: {changed}", changed)
+
+
+def _valid_no_change_declaration(
+    project_root: str,
+    state,
+    stage_name: str,
+) -> dict | None:
+    """读当前环节工作记录表的“核对结论：无需修改”声明；有效时返回声明行。
+
+    有效 = 声明行存在、核对对象非空、核对依据有实质内容（非占位词且达到
+    最小长度）。表不存在或声明无效时返回 None，调用方维持原有判定。
+
+    查找范围：主题级表（impl_record、acceptance_plan、test_plan 等）按主题
+    逐个查；只有轮次级表的环节（如 spec 的 product_features）查轮次级表——
+    退回核对发生在哪个环节，声明就填在那个环节的表里。
+    """
+    from . import records as records_mod
+
+    if state is None:
+        return None
+    kinds = records_mod.stage_table_kinds(stage_name)
+    topic_level = [kind for kind in kinds if kind not in records_mod.WORKFLOW_LEVEL_KINDS]
+    workflow_level = [kind for kind in kinds if kind in records_mod.WORKFLOW_LEVEL_KINDS]
+
+    for kind in topic_level:
+        for topic in list(state.topics or []):
+            declaration = records_mod.no_change_declaration(
+                project_root,
+                state.workflow_id,
+                kind,
+                topic,
+            )
+            if declaration is None:
+                continue
+            if not records_mod.declaration_rationale_has_substance(
+                declaration.get("核对依据", "")
+            ):
+                continue
+            return declaration
+
+    # 轮次级表：表定位时 topic 用空串（records 的轮次级表约定）
+    for kind in workflow_level:
+        if kind == "topic_relations":
+            continue
+        declaration = records_mod.no_change_declaration(
+            project_root,
+            state.workflow_id,
+            kind,
+            "",
+        )
+        if declaration is None:
+            continue
+        if not records_mod.declaration_rationale_has_substance(
+            declaration.get("核对依据", "")
+        ):
+            continue
+        return declaration
+    return None
 
 
 def validate_project_design_init_evidence(

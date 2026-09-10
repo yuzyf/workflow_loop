@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "11b4b85b399be731a68aec707978bdae9410bc0c3a6da7363339acd61117ab6d",
+    "生成文档路径": "impl/穿刺跳过与复用分开_实施记录.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "impl/穿刺跳过与复用分开_实施记录.md": {
+      "body_hash": "2dad009c71ef4e9944dab03ec155ff3644a814bc5b2bd96c43971d396a55abcd"
+    }
+  }
+}

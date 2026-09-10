@@ -1676,6 +1676,23 @@ def cmd_discuss(args) -> None:
         print("\n【当前主题验收进度】")
         for line in acceptance_records_mod.acceptance_progress(project_root, wf_state):
             print(f"- {line}")
+    if stage.name() == "spike":
+        # 验证技术不确定性 R32：返回重走决策树——三条路径的判断条件和建议动作，
+        # AI 不再靠翻源码或猜来选择跳过还是复用。
+        current_assets = [
+            asset
+            for asset in wf_state.spike_assets
+            if asset.workflow_id == wf_state.workflow_id
+        ]
+        print("\n【返回重走决策树】按当前事实选择路径，用户决定：")
+        print("  1. 设计变更引入了新技术不确定性 → 重新穿刺（正常执行穿刺项）")
+        print("  2. 没有引入，且本工作流从未登记穿刺资产 → workflow gate spike --skip")
+        if current_assets:
+            print(f"  3. 没有引入，但本工作流已登记 {len(current_assets)} 个穿刺资产 → "
+                  "workflow gate spike --reuse --reuse-rationale <每个被复用结论为何仍成立>")
+            print(f"     已登记资产：{'；'.join(asset.relative_path for asset in current_assets)}")
+        else:
+            print("  （本工作流没有已登记穿刺资产，--reuse 不适用）")
 
     # 写 journal：材料清单登记（记录本次清单的组成与内容指纹）
     journal_mod.append_entry(project_root, "材料清单登记", "workflow.py",
@@ -3902,13 +3919,18 @@ def cmd_gate(args) -> None:
         sys.exit(1)
 
     # 旧基线参数只为兼容历史调用；当前产品规则不再把它们作为门禁流程。
+    # 旧基线参数只为兼容历史调用；当前产品规则不再把它们作为门禁流程。
+    # getattr 容错：测试和历史调用方可能用 SimpleNamespace 模拟参数对象，
+    # 新参数（--reuse/--reuse-rationale）在其中不存在时按未使用处理。
+    _has_reuse = bool(getattr(args, "reuse", False))
+    _has_reuse_rationale = bool(getattr(args, "reuse_rationale", ""))
     if (
         args.rebaseline
         or args.prepare_code
         or args.accept_existing_code
         or args.accept_existing_test_code
     ) and (
-        args.skip or args.discuss_done or args.confirmed
+        args.skip or _has_reuse or args.discuss_done or args.confirmed
     ):
         print(
             "错误：--rebaseline、--prepare-code、--accept-existing-code 和 "
@@ -3916,12 +3938,129 @@ def cmd_gate(args) -> None:
         )
         sys.exit(1)
 
+    if args.skip and _has_reuse:
+        print("错误：--skip 和 --reuse 互斥；skip 表示本轮不做穿刺，reuse 表示复用既有穿刺结论")
+        sys.exit(1)
+
+    # ── 特殊：--reuse（仅 spike，验证技术不确定性 R30/R31）──
+    if _has_reuse:
+        if stage_name != "spike":
+            print(f"错误：--reuse 仅适用于 spike stage，不适用于 {stage_name}")
+            sys.exit(1)
+        current_assets = [
+            asset
+            for asset in wf_state.spike_assets
+            if asset.workflow_id == wf_state.workflow_id
+        ]
+        if not current_assets:
+            print(
+                "错误：本工作流没有已登记的穿刺资产，无内容可复用；"
+                "没有新技术不确定性时请用 --skip"
+            )
+            sys.exit(1)
+        rationale = (getattr(args, "reuse_rationale", "") or "").strip()
+        if len(rationale) < 12 or rationale in {"无", "暂无", "待定", "待补充"}:
+            print(
+                "错误：--reuse 必须用 --reuse-rationale 写明复用依据——"
+                "每个被复用穿刺项的结论为什么在当前设计变更后仍然成立"
+                "（不少于 12 个字符，不能写占位词）"
+            )
+            sys.exit(1)
+        _clear_pending_spike_assets(wf_state)
+        try:
+            cleanup_plan = plan_spike_tmp_cleanup(project_root, wf_state)
+            cleaned_paths = clean_spike_tmp(
+                project_root,
+                wf_state,
+                cleanup_plan=cleanup_plan,
+            )
+        except (OSError, ValueError) as exc:
+            _print_gate_failure(
+                stage_name="spike",
+                gate_name="复用前临时内容清理",
+                details=exc,
+                command="workflow gate spike --reuse --reuse-rationale <复用依据>",
+                side_effects="只删除当前工作流未登记的穿刺半成品，保留已登记资产和其它工作流目录",
+                success_condition="定向清理完成且没有触碰已登记或历史穿刺资产",
+            )
+            return
+        # 复用路径：跳过新穿刺但保留既有结论和资产的追踪表引用（R30/R31）。
+        wf_state.spike_reused = True
+        wf_state.spike_skipped = False
+        wf_state.meta["spike_reuse_rationales"] = [
+            {
+                "asset_count": len(current_assets),
+                "rationale": rationale,
+                "recorded_at": state_mod.now_iso(),
+            }
+        ]
+        # 退回重走路径：待复核文本在有资产引用时不动，无引用行回补为复用文本。
+        try:
+            traceability_mod.resolve_spike_recheck_for_skip(
+                project_root, wf_state.workflow_id
+            )
+        except ValueError:
+            pass
+        wf_state.stages[stage_name].gate.discussion_complete = True
+        wf_state.stages[stage_name].gate.code_validated = True
+        wf_state.stages[stage_name].gate.user_confirmed = True
+        wf_state.stages[stage_name].status = "done"
+        stage_names = list(wf_state.stages.keys())
+        current_idx = stage_names.index(stage_name)
+        if current_idx + 1 < len(stage_names):
+            next_stage = stage_names[current_idx + 1]
+            wf_state.current_stage = next_stage
+            wf_state.stages[next_stage].status = "in_progress"
+        state_mod.save_state(project_root, wf_state)
+        journal_mod.append_entry(
+            project_root,
+            "spike 复用",
+            "workflow.py",
+            workflow_id=wf_state.workflow_id,
+            reused_assets=[asset.relative_path for asset in current_assets],
+            rationale=rationale,
+            preserved_paths=cleanup_plan["preserved"],
+            cleaned_paths=cleaned_paths,
+        )
+        journal_mod.append_entry(project_root, "阶段推进", "workflow.py",
+                                from_=stage_name, to=wf_state.current_stage)
+        print(f"═══ {stage_name} 复用既有穿刺 ═══")
+        print(f"复用的穿刺资产: {[asset.relative_path for asset in current_assets]}")
+        print(f"复用依据: {rationale}")
+        _print_spike_cleanup_plan(cleanup_plan)
+        print(f"进入 {wf_state.current_stage}")
+        print_next_step(f"调 `workflow discuss` 加载 {wf_state.current_stage} stage 提示词")
+        return
+
     # ── 特殊：--skip（仅 spike）──
     if args.skip:
         # --skip 只适用于 spike stage
         if stage_name != "spike":
             print(f"错误：--skip 仅适用于 spike stage，不适用于 {stage_name}")
             sys.exit(1)
+        # 验证技术不确定性 R30：本工作流已有登记资产时先警告后果，让人在
+        # 犯错前看到选择；确认后才继续。
+        current_assets = [
+            asset
+            for asset in wf_state.spike_assets
+            if asset.workflow_id == wf_state.workflow_id
+        ]
+        if current_assets:
+            print("⚠️ 警告：本工作流已登记 "
+                  f"{len(current_assets)} 个穿刺资产：")
+            for asset in current_assets:
+                print(f"  - {asset.relative_path}")
+            print("执行 --skip 后，验收计划将无法引用这些资产（追踪表校验会拒绝"
+                  "本轮资产引用）；如需保留并复用它们，请改用：")
+            print("  workflow gate spike --reuse --reuse-rationale <每个被复用结论为何仍成立>")
+            print("确认要放弃引用继续 --skip 时，请再次执行本命令（用户已知情）。")
+            # R30：警告先于跳过动作出现——第一次执行只警告并退出；用户知情后
+            # 再次执行同一命令才真正跳过。
+            already_warned = wf_state.meta.get("spike_skip_warned_at")
+            if not already_warned:
+                wf_state.meta["spike_skip_warned_at"] = state_mod.now_iso()
+                state_mod.save_state(project_root, wf_state)
+                sys.exit(1)
         _clear_pending_spike_assets(wf_state)
         try:
             cleanup_plan = plan_spike_tmp_cleanup(project_root, wf_state)
@@ -3943,6 +4082,8 @@ def cmd_gate(args) -> None:
 
         # 清理成功后再标记 spike 跳过并推进，失败时始终停留在当前阶段。
         wf_state.spike_skipped = True
+        # 确认放弃后清除警告标记，避免污染后续轮次判断。
+        wf_state.meta.pop("spike_skip_warned_at", None)
         # 退回重走路径：回溯重置过的穿刺列停在待复核文本，本轮确认跳过后回补为跳过文本。
         # 首轮 spike 早于 acceptance_plan、追踪表还不存在时静默跳过回补。
         try:
@@ -5675,6 +5816,12 @@ def cmd_abort(args) -> None:
                     print(f"  - {item.get('path')}：{action}")
                 elif item.get("kind") == "project_fields":
                     print("  - .workflow_loop/project.json：恢复本轮受管项目字段")
+            no_copy_paths = abort_manifest.get("no_copy_paths")
+            if isinstance(no_copy_paths, list) and no_copy_paths:
+                # 整轮作废并恢复 R22：无副本的删除文件保持删除，不阻塞作废。
+                print("无副本的删除文件（实施前内容无法取得，作废时保持当前删除状态）：")
+                for entry in no_copy_paths:
+                    print(f"  - {entry}")
             print("清单外文件不会读取、恢复或删除。")
             if isinstance(abort_spike_plan, dict):
                 _print_spike_cleanup_plan(abort_spike_plan)
@@ -6324,7 +6471,13 @@ def main() -> None:
                              help="第三道门：记录用户看过当前结果并同意，随后进入下一环节")
     # --skip：跳过 stage（仅 spike）
     gate_parser.add_argument("--skip", action="store_true",
-                             help="跳过 stage（仅 spike）")
+                             help="跳过 stage（仅 spike；本工作流已登记穿刺资产时先警告后果）")
+    # --reuse：跳过新穿刺但复用本工作流已登记的穿刺结论和资产（仅 spike）
+    gate_parser.add_argument("--reuse", action="store_true",
+                             help="跳过新穿刺，保留并复用本工作流已登记的穿刺结论和资产（仅 spike）")
+    # --reuse-rationale：复用依据（--reuse 时必填，说明每个被复用结论为何仍成立）
+    gate_parser.add_argument("--reuse-rationale", default="",
+                             help="复用依据：--reuse 时必填，写清每个被复用穿刺项的结论为什么在当前设计下仍然成立")
     # --rebaseline：用户确认当前代码作为 impl 的新实施前基线
     gate_parser.add_argument("--rebaseline", action="store_true",
                              help="重设 impl 实施前代码基线（仅用户确认后使用）")

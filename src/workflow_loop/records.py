@@ -100,6 +100,11 @@ KIND_SCHEMAS: dict[str, dict] = {
                 "key_column": "检查命令或方法",
                 "required_at_gate": True,
             },
+            "核对结论": {
+                "columns": ["核对对象", "核对依据"],
+                "key_column": "核对对象",
+                "required_at_gate": False,
+            },
         },
         "narrative": ["预期产品结果", "实施中问题与处理", "未决问题"],
         "enums": {"未完成状态": ["状态：无", "状态：有"]},
@@ -142,6 +147,11 @@ KIND_SCHEMAS: dict[str, dict] = {
                 "key_column": "测试项编号",
                 "required_at_gate": True,
             },
+            "核对结论": {
+                "columns": ["核对对象", "核对依据"],
+                "key_column": "核对对象",
+                "required_at_gate": False,
+            },
         },
         "narrative": ["测试范围说明", "测试条件要求", "未决测试条件", "针对性回归范围"],
         "enums": {},
@@ -176,6 +186,11 @@ KIND_SCHEMAS: dict[str, dict] = {
                     "用户需要回答",
                 ],
                 "key_column": "验收条件编号",
+                "required_at_gate": False,
+            },
+            "核对结论": {
+                "columns": ["核对对象", "核对依据"],
+                "key_column": "核对对象",
                 "required_at_gate": False,
             },
         },
@@ -281,6 +296,12 @@ KIND_SCHEMAS: dict[str, dict] = {
                 "key_column": "功能名称",
                 "required_at_gate": True,
             },
+            # 推进 R47：spec 环节退回核对时，无需修改声明填在本表（spec 无主题级表）
+            "核对结论": {
+                "columns": ["核对对象", "核对依据"],
+                "key_column": "核对对象",
+                "required_at_gate": False,
+            },
         },
         "narrative": [],
         "enums": {},
@@ -297,6 +318,11 @@ KIND_SCHEMAS: dict[str, dict] = {
                 # 不能静默放行（2026-09-08 实证：空表放行导致整体验收才发现
                 # 文档缺失，补填触发哈希变化被迫退回 qa 重走全流程）
                 "required_at_gate": True,
+            },
+            "核对结论": {
+                "columns": ["核对对象", "核对依据"],
+                "key_column": "核对对象",
+                "required_at_gate": False,
             },
         },
         "narrative": ["结果说明", "执行说明", "人工验收交接", "未通过或阻塞"],
@@ -322,6 +348,11 @@ KIND_SCHEMAS: dict[str, dict] = {
                 "optional_columns": ["用户实际回答", "人工确认", "验收记录编号"],
                 "key_column": "验收条件编号",
                 "required_at_gate": True,
+            },
+            "核对结论": {
+                "columns": ["核对对象", "核对依据"],
+                "key_column": "核对对象",
+                "required_at_gate": False,
             },
         },
         "narrative": ["验收说明"],
@@ -891,6 +922,8 @@ _FREE_DESCRIPTION_COLUMNS: dict[str, int] = {
     "本主题验收": 12,
     "本主题不验收": 12,
     "完成判定": 12,
+    "核对对象": 8,
+    "核对依据": 12,
 }
 
 # ③ 门禁必填的叙述栏（空数组即内容问题拒绝；R19 第③条清单）。
@@ -1326,6 +1359,53 @@ def table_exists(project_root: str, relative: str) -> bool:
     return os.path.isfile(os.path.join(project_root, relative))
 
 
+def no_change_declaration(
+    project_root: str,
+    workflow_id: str,
+    kind: str,
+    topic: str,
+) -> dict | None:
+    """读取主题级工作记录表的“核对结论：无需修改”声明（推进 R47）。
+
+    返回声明的首个声明行（核对对象、核对依据）；表不存在、没有声明行或
+    声明行不完整时返回 None。依据是否有实质内容由调用方配合 R19 实质校验
+    判断；本函数只负责把声明事实取出来。
+    """
+    relative = table_relative_path(project_root, workflow_id, kind, topic)
+    if not table_exists(project_root, relative):
+        return None
+    try:
+        table = load_table(os.path.join(project_root, relative))
+    except RecordsError:
+        return None
+    rows = table.get("核对结论")
+    if not isinstance(rows, list) or not rows:
+        return None
+    first = rows[0]
+    if not isinstance(first, dict):
+        return None
+    target = str(first.get("核对对象", "")).strip()
+    rationale = str(first.get("核对依据", "")).strip()
+    if not target or not rationale:
+        return None
+    return {"核对对象": target, "核对依据": rationale}
+
+
+def declaration_rationale_has_substance(rationale: str) -> bool:
+    """声明的核对依据是否有实质内容（推进 R47：不能拿占位词当依据）。
+
+    与 R19 的占位词清单同源：命中占位词或只有标点编号的依据不算实质内容。
+    """
+    value = rationale.strip()
+    if not value:
+        return False
+    if value in _PLACEHOLDER_WORDS:
+        return False
+    if _REFERENCE_ONLY_RE.match(value):
+        return False
+    return len(value) >= 12
+
+
 def validate_table(kind: str, table: dict, expected_version: str | None = None, *, project_root: str = "") -> list[tuple[str, str]]:
     """校验一张表，返回 (类别, 问题) 列表；类别为格式问题或内容问题。
 
@@ -1382,6 +1462,10 @@ def validate_table(kind: str, table: dict, expected_version: str | None = None, 
             ))
     for key, definition in schema["row_lists"].items():
         rows = table.get(key)
+        if rows is None and not definition.get("required_at_gate", False):
+            # 可选行清单（如"核对结论"声明行，R47）：表里没有该键视为未声明，
+            # 不要求 AI 预填空数组；旧版本表升级后也不会因缺新栏位报格式问题。
+            continue
         if not isinstance(rows, list):
             problems.append((FORMAT_CATEGORY, f"栏目 {key} 必须是行数组"))
             continue
@@ -1665,6 +1749,29 @@ def _render_rows(section_lines: list[str], columns: list[str], rows: list[dict])
         section_lines.append("| " + " | ".join(_md_cell(cells[c]) for c in columns) + " |")
 
 
+def _declaration_section(table: dict) -> list[str]:
+    """渲染“核对结论：无需修改”声明为核对记录一节（推进 R47 / 表 R30）。
+
+    表里没有声明行时返回空列表——正常修改流程的文档不出现该节。
+    """
+    rows = table.get("核对结论")
+    if not isinstance(rows, list) or not rows:
+        return []
+
+    def _one_line(value) -> str:
+        return re.sub(r"\s*\r?\n\s*", " ", str(value)).strip()
+
+    lines = ["", '<a id="核对记录"></a>', "## 核对记录", "",
+             "本主题在退回后重新核对，确认产物无需修改（声明依据如下）。", ""]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lines.append(f"- 核对对象：{_one_line(row.get('核对对象', ''))}")
+        lines.append(f"- 核对依据：{_one_line(row.get('核对依据', ''))}")
+        lines.append("")
+    return lines
+
+
 def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_state=None) -> str:
     """版本 2 渲染：模板规定的每一节都存在、内容全部来自表栏位、零占位指引句（R16/R18）。"""
     schema = _schema(kind, _table_version_of(table))
@@ -1754,6 +1861,7 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
                 lines.append(f"- {column}：{_inline(row.get(column, ''))}")
             lines.append("")
         lines += ["## 5. 完成判定", ""] + [f"- {item}" for item in table.get("完成判定", [])]
+        lines += _declaration_section(table)
         lines += [
             "",
             "## 6. 上下游文档",
@@ -1811,6 +1919,7 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
         _render_rows(lines, rl["实际代码修改"]["columns"], table.get("实际代码修改", []))
         lines += ["", "#### 3.4.2 开发检查记录", ""]
         _render_rows(lines, rl["开发检查记录"]["columns"], table.get("开发检查记录", []))
+        lines += _declaration_section(table)
         lines += [
             "",
             "## 4. 上下游文档",
@@ -1881,6 +1990,7 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
         lines += _narrative("## 2. 针对性回归范围", "针对性回归范围", "- 暂无；由最终全量回归统一检查")
         lines += _narrative("## 3. 测试条件要求", "测试条件要求", "- 暂无")
         lines += _narrative("## 4. 未决测试条件", "未决测试条件", "- 暂无")
+        lines += _declaration_section(table)
         has_auto = any(
             str(r.get("测试方式", "")).strip() in {"自动化测试", "自动化测试 + 人工验收"}
             for r in table.get("测试项", []) if isinstance(r, dict)
@@ -2014,6 +2124,7 @@ def _generate_document_v2(kind: str, table: dict, *, project_root: str = "", wf_
                 "",
             ]
         lines += _narrative("## 3. 验收说明", "验收说明", "暂无")
+        lines += _declaration_section(table)
         lines += [
             "",
             "## 4. 上下游文档",
@@ -2984,6 +3095,7 @@ def _generate_test_result_document_v2(
     fail_items = [str(x) for x in table.get("未通过或阻塞", []) if str(x).strip()]
     lines += [f"- {x}" for x in fail_items] if fail_items else ["暂无"]
     lines += _narrative_result_section(table)
+    lines += _declaration_section(table)
     lines += [
         "",
         "## 6. 上下游文档",

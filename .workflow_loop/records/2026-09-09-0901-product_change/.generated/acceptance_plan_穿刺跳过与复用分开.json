@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "702cf266febfa935fe3311cb850bdd50bf1c2f81a9689a68feb6267c5dc09b11",
+    "生成文档路径": "acceptance/穿刺跳过与复用分开_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/穿刺跳过与复用分开_验收计划.md": {
+      "body_hash": "914471e564c7b82e954e5124e5202fb6e7fa7980ac51e476a8a4b86076de7538"
+    }
+  }
+}

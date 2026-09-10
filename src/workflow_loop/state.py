@@ -397,6 +397,10 @@ class WorkflowState:
     clean_confirmed: bool = False
     # spike 跳过标记：gate spike --skip 时置 true
     spike_skipped: bool = False
+    # spike 复用标记：gate spike --reuse 时置 true（验证技术不确定性 R30/R31）。
+    # 复用状态下本工作流既有穿刺资产的追踪表引用不受连坐；复用依据存 meta 的
+    # spike_reuse_rationales 键，AI 填写、用户确认后由程序记录。
+    spike_reused: bool = False
     # 开工冻结的表格式版本（R11/R18）：本轮建表、校验、生成一律用该版本判定；
     # 空字符串表示冻结机制上线前的旧轮次，由 records 按磁盘表的版本推断。
     table_format_version: str = ""
@@ -740,6 +744,7 @@ def state_from_dict(data: dict) -> WorkflowState:
         topics=topics,
         clean_confirmed=data.get("clean_confirmed", False),
         spike_skipped=data.get("spike_skipped", False),
+        spike_reused=data.get("spike_reused", False),
         table_format_version=data.get("table_format_version", ""),
         stage_path=data.get("stage_path", []),
         stage_path_version=data.get("stage_path_version", 0),

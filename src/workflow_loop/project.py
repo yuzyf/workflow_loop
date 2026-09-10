@@ -34,6 +34,7 @@ MANAGED_PROJECT_FIELDS = (
     "test_entry",
     "test_parallelism",
     "artifact_file_keys",
+    "extra_code_suffixes",
 )
 
 
@@ -62,6 +63,10 @@ class ProjectState:
     # 显示名称到稳定中文文件标识的项目级映射，按 feature/topic/spike/bug 分组。
     # 显示名称仍写入正文；文件标识只进入文件名。跨轮次保存，不随新 Run 覆盖。
     artifact_file_keys: dict[str, dict[str, str]] = field(default_factory=dict)
+    # 项目级扩展代码后缀：项目主要产物不是常规代码格式（例如纯 HTML 站点）时，
+    # 维护者登记这些后缀，实际改动判定把它们当代码文件识别（实施并保护项目修改 R34）。
+    # 存[".html", ".htm"]这类小写后缀列表；空列表表示不扩展。
+    extra_code_suffixes: list[str] = field(default_factory=list)
 
 
 # 项目骨架检查结果：
@@ -124,6 +129,12 @@ def load_project(project_root: str) -> ProjectState | None:
         for category, mapping in raw_keys.items()
         if isinstance(mapping, dict)
     }
+    raw_suffixes = data.get("extra_code_suffixes", [])
+    extra_code_suffixes = [
+        suffix.strip().lower()
+        for suffix in raw_suffixes
+        if isinstance(suffix, str) and suffix.strip()
+    ]
     return ProjectState(
         installer_version=data.get("installer_version", ""),
         installed_at=data.get("installed_at", ""),
@@ -132,6 +143,7 @@ def load_project(project_root: str) -> ProjectState | None:
         test_entry=data.get("test_entry", DEFAULT_TEST_ENTRY),
         test_parallelism=max(1, int(data.get("test_parallelism", DEFAULT_TEST_PARALLELISM))),
         artifact_file_keys=artifact_file_keys,
+        extra_code_suffixes=extra_code_suffixes,
     )
 
 
@@ -179,9 +191,17 @@ def save_project(project_root: str, project: ProjectState) -> None:
 def _validate_managed_fields(fields: dict) -> None:
     if not isinstance(fields, dict):
         raise ValueError("项目受管字段快照必须是 JSON 对象")
-    missing = [name for name in MANAGED_PROJECT_FIELDS if name not in fields]
+    # extra_code_suffixes 是后加字段：旧轮次的作废清单快照没有它，恢复旧快照
+    # 时按空列表处理，不因缺新字段拒绝历史恢复。
+    legacy_tolerated = {"extra_code_suffixes"}
+    missing = [
+        name
+        for name in MANAGED_PROJECT_FIELDS
+        if name not in fields and name not in legacy_tolerated
+    ]
     if missing:
         raise ValueError(f"项目受管字段快照缺少字段: {missing}")
+    fields = {**{name: [] for name in legacy_tolerated if name not in fields}, **fields}
     if not isinstance(fields["project_design_initialized"], bool):
         raise ValueError("project_design_initialized（项目设计已初始化）必须是布尔值")
     if (
@@ -203,6 +223,14 @@ def _validate_managed_fields(fields: dict) -> None:
     for category, mapping in mappings.items():
         if not isinstance(category, str) or not isinstance(mapping, dict):
             raise ValueError("正式文件标识映射的分类和值必须是对象")
+    if (
+        not isinstance(fields["extra_code_suffixes"], list)
+        or not all(
+            isinstance(item, str) and item.startswith(".") and item.strip(".")
+            for item in fields["extra_code_suffixes"]
+        )
+    ):
+        raise ValueError("extra_code_suffixes（项目扩展代码后缀）必须是以点开头的字符串数组")
         if not all(
             isinstance(display_name, str) and isinstance(file_key, str)
             for display_name, file_key in mapping.items()
@@ -221,6 +249,7 @@ def snapshot_managed_fields(project_root: str) -> dict:
         "test_entry": copy.deepcopy(project.test_entry),
         "test_parallelism": project.test_parallelism,
         "artifact_file_keys": copy.deepcopy(project.artifact_file_keys),
+        "extra_code_suffixes": list(project.extra_code_suffixes),
     }
     _validate_managed_fields(fields)
     return fields
@@ -241,7 +270,7 @@ def restore_managed_fields(project_root: str, fields: dict) -> None:
         raise ValueError(f"{PROJECT_FILE} 必须是 JSON 对象")
 
     for name in MANAGED_PROJECT_FIELDS:
-        data[name] = copy.deepcopy(fields[name])
+        data[name] = copy.deepcopy(fields.get(name, [] if name == "extra_code_suffixes" else None))
     _atomic_write_json(path, data)
     if snapshot_managed_fields(project_root) != fields:
         raise ValueError("项目受管字段写回后复核不一致")

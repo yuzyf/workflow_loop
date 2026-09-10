@@ -1,0 +1,204 @@
+{
+  "表版本": "4",
+  "工作流编号": "2026-09-09-0901-product_change",
+  "验收主题": "穿刺跳过与复用分开",
+  "生成文档哈希": "265dd60ce710a80baae857b58056974b7e065929db2fafe81516148b5083d12d",
+  "生成文档路径": "qa/穿刺跳过与复用分开_测试计划.md",
+  "测试项": [
+    {
+      "测试项编号": "TC-01",
+      "直白测试名称": "本轮资产识别与历史资产区分",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow gate spike --skip（资产检测）",
+      "代码入口": "src/workflow_loop/cli.py::cmd_gate",
+      "测试入口": "tests/test_gate_spike_reuse.py::test_current_asset_detection",
+      "准备数据": "state 登记本工作流穿刺资产；再改为历史轮次资产",
+      "执行动作": "执行 skip 的资产检测逻辑",
+      "观察位置": "检测到的本轮资产清单",
+      "预期结果": "本轮资产识别为 1 个；历史轮次资产识别为 0 个",
+      "不通过表现": "历史轮次资产被误算为本轮导致误警告",
+      "证据要求": "pytest JUnit XML 报告含上述断言结果",
+      "对应验收条件": "AC-01",
+      "命令参数数组": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/test_gate_spike_reuse.py::test_current_asset_detection",
+        "-q",
+        "--basetemp=/tmp/wf-spike-t1"
+      ],
+      "工作目录": "",
+      "超时秒数": 300,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": [
+        "tests/test_gate_spike_reuse.py::test_current_asset_detection"
+      ]
+    },
+    {
+      "测试项编号": "TC-02",
+      "直白测试名称": "复用状态连坐条件不成立",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "追踪表穿刺列校验（验收计划环节）",
+      "代码入口": "src/workflow_loop/traceability.py::collect_spike_asset_acceptance_links",
+      "测试入口": "tests/test_gate_spike_reuse.py::test_reused_state_releases_traceability_check",
+      "准备数据": "skip 状态和 reuse 状态两种 state",
+      "执行动作": "校验连坐判定条件",
+      "观察位置": "连坐条件表达式结果",
+      "预期结果": "skip 且非 reuse 时条件成立（原连坐）；reuse 时条件不成立（引用放行）",
+      "不通过表现": "reuse 状态下连坐条件仍成立",
+      "证据要求": "pytest JUnit XML 报告含上述断言结果",
+      "对应验收条件": "AC-02",
+      "命令参数数组": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/test_gate_spike_reuse.py::test_reused_state_releases_traceability_check",
+        "-q",
+        "--basetemp=/tmp/wf-spike-t2"
+      ],
+      "工作目录": "",
+      "超时秒数": 300,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": [
+        "tests/test_gate_spike_reuse.py::test_reused_state_releases_traceability_check"
+      ]
+    },
+    {
+      "测试项编号": "TC-03",
+      "直白测试名称": "复用标记跨保存读回",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "state.json 保存加载",
+      "代码入口": "src/workflow_loop/state.py::WorkflowState.spike_reused",
+      "测试入口": "tests/test_gate_spike_reuse.py::test_state_roundtrip_keeps_spike_reused",
+      "准备数据": "spike_reused=True 的 state",
+      "执行动作": "保存后重新加载",
+      "观察位置": "加载后的 spike_reused 值",
+      "预期结果": "复用标记保留为 True",
+      "不通过表现": "复用标记丢失导致恢复成 skip 状态被连坐",
+      "证据要求": "pytest JUnit XML 报告含上述断言结果",
+      "对应验收条件": "AC-02",
+      "命令参数数组": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/test_gate_spike_reuse.py::test_state_roundtrip_keeps_spike_reused",
+        "-q",
+        "--basetemp=/tmp/wf-spike-t3"
+      ],
+      "工作目录": "",
+      "超时秒数": 300,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": [
+        "tests/test_gate_spike_reuse.py::test_state_roundtrip_keeps_spike_reused"
+      ]
+    },
+    {
+      "测试项编号": "TC-04",
+      "直白测试名称": "CLI 参数支持 reuse 与依据",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow gate spike --reuse --reuse-rationale",
+      "代码入口": "src/workflow_loop/cli.py::main（gate 参数注册）",
+      "测试入口": "tests/test_gate_spike_reuse.py::test_gate_parser_accepts_reuse_flags",
+      "准备数据": "参数解析器定义",
+      "执行动作": "解析 --reuse --reuse-rationale 和空参数两种输入",
+      "观察位置": "解析结果",
+      "预期结果": "reuse 标志和依据文本正确解析；默认值为 False 和空串",
+      "不通过表现": "参数不存在导致命令无法执行",
+      "证据要求": "pytest JUnit XML 报告含上述断言结果",
+      "对应验收条件": "AC-02、AC-03",
+      "命令参数数组": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/test_gate_spike_reuse.py::test_gate_parser_accepts_reuse_flags",
+        "-q",
+        "--basetemp=/tmp/wf-spike-t4"
+      ],
+      "工作目录": "",
+      "超时秒数": 300,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": [
+        "tests/test_gate_spike_reuse.py::test_gate_parser_accepts_reuse_flags"
+      ]
+    },
+    {
+      "测试项编号": "TC-05",
+      "直白测试名称": "spike 材料输出决策树",
+      "前置测试项": "无",
+      "测试方式": "自动化测试",
+      "产品入口": "workflow discuss（spike 环节材料清单）",
+      "代码入口": "src/workflow_loop/cli.py::cmd_discuss",
+      "测试入口": "tests/test_gate_spike_reuse.py::test_discuss_prints_decision_tree",
+      "准备数据": "轮次处于 spike 环节（含已登记资产状态）",
+      "执行动作": "AI 执行 workflow discuss 加载 spike 材料",
+      "观察位置": "材料清单输出全文",
+      "预期结果": "输出包含返回重走决策树段：重新穿刺、skip、reuse 三条路径及判断条件；有本轮资产时列示资产",
+      "不通过表现": "材料清单没有决策树内容",
+      "证据要求": "pytest JUnit XML 报告含上述断言结果",
+      "对应验收条件": "AC-04",
+      "命令参数数组": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/test_gate_spike_reuse.py::test_discuss_prints_decision_tree",
+        "-q",
+        "--basetemp=/tmp/wf-spike-t5"
+      ],
+      "工作目录": "",
+      "超时秒数": 300,
+      "报告适配器": "pytest-junitxml",
+      "正式目标名称": [
+        "tests/test_gate_spike_reuse.py::test_discuss_prints_decision_tree"
+      ]
+    }
+  ],
+  "核对结论": [],
+  "测试范围说明": [
+    "覆盖主题「穿刺跳过与复用分开」全部验收条件的自动化验证；测试方式全部为自动化测试，无人工验收步骤。"
+  ],
+  "测试条件要求": [
+    "本地 Git 环境可用；测试用临时目录构造真实 Git 仓库和状态文件，不依赖外部服务。"
+  ],
+  "未决测试条件": [
+    "暂无"
+  ],
+  "针对性回归范围": [
+    "test_traceability.py 与 test_commands.py 全量（追踪表校验分支和 gate 参数改动的影响）。"
+  ],
+  "填写说明": {
+    "测试项": {
+      "测试项编号": "主题内唯一，例如 TC-01；生成文档锚点和追踪表引用该编号",
+      "直白测试名称": "一句话说明测什么行为，读者不看代码也能懂，例如 空表主题门禁报尚未填写不退回文档模式",
+      "前置测试项": "本主题内必须先通过的直接 TC 编号；无依赖写“无”；不重复间接依赖",
+      "测试方式": "自动化测试、人工验收或 自动化测试 + 人工验收 三选一；能自动化判断的内容不能为省事写纯人工",
+      "产品入口": "用户或调用方实际使用的入口，例如 workflow gate impl 命令；取自产品设计使用过程",
+      "代码入口": "项目相对文件::可定位标识，例如 src/workflow_loop/stages/stages.py::ImplStage.discussion_validate；不接受目录或模块泛称",
+      "测试入口": "tests/文件::测试函数；测试文件可以尚未创建，但路径和目标必须明确；本列只进入生成的测试计划文档，不是登记入口，登记入口取“正式目标名称”列；人工验收行可留空",
+      "准备数据": "执行前要建立的具体数据和状态，例如 建一张空 impl_record 表；取自执行动作需要的前提",
+      "执行动作": "通过产品入口执行的具体动作一句话；与验收条件“触发动作”语义一致但写到可执行粒度",
+      "观察位置": "检查返回值、状态文件、生成文档或输出的具体位置；与验收条件“可检查结果”对应",
+      "预期结果": "必须出现的具体值、数量、存在性或状态；与验收条件“通过标准”逐项一致，不新增标准",
+      "不通过表现": "出现哪些缺失、错误值或错误状态即失败；与预期结果对应",
+      "证据要求": "需要保存的结构化报告和可复核事实，例如 pytest junitxml 报告与退出码",
+      "对应验收条件": "本测试项主要服务的 AC 编号；一个测试项只对应一条主要验收条件",
+      "命令参数数组": "JSON 数组，例如 [\"pytest\", \"tests/test_a.py\"]；人工验收行留空",
+      "工作目录": "项目内相对路径；留空表示项目根",
+      "超时秒数": "整数，例如 600；人工验收行留空",
+      "报告适配器": "pytest-junitxml 或 vitest-junit；人工验收行留空",
+      "正式目标名称": "本列是登记入口的唯一来源：必须写成 项目相对路径::报告里的目标名，与报告适配器输出的目标名逐字一致，例如 tests/test_records.py::test_table_rejects_bad_entry（pytest 写 nodeid，vitest 写 测试文件路径::测试标题）。只写测试标题不带路径会被登记拒绝。一个测试项覆盖多个测试函数时，把多个入口写成 JSON 数组，例如 [\"tests/a.test.ts::读取返回 15 组\",\"tests/a.test.ts::升级文案存在\"]；同行“测试入口”列填了也不参与登记。人工验收行留空"
+    },
+    "核对结论": {
+      "核对对象": "按栏目含义填写",
+      "核对依据": "按栏目含义填写"
+    },
+    "测试范围说明": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "测试条件要求": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "未决测试条件": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "针对性回归范围": "叙述一段存一条；每条一句话到几句话，写给人看的内容",
+    "程序专用字段": "生成文档路径、生成文档哈希、缺陷文档哈希由程序维护，不要填写或改动；填写事实后让程序生成，已有程序值保持原样"
+  }
+}

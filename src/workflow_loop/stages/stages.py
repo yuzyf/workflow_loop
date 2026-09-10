@@ -232,10 +232,16 @@ class SpecStage(StageStrategy):
             if state.intent == "from_scratch" and (not product_changed or not feature_changed):
                 errors.append("从零创建产品时，产品总说明和至少一份功能文档都必须在本阶段新建")
             if state.intent == "product_change" and not product_changed:
-                errors.append(
-                    "修改产品时，产品总说明必须更新并记录本轮变化。"
-                    + _baseline_conflict_facts(state, project_root, overview_rel)
-                )
+                # 推进 R47：退回核对确认无需修改是合法完成状态。changed_detail
+                # 由 changed_stage_paths 标注"核对结论：无需修改"时放行，不要求
+                # 产品总说明必须发生变化；其余情况保留原有报错（附基线事实）。
+                if "核对结论：无需修改" not in changed_detail:
+                    errors.append(
+                        "修改产品时，产品总说明必须更新并记录本轮变化。"
+                        + _baseline_conflict_facts(state, project_root, overview_rel)
+                        + "；退回后核对确认无需修改时，在当前环节工作记录表填写"
+                        "“核对结论”声明行（核对对象、核对依据）后重新执行本门"
+                    )
         return _validation_result(
             errors,
             f"产品设计文档存在并且属于本阶段修改: 产品总说明 + {[os.path.basename(p) for p in linked_paths]}",

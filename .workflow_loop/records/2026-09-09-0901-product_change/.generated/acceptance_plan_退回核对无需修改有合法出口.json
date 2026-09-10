@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "372b4d6ed6609c75c8ea34ae81023382c7cbd4712488a78c2fe6a29480d84033",
+    "生成文档路径": "acceptance/退回核对无需修改有合法出口_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/退回核对无需修改有合法出口_验收计划.md": {
+      "body_hash": "ea1cc601843c5f563f50369156d0c6b3ad7f0ab9a7d44c90fdf8c5d5041ec579"
+    }
+  }
+}
