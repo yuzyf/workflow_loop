@@ -1,5 +1,9 @@
 # 项目长期记忆
 
+## 环境与工具约定（2026-09-10 用户拍板）
+
+- **WorkBuddy 沙箱内跑全量回归的标准做法**：`env -u PYTHONPATH TMPDIR=/tmp/wfinherit /Users/yu/.local/bin/workflow gate regression_test`。shim 靠 PYTHONPATH 注入（mkdir 对已存在路径误报 EEXIST），摘掉后沙箱内可直接跑通全量回归（实测 632 passed 与用户 Terminal 一致）。跑前清 `/tmp/wfinherit/pytest-of-*` 残留。**旧结论"必须让用户在 Terminal 跑全量回归"作废**——用户原话："以后都这么处理、加入的记忆当中"。
+
 ## 待办（用户已确认方向，等时机执行）
 
 1. **表模式"AI 只填内容、不碰格式"改造**（2026-09-07 确认，2026-09-08 对抗审查后升为方案主线）
@@ -19,6 +23,15 @@
    - 加速器（按实测二选一或都用）：前缀缓存（**未验证 glm-5.3 端点是否支持，一条 curl 可测，优先测**）；subagent 拆执行（激活条件=实测显示历史累积占大头）。
    - 外围（降级）：知识图谱 MCP 不装——用户流程计划先行、翻码场景少，MCP 挂着收 1-2k token 固定税，tree-sitter 进主线后更没必要。
    - 执行顺序：① 10 分钟缓存验证；② product_change 同轮做主线+待办2；③ 实测下一轮 token 拆账（四块：历史累积/材料重读/门禁重试/AI 抄写）定 subagent 去留。
+
+## 已完成（2026-09-10 下午收工，轮次 2026-09-10-0804-bugfix，提交 a902ed8 未推送）
+
+1. **混合主题测试结果文档两个缺陷修复**（用户报告，核实后在同轮 bugfix 修复，全部验收通过）：
+   - Bug 1：混合主题"自动化测试结果"永远"未完成"——生成器汇总只统计自动化项，人工项不再参与判定。
+   - Bug 2：第 3 节口径不一致——人工项渲染为"测试方式：人工验收→转第 4 节"，校验器分自动化小节（必须正好覆盖）与人工小节（标注校验）两组。
+   - 根因治理：`test_mapping.automated_test_ids_in_plan` 单一数据源（生成器与校验器共用）；tests/test_mixed_topic_test_result.py 建立生成→校验正向闭环四用例（此前零正向测试，这是"同根因第四次出现"的堵口）。
+2. **质量证据**：4 个自动化测试项全过；用户 Terminal 全量回归 632 passed（含本轮 4 个新用例）；最终回归门禁机器记录 REG-20260910T104406+0000-e888b8e8 通过；架构文档 6.10 节同步。
+3. 本轮自身是混合主题（4 自动化+1 人工），全流程走通即修复的活证据。kg-app 项目下轮遇到混合主题可直接受益。
 
 ## 已完成（2026-09-10 收工，轮次 2026-09-09-0901-product_change，提交 28afddb 未推送）
 
@@ -65,6 +78,5 @@
 - 编辑归程序管的章节无事前拦阻（如产品总说明第 7 章）：手改后报错，但提示不区分"只改文档"和"表也改了"。报错质量已修（推进 R46）；事前拦阻涉及编辑器交互，未做，下轮评估。
 - "退回后核对无需修改"场景在 product_change 轮次门 2 无出口（代码推演：changed_stage_paths 返回空清单时 product_changed 恒 False 必报错）——与 R25 新规"不要求制造无意义修改"存在张力。2026-09-08 对抗审查核对：R46 只增强了报错事实、未改变判定，该缺口仍在，修复属下轮范围。
 - 2026-09-08 对抗审查教训：机器采集的生成格式与门禁校验格式必须同源（新文件位置值、多块行号格式都曾两边各写各的）；_texts_from_manifest 返回三元组 (entry, before, after)，解包时 entry 是 dict，容易解错——已在实施记录留档。
-- 全量测试在本 WorkBuddy 环境有 15 项固定失败（沙箱 shim 拦 mkdir exist_ok 和嵌套 pytest 子进程），git stash 对照已证明与代码无关；跑全量用 TMPDIR + --basetemp 绕过临时目录问题，mkdir 类失败只能换环境。
-- **2026-09-08 实测升级版结论**：shim 白天行为变化后统一入口在本环境直接 532 errors（连 mkdir(parents=True, exist_ok=True) 都拦）。最终全量回归的可靠做法：让用户在自己的 Terminal（无 shim 注入）执行 `cd <项目根> && TMPDIR=/tmp/wfinherit /Users/yu/.local/bin/workflow gate regression_test`，本轮实测 596 passed in 48.07s。shim bug（mkdir 不认 exist_ok=True）已整理复现材料给用户反馈 WorkBuddy。
-- 详见工作日志 2026-09-07.md、2026-09-08.md。
+- ~~全量测试在本 WorkBuddy 环境有固定失败（沙箱 shim 拦 mkdir）~~ **已被 2026-09-10 根治解法取代，见顶部"环境与工具约定"**：`env -u PYTHONPATH` 摘掉 shim 注入后沙箱内可直接跑通全量回归门禁（632 passed 实测），不再需要用户 Terminal。
+- 详见工作日志 2026-09-07.md、2026-09-08.md、2026-09-10.md。
