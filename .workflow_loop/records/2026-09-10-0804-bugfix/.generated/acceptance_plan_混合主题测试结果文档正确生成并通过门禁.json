@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "生成文档哈希": "aaee9c8535efe2683fc7f52e90392de44f2c8928a3c574a1b357084469f5a67e",
+    "生成文档路径": "acceptance/混合主题测试结果文档正确生成并通过门禁_验收计划.md",
+    "缺陷文档哈希": {}
+  },
+  "documents": {
+    "acceptance/混合主题测试结果文档正确生成并通过门禁_验收计划.md": {
+      "body_hash": "4f766433c208fed6f7994bd5999599d3f19868bb0ee9ea1012cdf2fbe08b9add"
+    }
+  }
+}

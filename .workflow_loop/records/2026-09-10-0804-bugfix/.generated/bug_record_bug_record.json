@@ -1,0 +1,22 @@
+{
+  "fields": {
+    "生成文档哈希": "d561e3464ce10d3cba23e3b839b294cfd90cd7de1060c82481a1237c4c5b3eda",
+    "生成文档路径": ".workflow_loop/records/2026-09-10-0804-bugfix/bug_record_bug_record.md",
+    "缺陷文档哈希": {
+      "bug/缺陷_混合主题测试结果文档正确生成并通过门禁.md": "0ba04e1b7ed4830bdc449d5db1f082877be56b811838b4c818fee591306fbcf3",
+      "bug/索引.md": "221e29476d27d3b8ce2684645879c1010bc9530153eba7238786f515a987b356"
+    }
+  },
+  "documents": {
+    ".workflow_loop/records/2026-09-10-0804-bugfix/bug_record_bug_record.md": {
+      "body_hash": "d4d649e3daf33c4cf5b8e3b4da252e486835dab843841e3e04d0f3a3e25bf753"
+    },
+    "bug/缺陷_混合主题测试结果文档正确生成并通过门禁.md": {
+      "body_hash": "4181b887f0b85a41b248efeb10a1950aa64caa88fc8770c43d42acfea56119b9"
+    },
+    "bug/索引.md": {
+      "body_hash": "e87fb783d5d7173ba76a36c93272bba158ff473d17868315ee6cbfc88bd506d0",
+      "scope": "bug-index-row"
+    }
+  }
+}

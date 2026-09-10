@@ -3022,9 +3022,42 @@ def _generate_test_result_document_v2(
     """版本 2 测试结果渲染：模板六节全部生成，机器事实由程序写入（R16/R18）。"""
     workflow_id = str(table.get("工作流编号", ""))
     file_key = topic_file_key(project_root, topic) if project_root and topic else topic
+    # 人工验收状态按测试计划表"测试方式"列判定（R18：不靠 AI 手写标注）
+    needs_manual = False
+    tc_names: dict[str, str] = {}
+    ac_by_id: dict[str, str] = {}
+    manual_ids: set[str] = set()
+    for row in (plan_table or {}).get("测试项", []):
+        if isinstance(row, dict):
+            _tc = str(row.get("测试项编号", "")).strip()
+            tc_names[_tc] = str(row.get("直白测试名称", "")).strip() or _tc
+            ac_by_id[_tc] = str(row.get("对应验收条件", "")).strip()
+            if str(row.get("测试方式", "")).strip() in {"人工验收", "自动化测试 + 人工验收"}:
+                needs_manual = True
+            if str(row.get("测试方式", "")).strip() == "人工验收":
+                manual_ids.add(_tc)
+    # 汇总只算自动化项（R12/R14）：人工项没有机器记录，不进自动化判定；
+    # 自动化项编号集合由单一数据源提供，与校验器口径一致。
+    from . import test_mapping as test_mapping_mod
+
+    try:
+        plan_items = test_mapping_mod.parse_test_plan_items(project_root, topic)
+    except ValueError:
+        plan_items = []
+    automated_ids = test_mapping_mod.automated_test_ids_in_plan(plan_items)
+    if not automated_ids and plan_table is not None:
+        # 文档模式或解析失败时退回测试计划表行清单口径，保持生成可用
+        automated_ids = {
+            str(row.get("测试项编号", "")).strip()
+            for row in (plan_table or {}).get("测试项", [])
+            if isinstance(row, dict)
+            and str(row.get("测试方式", "")).strip() in {"自动化测试", "自动化测试 + 人工验收"}
+        }
     _outcomes = []
     for _row in table.get("测试结果", []):
         _tid = str(_row.get("测试项编号", "")).strip()
+        if _tid not in automated_ids:
+            continue
         _task = tasks_by_id.get(_tid)
         _outcomes.append(_test_outcome(_task.current_record if _task is not None else None))
     if _outcomes and all(o == "通过" for o in _outcomes):
@@ -3033,17 +3066,6 @@ def _generate_test_result_document_v2(
         _overall = "失败"
     else:
         _overall = "未完成" if _outcomes else "通过"
-    # 人工验收状态按测试计划表"测试方式"列判定（R18：不靠 AI 手写标注）
-    needs_manual = False
-    tc_names: dict[str, str] = {}
-    ac_by_id: dict[str, str] = {}
-    for row in (plan_table or {}).get("测试项", []):
-        if isinstance(row, dict):
-            _tc = str(row.get("测试项编号", "")).strip()
-            tc_names[_tc] = str(row.get("直白测试名称", "")).strip() or _tc
-            ac_by_id[_tc] = str(row.get("对应验收条件", "")).strip()
-            if str(row.get("测试方式", "")).strip() in {"人工验收", "自动化测试 + 人工验收"}:
-                needs_manual = True
     finished_times = []
     for _row in table.get("测试结果", []):
         _task = tasks_by_id.get(str(_row.get("测试项编号", "")).strip())
@@ -3079,6 +3101,17 @@ def _generate_test_result_document_v2(
         record = task.current_record if task is not None else None
         display_name = tc_names.get(test_id) or str(row.get("实际结果说明", ""))[:40]
         lines += [f"### {test_id}：{display_name}", ""]
+        if test_id in manual_ids:
+            # 人工验收项（R14）：不参与自动化汇总，也不写"自动化测试结果：未执行"；
+            # 结果由第 4 节人工验收交接和主题验收阶段接收。
+            lines += [
+                "- 测试方式：人工验收",
+                f"- 对应验收条件：{ac_by_id.get(test_id, '')}".rstrip("："),
+                "- 自动化测试结果：不适用（人工验收项，转人工验收交接）",
+                "- 人工验收内容：见下方第 4 节人工验收交接",
+                "",
+            ]
+            continue
         if record is None:
             lines += ["- 自动化测试结果：未执行", ""]
             continue

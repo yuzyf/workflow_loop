@@ -2549,9 +2549,33 @@ def _validate_topic_test_execution_result(
         failures.append(f"{rel_path} 有人工验收内容，但缺少具体人工验收交接")
 
     sections = _test_result_sections(content)
-    expected_ids = {item.test_id for item in items}
-    if set(sections) != expected_ids:
+    # 单一数据源：自动化项编号集合与生成器同源（R12/R14），不再各写各的筛选
+    from . import test_mapping as test_mapping_mod
+
+    try:
+        all_plan_items = parse_test_plan_items(project_root, topic)
+    except ValueError:
+        all_plan_items = list(items)
+    automated_ids = test_mapping_mod.automated_test_ids_in_plan(all_plan_items)
+    if not automated_ids:
+        automated_ids = {item.test_id for item in items}
+    expected_ids = automated_ids if automated_ids else {item.test_id for item in items}
+    # 第 3 节的自动化项小节必须正好覆盖自动化项；人工项小节是合法呈现，
+    # 不计入"正好覆盖"集合（生成器对人工项渲染"测试方式：人工验收"小节）。
+    automated_sections = {tid for tid in sections if tid in expected_ids}
+    manual_sections = set(sections) - automated_sections
+    if automated_sections != expected_ids:
         failures.append(f"{rel_path} 的测试项结果必须正好覆盖 {sorted(expected_ids)}")
+    for tid in sorted(manual_sections):
+        section = sections[tid]
+        if "测试方式：人工验收" not in section:
+            failures.append(
+                f"{rel_path} 的 {tid} 是人工验收项小节，必须标注“测试方式：人工验收”"
+            )
+        if "自动化测试结果：未执行" in section:
+            failures.append(
+                f"{rel_path} 的 {tid} 人工验收项不能写“自动化测试结果：未执行”（人工项转人工验收交接）"
+            )
 
     for item in items:
         task = tasks.get(item.test_id)

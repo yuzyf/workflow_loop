@@ -606,6 +606,16 @@ def automated_test_items(project_root: str, topics: list[str]) -> list[TestPlanI
     return [item for item in collect_test_plan_items(project_root, topics) if item.requires_test_code]
 
 
+def automated_test_ids_in_plan(plan_items: list[TestPlanItem]) -> set[str]:
+    """单一数据源：从测试计划项算出自动化/混合测试项的编号集合。
+
+    生成器（测试结果文档渲染与汇总）和校验器（第 3 节覆盖检查）都调用
+    本函数取数，不再各自实现"哪些项算自动化项"的筛选；口径变化只改
+    这一处（R12/R14：混合主题汇总只算自动化项，人工项转人工验收）。
+    """
+    return {item.test_id for item in plan_items if item.requires_test_code}
+
+
 def automated_topics(project_root: str, topics: list[str]) -> list[str]:
     return [
         topic
