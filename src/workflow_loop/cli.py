@@ -1,5 +1,6 @@
 import argparse
 import copy
+import getpass
 import json
 import os
 import re
@@ -5532,6 +5533,22 @@ def cmd_collect(args) -> None:
     )
 
 
+def _print_stage_gate_status(wf_state: state_mod.WorkflowState) -> None:
+    print("\n各阶段门禁状态：")
+    labels = {
+        "skipped_by_user": "用户要求未执行",
+        "manually_synced": "已人工同步（不是门禁通过）",
+    }
+    for name, stage_state in wf_state.stages.items():
+        gate = stage_state.gate
+        d = "✓" if gate.discussion_complete else "✗"
+        c = "✓" if gate.code_validated else "✗"
+        u = "✓" if gate.user_confirmed else "✗"
+        marker = "→" if name == wf_state.current_stage else " "
+        label = labels.get(stage_state.status, "")
+        print(f"  {marker} {name:20s} [{stage_state.status:12s}] 讨论:{d} 校验:{c} 确认:{u} {label}".rstrip())
+
+
 def cmd_status(args) -> None:
     # 定位项目根
     project_root = resolve_project_root()
@@ -5584,6 +5601,17 @@ def cmd_status(args) -> None:
         print(f"当前 stage: {wf_state.current_stage}")
         if wf_state.run_status == "completed":
             print(f"结束时间: {wf_state.ended_at or '（未记录）'}")
+            _print_stage_gate_status(wf_state)
+            manual_close = wf_state.meta.get("manual_close")
+            if manual_close:
+                print("\n收工方式: 人工验收后收工；未执行阶段不代表通过")
+                print(f"操作者: {manual_close['operator']}")
+                print(f"人工收工时间: {manual_close['closed_at']}")
+                print(f"用户原话依据: {manual_close['reason']}")
+                if manual_close.get("code_design_note"):
+                    print(f"人工同步说明: {manual_close['code_design_note']}")
+                    print(f"核对文档: {manual_close['code_design_path']}")
+                    print(f"文档内容指纹: {manual_close['code_design_hash']}")
             print("本轮已经完成；有新任务时先由 AI 调查并推荐路线，再由用户确认进入哪种任务")
         else:
             print(f"作废时间: {wf_state.aborted_at or '（未记录）'}")
@@ -5615,17 +5643,7 @@ def cmd_status(args) -> None:
     if verification_mod.recovery_summary(wf_state):
         print("\n当前处于上游变化后的恢复流程：")
         print_recovery_details(wf_state)
-    # 打印每个 stage 的门禁状态
-    print(f"\n各阶段门禁状态：")
-    for name, stage_state in wf_state.stages.items():
-        gate = stage_state.gate
-        # 3 道闸用 ✓/✗ 显示
-        d = "✓" if gate.discussion_complete else "✗"
-        c = "✓" if gate.code_validated else "✗"
-        u = "✓" if gate.user_confirmed else "✗"
-        # 当前 stage 用 → 标记
-        marker = "→" if name == wf_state.current_stage else " "
-        print(f"  {marker} {name:20s} [{stage_state.status:12s}] 讨论:{d} 校验:{c} 确认:{u}")
+    _print_stage_gate_status(wf_state)
     # 打印 journal 最近 10 条
     print(f"\n最近 journal 记录：")
     recent = journal_mod.read_recent(project_root, count=10)
@@ -5686,6 +5704,17 @@ def cmd_done(args) -> None:
               f"请先完成所有 stage 的 gate --confirmed")
         sys.exit(1)
 
+    _finish_development_run(project_root, wf_state)
+
+
+def _finish_development_run(
+    project_root: str,
+    wf_state: state_mod.WorkflowState,
+    *,
+    retry_command: str = "workflow done",
+    manual_close: dict | None = None,
+) -> bool:
+    """两个收工入口共用清理、结束时间和落盘，不补门禁事实。"""
     _clear_pending_spike_assets(wf_state)
     try:
         spike_cleanup_plan = plan_spike_tmp_cleanup(project_root, wf_state)
@@ -5698,29 +5727,143 @@ def cmd_done(args) -> None:
     except (OSError, ValueError) as exc:
         print("═══ 工作流完成失败 ═══")
         print(f"详情: 无法完成穿刺临时内容或回退副本的定向清理：{exc}")
-        print_next_step("保留当前 Run，处理上面指出的路径或权限问题后重新调 `workflow done`")
-        return
+        print_next_step(
+            f"保留当前轮次；已发生的清理不回滚，处理路径或权限问题后由 AI 重试 `{retry_command}`"
+        )
+        return False
     wf_state.rollback = state_mod.RollbackState()
     # 标记 Run 为 completed
     wf_state.run_status = "completed"
     # 写结束时间
     wf_state.ended_at = state_mod.now_iso()
-    # 保存 state
-    state_mod.save_state(project_root, wf_state)
-    # 写 journal：Run 完成
-    journal_mod.append_entry(project_root, "Run 完成", "workflow.py",
-                            workflow_id=wf_state.workflow_id,
-                            preserved_spike_paths=spike_cleanup_plan["preserved"],
-                            cleaned_spike_paths=cleaned_spike_paths,
-                            cleaned_rollback_paths=cleaned_snapshots)
+    if manual_close is not None:
+        manual_close["closed_at"] = wf_state.ended_at
+        wf_state.meta["manual_close"] = manual_close
+    cleanup_facts = {
+        "workflow_id": wf_state.workflow_id,
+        "preserved_spike_paths": spike_cleanup_plan["preserved"],
+        "cleaned_spike_paths": cleaned_spike_paths,
+        "cleaned_rollback_paths": cleaned_snapshots,
+    }
+    audit_recorded = False
+    try:
+        if manual_close is not None:
+            # 先持久化授权依据；这条准备事件不能用于推断轮次已经完成。
+            journal_mod.append_entry(
+                project_root, "人工收工依据已记录", "workflow.py",
+                manual_close=manual_close, completion_pending=True, **cleanup_facts,
+            )
+            audit_recorded = True
+        state_mod.save_state(project_root, wf_state)
+    except (OSError, ValueError) as exc:
+        if manual_close is None:
+            raise
+        print("═══ 人工收工写入失败 ═══")
+        print(f"详情: {exc}")
+        print(f"授权日志: {'已保存（仅收工准备，不是完成事实）' if audit_recorded else '未保存'}")
+        print("轮次结束状态未保存，未完成收工；已发生的临时清理不自动回滚。")
+        print_next_step(f"由 AI 修复写入问题后重试 `{retry_command}`，不重新跑测试或补门禁")
+        return False
+    if manual_close is None:
+        journal_mod.append_entry(project_root, "Run 完成", "workflow.py", **cleanup_facts)
 
     # 打印完成信息
     print(f"═══ 工作流完成 ═══")
     print(f"workflow_id: {wf_state.workflow_id}")
     print(f"完成时间: {wf_state.ended_at}")
     _print_spike_cleanup_plan(spike_cleanup_plan)
+    if manual_close is not None:
+        print("收工依据已记录；未执行阶段不是测试或验收通过，不生成测试结果。")
+        _print_stage_gate_status(wf_state)
     # 下一步：工作流结束
     print_next_step("工作流完成。本次 workflow 结束。")
+    return True
+
+
+def cmd_close_manual(args) -> None:
+    """用户明确要求不执行剩余阶段时收工，保留实际门禁和正式产物。"""
+    project_root = resolve_project_root()
+    if project_root is None:
+        print("错误：找不到 .workflow_loop/ 目录。")
+        sys.exit(1)
+    refuse_if_pending_start_transaction(project_root)
+    wf_state = state_mod.load_state(project_root)
+    if wf_state is None:
+        print("错误：还没启动工作流。")
+        sys.exit(1)
+
+    errors: list[str] = []
+    reason = args.reason.strip()
+    note = args.code_design_note
+    if not reason:
+        errors.append("--reason（用户原话依据）不能为空；必须先取得用户明确确认。")
+    if wf_state.run_status != "active":
+        errors.append(f"仅允许进行中的轮次人工收工；当前状态是 {wf_state.run_status}。")
+    if wf_state.intent not in ("from_scratch", "product_change", "bugfix"):
+        errors.append("人工收工只适用于研发轮次；无需开发任务继续使用原有结果确认和收工入口。")
+    if any((wf_state.rollback.restore_started_at, wf_state.rollback.restored_at, wf_state.rollback.cleanup_completed_at)):
+        errors.append("本轮已经开始整轮作废恢复，不能人工收工或清理继续恢复所需的副本。")
+    impl = wf_state.stages.get("impl")
+    if impl is None or impl.status != "done" or not impl.gate.user_confirmed:
+        errors.append("代码实施（impl）必须已完成且有用户确认，不能用人工收工代替实施。")
+    if "impl" not in wf_state.stage_path:
+        errors.append("本轮阶段路径缺少代码实施（impl），无法确定待处理的后续阶段。")
+    missing = [name for name in wf_state.stage_path if name not in wf_state.stages]
+    if missing:
+        errors.append(f"阶段路径中的状态记录缺失：{missing}；不能猜测或补通过。")
+
+    design_path = artifact_paths_mod.CODE_DESIGN_DOC
+    design_hash = None
+    if note is not None:
+        note = note.strip()
+        if not note:
+            errors.append("--code-design-note（人工同步说明）不能为空；没有同步依据时不要提供此参数。")
+        full_path = os.path.join(project_root, design_path)
+        try:
+            root_real = os.path.realpath(project_root)
+            if os.path.commonpath([root_real, os.path.realpath(full_path)]) != root_real:
+                raise ValueError("文档实际位置不在项目内")
+            if not os.path.isfile(full_path):
+                raise ValueError("文档不存在或不是普通文件")
+            with open(full_path, "r", encoding="utf-8") as stream:
+                if not stream.read().strip():
+                    raise ValueError("文档内容为空")
+            design_hash = verification_mod.compute_file_hash(project_root, design_path)
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors.append(f"人工同步文档核对失败（{design_path}）：{exc}。")
+    if errors:
+        print("═══ 人工收工被拒绝 ═══")
+        for error in errors:
+            print(f"错误：{error}")
+        print("本次未修改轮次状态，也未清理临时副本。")
+        print_next_step("由 AI 执行 `workflow status` 核对前置事实和用户授权，不自动运行测试或补门禁")
+        sys.exit(1)
+
+    processed: list[dict] = []
+    for name in wf_state.stage_path[wf_state.stage_path.index("impl") + 1:]:
+        stage = wf_state.stages[name]
+        if stage.status == "done":
+            continue
+        new_status = "manually_synced" if name == "update_code_design" and note else "skipped_by_user"
+        processed.append({"stage": name, "previous_status": stage.status, "status": new_status})
+        stage.status = new_status
+    manual_close = {
+        "operator": getpass.getuser(),
+        "reason": reason,
+        "previous_stage": wf_state.current_stage,
+        "processed_stages": processed,
+        "code_design_note": note,
+        "code_design_path": design_path if note else None,
+        "code_design_hash": design_hash,
+    }
+    wf_state.current_stage = "completed"
+    retry_parts = ["workflow", "close-manual", "--reason", reason]
+    if note:
+        retry_parts.extend(["--code-design-note", note])
+    if not _finish_development_run(
+        project_root, wf_state, retry_command=_command_text(retry_parts), manual_close=manual_close
+    ):
+        sys.exit(1)
 
 
 # abort 命令：完整恢复本轮开工前受管内容，清理临时副本后才标记整轮已作废。
@@ -6285,7 +6428,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(
         dest="command",
         help="可用命令",
-        metavar="{start,light,discuss,test,spike,acceptance,gate,collect,repair-links,scaffold,status,done,abort,return,update,uninstall}",
+        metavar="{start,light,discuss,test,spike,acceptance,gate,collect,repair-links,scaffold,status,done,close-manual,abort,return,update,uninstall}",
     )
 
     # start 命令
@@ -6533,6 +6676,15 @@ def main() -> None:
     subparsers.add_parser("status", help="打印状态摘要")
     # done 命令
     subparsers.add_parser("done", help="标记完成")
+    close_manual_parser = subparsers.add_parser(
+        "close-manual", help="用户明确确认后人工收工；未执行阶段不登记为通过",
+    )
+    close_manual_parser.add_argument(
+        "--reason", required=True, help="已取得用户明确确认的原话依据；不得由 AI 代确认",
+    )
+    close_manual_parser.add_argument(
+        "--code-design-note", help="现存架构文档已人工同步的说明；不是门禁通过",
+    )
     # abort 命令
     abort_parser = subparsers.add_parser("abort", help="作废当前 Run")
     abort_parser.add_argument(
@@ -6659,6 +6811,8 @@ def _dispatch_command(args, parser) -> None:
         cmd_collect(args)
     elif args.command == "done":
         cmd_done(args)
+    elif args.command == "close-manual":
+        cmd_close_manual(args)
     elif args.command == "abort":
         cmd_abort(args)
     elif args.command == "return":
