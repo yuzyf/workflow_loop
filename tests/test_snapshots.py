@@ -106,3 +106,34 @@ def test_snapshot_machine_record_rejects_duplicate_and_hash_drift(tmp_path):
     data["aggregate_hash"] = "0" * 64
     with pytest.raises(ValueError, match="聚合哈希"):
         snapshot_from_dict(data)
+
+
+def test_explicit_build_package_is_source_but_its_outputs_are_not(tmp_path, monkeypatch):
+    from workflow_loop import rollback, verification
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.setuptools.package-dir]\n"app.guides" = "standardized_prompts/build"\n',
+        encoding="utf-8",
+    )
+    prefix = "standardized_prompts/build"
+    paths = [f"{prefix}/scenes/deploy.md", f"{prefix}/loader.py"]
+    outputs = [
+        "build/output.md", "module/build/generated.py", ".cache/helper.py",
+        f"{prefix}/build/generated.py", f"{prefix}/node_modules/pkg.md",
+    ]
+    for relative in [*paths, *outputs]:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("first", encoding="utf-8")
+    before = collect_snapshot(str(tmp_path), paths)
+    (tmp_path / paths[0]).write_text("updated", encoding="utf-8")
+    assert compare_snapshots(before, collect_snapshot(str(tmp_path), paths))["modified"] == [paths[0]]
+    inventory = verification.compute_complete_implementation_file_hashes(str(tmp_path))
+    assert set(paths) <= inventory.keys()
+    monkeypatch.setattr(verification, "_git_changed_paths", lambda root: (paths + outputs, "git"))
+    changes, _ = rollback.list_actual_working_tree_changes(str(tmp_path))
+    assert changes == sorted(paths)
+    for relative in outputs:
+        assert relative not in inventory
+        with pytest.raises(ValueError, match="不能作为核心代码"):
+            collect_snapshot(str(tmp_path), [relative])

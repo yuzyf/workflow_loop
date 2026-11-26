@@ -9,8 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tomllib
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 
@@ -88,10 +89,51 @@ def _sha256(path: str) -> str:
     return digest.hexdigest()
 
 
+def declared_build_source_dirs(project_root: str) -> set[str]:
+    """返回打包配置明确映射为源码的项目内嵌套 build 目录。"""
+    config = Path(project_root, "pyproject.toml")
+    if config.is_symlink() or not config.is_file():
+        return set()
+    try:
+        with config.open("rb") as stream:
+            metadata = tomllib.load(stream)
+        mappings = metadata["tool"]["setuptools"]["package-dir"]
+    except (KeyError, TypeError, OSError, ValueError):
+        return set()
+    if not isinstance(mappings, dict):
+        return set()
+    sources = set()
+    for location in mappings.values():
+        if not isinstance(location, str):
+            continue
+        path = PurePosixPath(location)
+        if (
+            not path.is_absolute()
+            and len(path.parts) > 1
+            and path.name == "build"
+            and ".." not in path.parts
+            and NON_CORE_DIRECTORY_NAMES.isdisjoint(path.parts[:-1])
+        ):
+            sources.add(path.as_posix())
+    return sources
+
+
+def non_core_directory(path: PurePosixPath, build_sources: set[str]) -> str | None:
+    """找出文件路径经过的第一个生成、缓存或依赖目录。"""
+    for index, part in enumerate(path.parts[:-1], 1):
+        if part not in NON_CORE_DIRECTORY_NAMES:
+            continue
+        if part == "build" and "/".join(path.parts[:index]) in build_sources:
+            continue
+        return part
+    return None
+
+
 def normalize_registered_paths(project_root: str, paths: Iterable[str]) -> list[str]:
     """校验并去重项目内普通相对路径。"""
     normalized: set[str] = set()
     root_real = os.path.realpath(project_root)
+    build_sources: set[str] | None = None
     for raw in paths:
         if not isinstance(raw, str):
             raise ValueError(f"登记路径必须是字符串：{raw!r}")
@@ -104,11 +146,13 @@ def normalize_registered_paths(project_root: str, paths: Iterable[str]) -> list[
             or any(part in {"", ".", ".."} for part in path.parts)
         ):
             raise ValueError(f"登记路径必须是项目内相对路径：{raw!r}")
-        generated_parts = [part for part in path.parts[:-1] if part in NON_CORE_DIRECTORY_NAMES]
-        if generated_parts:
+        if build_sources is None and "build" in path.parts[:-1]:
+            build_sources = declared_build_source_dirs(project_root)
+        excluded = non_core_directory(path, build_sources or set())
+        if excluded:
             raise ValueError(
                 f"登记路径位于依赖、构建、缓存或运行资料目录，不能作为核心代码："
-                f"{value}（目录 {generated_parts[0]}）"
+                f"{value}（目录 {excluded}）"
             )
         full = os.path.join(project_root, *path.parts)
         parent = os.path.realpath(os.path.dirname(full) or project_root)

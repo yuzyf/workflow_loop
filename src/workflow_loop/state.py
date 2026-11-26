@@ -395,6 +395,8 @@ class WorkflowState:
     topics: list[str] = field(default_factory=list)
     # 从零做清场确认标记：workflow start --intent from_scratch --confirm-clean 时置 true
     clean_confirmed: bool = False
+    # 从零做承接已有定稿 spec/ 标记：workflow start --intent from_scratch --keep-spec 时置 true
+    keep_existing_spec: bool = False
     # spike 跳过标记：gate spike --skip 时置 true
     spike_skipped: bool = False
     # spike 复用标记：gate spike --reuse 时置 true（验证技术不确定性 R30/R31）。
@@ -743,6 +745,7 @@ def state_from_dict(data: dict) -> WorkflowState:
         topic=legacy_topic,
         topics=topics,
         clean_confirmed=data.get("clean_confirmed", False),
+        keep_existing_spec=data.get("keep_existing_spec", False),
         spike_skipped=data.get("spike_skipped", False),
         spike_reused=data.get("spike_reused", False),
         table_format_version=data.get("table_format_version", ""),

@@ -1328,6 +1328,14 @@ def cmd_start(args) -> None:
 
     # 带 --intent → 初始化 Run
     intent = args.intent
+    keep_spec = bool(getattr(args, "keep_spec", False))
+
+    if keep_spec and intent != "from_scratch":
+        print("错误：--keep-spec 仅适用于 from_scratch（从零做）。")
+        sys.exit(1)
+    if keep_spec and args.confirm_clean:
+        print("错误：--keep-spec 与 --confirm-clean 互斥，请只保留其中一项。")
+        sys.exit(1)
 
     # Active Run Guard：有进行中 Run → 禁止再 start；结束轮次中的穿刺登记供新轮次继承。
     previous_state = state_mod.load_state(project_root)
@@ -1335,21 +1343,54 @@ def cmd_start(args) -> None:
         print("错误：有进行中 Run。请先 `workflow done` 或 `workflow abort` 结束当前 Run。")
         sys.exit(1)
 
-    # from_scratch 的 Clean Confirm 两段式：先探测，有产物且未确认时只打印清单
+    # from_scratch 的 Clean Confirm / 承接已有 spec 两段式：先探测，有产物且未确认时只打印清单
     clean_targets: list[str] = []
     if intent == "from_scratch":
         clean_targets = detect_clean_artifacts(project_root)
-        if clean_targets and not args.confirm_clean:
+        if keep_spec:
+            other_targets = [item for item in clean_targets if item != "spec"]
+            if other_targets:
+                print("错误：--keep-spec 只允许保留 spec/，但检测到除 spec/ 外的旧过程产物：")
+                for item in other_targets:
+                    suffix = "/" if not item.endswith(".md") else ""
+                    print(f"  {item}{suffix}")
+                print("请先清理这些下游旧产物，或改用 --confirm-clean 彻底清场重做。")
+                sys.exit(1)
+            overview_rel = artifact_paths_mod.PRODUCT_OVERVIEW_DOC
+            overview_path = os.path.join(project_root, overview_rel)
+            if not os.path.isfile(overview_path):
+                print(f"错误：--keep-spec 要求已有定稿 {overview_rel}，但当前文件不存在。")
+                sys.exit(1)
+            linked_features = [
+                path
+                for path in verification_mod.get_linked_product_design_paths(project_root)
+                if path != overview_rel and os.path.isfile(os.path.join(project_root, path))
+            ]
+            if not linked_features:
+                print(f"错误：--keep-spec 要求 {overview_rel} 至少链接 1 份真实存在的 spec/功能_*.md 文档。")
+                sys.exit(1)
+        elif clean_targets and not args.confirm_clean:
             print("检测到以下过程产物包含内容；确认后会删除命中的整个目录及其中全部内容：")
             for item in clean_targets:
                 suffix = "/" if not item.endswith(".md") else ""
                 print(f"  {item}{suffix}")
             print("从零做表示真正重新做：这些目录中即使有非工作流文件也会一起删除。")
             print("本次尚未删除任何内容，也没有开始新轮次。")
-            print_next_step(
-                "AI 向用户说明以上将删清单；用户同意清场后，AI 执行 "
-                "`workflow start --intent from_scratch --confirm-clean` 完成清场并开工"
+            overview_exists = os.path.isfile(
+                os.path.join(project_root, artifact_paths_mod.PRODUCT_OVERVIEW_DOC)
             )
+            if clean_targets == ["spec"] and overview_exists:
+                print_next_step(
+                    "AI 向用户说明以上将删清单；用户同意清场后，AI 执行 "
+                    "`workflow start --intent from_scratch --confirm-clean` 完成清场并开工；"
+                    "若用户确认已有 spec/ 为定稿设计、希望保留原样直接承接，改由 AI 执行 "
+                    "`workflow start --intent from_scratch --keep-spec`"
+                )
+            else:
+                print_next_step(
+                    "AI 向用户说明以上将删清单；用户同意清场后，AI 执行 "
+                    "`workflow start --intent from_scratch --confirm-clean` 完成清场并开工"
+                )
             return
 
     # 生成 workflow_id：YYYY-MM-DD-HHmm-<intent>
@@ -1409,12 +1450,13 @@ def cmd_start(args) -> None:
     if os.path.isfile(state_path):
         with open(state_path, "r", encoding="utf-8") as stream:
             previous_state_raw = stream.read()
+    do_clean = intent == "from_scratch" and bool(clean_targets) and not keep_spec
     manifest = rollback_mod.prepare_start_baseline(
         project_root,
         workflow_id,
         project_fields,
         previous_state_raw,
-        clean_paths=clean_targets if intent == "from_scratch" else None,
+        clean_paths=clean_targets if do_clean else None,
     )
     journal_mod.append_entry(
         project_root,
@@ -1425,7 +1467,6 @@ def cmd_start(args) -> None:
     )
 
     # 清场属于破坏性动作：删除前写开工事务记录，成功提交后删除
-    do_clean = intent == "from_scratch" and bool(clean_targets)
     if do_clean:
         rollback_mod.write_start_transaction(project_root, workflow_id, clean_targets)
 
@@ -1473,6 +1514,7 @@ def cmd_start(args) -> None:
             stages=stages_state,
             spike_assets=inherited_spike_assets,
             clean_confirmed=args.confirm_clean if intent == "from_scratch" else False,
+            keep_existing_spec=keep_spec if intent == "from_scratch" else False,
             # R11/R18：开工冻结表格式版本
             table_format_version=records_mod.TABLE_FORMAT_VERSION,
         )
@@ -1510,6 +1552,8 @@ def cmd_start(args) -> None:
     print(f"当前 stage: {stage_label(first_stage_name)}")
     if cleaned:
         print(f"已清场: {cleaned}")
+    elif keep_spec:
+        print("承接已有设计: spec/（已保留原样，未清场）")
     # product_change/bugfix 显示 project_design_initialized 状态
     if intent == "product_change" or intent == "bugfix":
         pdi = project_mod.is_project_design_initialized(project_root)
@@ -1844,11 +1888,36 @@ def _register_stage_artifact_keys(
 
     if not paths_by_name or path_builder is None:
         return {}
-    added = artifact_paths_mod.register_file_keys(
-        project,
-        category,
-        list(paths_by_name),
-    )
+    if stage_name == "spec" and wf_state.keep_existing_spec:
+        category_map = project.artifact_file_keys.setdefault(category, {})
+        used_keys = {
+            key
+            for mapping in project.artifact_file_keys.values()
+            for key in mapping.values()
+        }
+        added: dict[str, str] = {}
+        for display_name, actual_path in paths_by_name.items():
+            if display_name in category_map:
+                continue
+            prefix = "spec/功能_"
+            if actual_path.startswith(prefix) and actual_path.endswith(".md"):
+                existing_key = actual_path[len(prefix) : -len(".md")]
+                if existing_key and "/" not in existing_key and "\\" not in existing_key and existing_key not in used_keys:
+                    category_map[display_name] = existing_key
+                    used_keys.add(existing_key)
+                    added[display_name] = existing_key
+        extra_added = artifact_paths_mod.register_file_keys(
+            project,
+            category,
+            [name for name in paths_by_name if name not in category_map],
+        )
+        added.update(extra_added)
+    else:
+        added = artifact_paths_mod.register_file_keys(
+            project,
+            category,
+            list(paths_by_name),
+        )
     mapping = project.artifact_file_keys.get(category, {})
     mismatches = []
     for display_name, actual_path in paths_by_name.items():
@@ -6439,6 +6508,9 @@ def main() -> None:
     # --confirm-clean：从零做清场确认（仅 from_scratch）
     start_parser.add_argument("--confirm-clean", action="store_true",
                              help="从零做清场确认（仅 from_scratch）")
+    # --keep-spec：承接已有定稿 spec/ 跳过清场（仅 from_scratch，与 --confirm-clean 互斥）
+    start_parser.add_argument("--keep-spec", action="store_true",
+                             help="承接已有定稿 spec/ 并跳过清场（仅 from_scratch，与 --confirm-clean 互斥）")
 
     # discuss 命令（无参数，读 state.current_stage）
     subparsers.add_parser("discuss", help="加载当前 stage 提示词")

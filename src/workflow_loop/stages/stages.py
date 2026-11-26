@@ -206,11 +206,17 @@ class SpecStage(StageStrategy):
                 first_line = stream.readline().strip()
             if not first_line.startswith("# 【功能】") or len(first_line) <= len("# 【功能】"):
                 errors.append(f"{path} 的一级标题必须是“# 【功能】<功能名称>”")
-        _validator_error(
-            "产品文档内容边界",
-            validate_product_design_documents(project_root),
-            errors,
+        keep_existing_spec = bool(
+            state_for_tables is not None
+            and state_for_tables.intent == "from_scratch"
+            and state_for_tables.keep_existing_spec
         )
+        if not keep_existing_spec:
+            _validator_error(
+                "产品文档内容边界",
+                validate_product_design_documents(project_root),
+                errors,
+            )
 
         changed_ok, changed_detail, changed_paths = changed_stage_paths(
             project_root,
@@ -229,8 +235,15 @@ class SpecStage(StageStrategy):
             normalized_changed = [path.replace(os.sep, "/") for path in changed_paths]
             product_changed = overview_rel in normalized_changed
             feature_changed = any(path.startswith("spec/功能_") for path in normalized_changed)
-            if state.intent == "from_scratch" and (not product_changed or not feature_changed):
-                errors.append("从零创建产品时，产品总说明和至少一份功能文档都必须在本阶段新建")
+            if state.intent == "from_scratch":
+                if state.keep_existing_spec:
+                    if not normalized_changed and "核对结论：无需修改" not in changed_detail:
+                        errors.append(
+                            "承接已有定稿 spec/ 且本阶段未修改产品文档时，请在 product_features 工作记录表填写"
+                            "“核对结论”声明行（核对对象、核对依据）后重新执行本门"
+                        )
+                elif not product_changed or not feature_changed:
+                    errors.append("从零创建产品时，产品总说明和至少一份功能文档都必须在本阶段新建")
             if state.intent == "product_change" and not product_changed:
                 # 推进 R47：退回核对确认无需修改是合法完成状态。changed_detail
                 # 由 changed_stage_paths 标注"核对结论：无需修改"时放行，不要求

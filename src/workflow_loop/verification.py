@@ -610,22 +610,37 @@ def compute_project_file_hashes(
     return compute_complete_implementation_file_hashes(project_root)
 
 
+def _source_dirs(
+    project_root: str,
+    root: str,
+    dirs: list[str],
+    excluded: set[str],
+    build_sources: set[str],
+) -> list[str]:
+    """剪枝输出目录时保留打包配置明确声明的源码目录。"""
+    return [
+        name
+        for name in dirs
+        if name not in excluded
+        or (
+            name == "build"
+            and os.path.relpath(os.path.join(root, name), project_root).replace(os.sep, "/")
+            in build_sources
+        )
+    ]
+
+
+def _is_build_guide(path: str, build_sources: set[str]) -> bool:
+    """打包为源码的 build 目录中的 Markdown 是产品指引。"""
+    return path.lower().endswith(".md") and any(
+        path.startswith(directory + "/") for directory in build_sources
+    )
+
+
 def compute_complete_implementation_file_hashes(project_root: str) -> dict[str, str]:
     """扫描完整实施范围，不受活动工作流登记路径收窄。"""
 
-    always_excluded_roots = {
-        ".git",
-        ".workflow_loop",
-        ".venv",
-        "node_modules",
-        "__pycache__",
-        ".pytest_cache",
-        "dist",
-        "build",
-        ".next",
-        ".idea",
-        ".vscode",
-    }
+    always_excluded_roots = snapshots_mod.NON_CORE_DIRECTORY_NAMES | {".idea", ".vscode"}
     managed_document_roots = {
         "spec",
         "acceptance",
@@ -636,17 +651,20 @@ def compute_complete_implementation_file_hashes(project_root: str) -> dict[str, 
     excluded_files = {artifact_paths_mod.TRACEABILITY_DOC}
     _, test_entry_path = _project_test_entry(project_root)
     hashes: dict[str, str] = {}
+    build_sources = snapshots_mod.declared_build_source_dirs(project_root)
     for root, dirs, files in os.walk(project_root):
         excluded_here = set(always_excluded_roots)
         if os.path.realpath(root) == os.path.realpath(project_root):
             excluded_here.update(managed_document_roots)
-        dirs[:] = [directory for directory in dirs if directory not in excluded_here]
+        dirs[:] = _source_dirs(project_root, root, dirs, excluded_here, build_sources)
         for filename in files:
             relative_path = os.path.relpath(os.path.join(root, filename), project_root)
             normalized = relative_path.replace(os.sep, "/")
             if normalized in excluded_files:
                 continue
-            if not is_implementation_related_path(normalized, test_entry_path):
+            if not is_implementation_related_path(
+                normalized, test_entry_path, build_sources=build_sources
+            ):
                 continue
             full_path = os.path.join(project_root, relative_path)
             if os.path.islink(full_path) or not os.path.isfile(full_path):
@@ -1236,10 +1254,6 @@ CONFIG_NAMES = {
     "composer.lock",
 }
 CONFIG_SUFFIXES = {".pro", ".pri", ".cmake", ".yml", ".yaml"}
-EXCLUDED_CODE_DIRS = {
-    ".git", ".workflow_loop", "__pycache__", ".venv", "node_modules",
-    ".pytest_cache", "dist", "build",
-}
 
 
 STANDALONE_TEST_CONFIG_NAMES = {
@@ -1461,6 +1475,8 @@ def is_implementation_related_path(
     relative_path: str,
     test_entry_path: str | None = None,
     extra_suffixes: set[str] | None = None,
+    *,
+    build_sources: set[str] | None = None,
 ) -> bool:
     """判断路径是否属于实施代码、脚本、测试或项目配置。
 
@@ -1477,6 +1493,7 @@ def is_implementation_related_path(
         or (extra_suffixes is not None and suffix in extra_suffixes)
         or filename in CONFIG_NAMES
         or suffix in CONFIG_SUFFIXES
+        or (build_sources is not None and _is_build_guide(normalized, build_sources))
     )
 
 
@@ -1522,6 +1539,7 @@ def _snapshot_parts_registered(
     product_parts: list[str],
 ) -> tuple[list[str], list[str]]:
     """按登记路径生成快照输入；此函数不调用 os.walk。"""
+    build_sources = snapshots_mod.declared_build_source_dirs(project_root)
     for relative_path in sorted(set(registered_paths)):
         full_path = os.path.join(project_root, *relative_path.split("/"))
         if os.path.islink(full_path) or not os.path.isfile(full_path):
@@ -1530,7 +1548,9 @@ def _snapshot_parts_registered(
         suffix = os.path.splitext(filename)[1].lower()
         is_test_path = _is_test_path(relative_path)
         is_test_config = _is_standalone_test_config(relative_path, test_entry_path)
-        if not (is_test_path or is_test_config or suffix in CODE_SUFFIXES or filename in CONFIG_NAMES or suffix in CONFIG_SUFFIXES):
+        if not is_implementation_related_path(
+            relative_path, test_entry_path, build_sources=build_sources
+        ):
             continue
         raw_hash = _hash_file_path(full_path)
         if relative_path == "pyproject.toml":
@@ -1590,21 +1610,18 @@ def _snapshot_parts(project_root: str) -> tuple[list[str], list[str]]:
             product_parts,
         )
 
+    build_sources = snapshots_mod.declared_build_source_dirs(project_root)
+    excluded_dirs = snapshots_mod.NON_CORE_DIRECTORY_NAMES
     for root, dirs, files in os.walk(project_root):
-        dirs[:] = [directory for directory in dirs if directory not in EXCLUDED_CODE_DIRS and directory != ".next"]
+        dirs[:] = _source_dirs(project_root, root, dirs, excluded_dirs, build_sources)
         for filename in files:
             relative_path = os.path.relpath(os.path.join(root, filename), project_root)
-            is_test_path = _is_test_path(relative_path)
-            is_test_config = _is_standalone_test_config(relative_path, test_entry_path)
-            suffix = os.path.splitext(filename)[1].lower()
-            is_project_config = filename in CONFIG_NAMES or suffix in CONFIG_SUFFIXES
-            if (
-                not is_test_path
-                and not is_test_config
-                and suffix not in CODE_SUFFIXES
-                and not is_project_config
+            if not is_implementation_related_path(
+                relative_path, test_entry_path, build_sources=build_sources
             ):
                 continue
+            is_test_path = _is_test_path(relative_path)
+            is_test_config = _is_standalone_test_config(relative_path, test_entry_path)
             full_path = os.path.join(project_root, relative_path)
             try:
                 raw_hash = _hash_file_path(full_path)

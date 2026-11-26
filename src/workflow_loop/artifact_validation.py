@@ -954,12 +954,17 @@ _PRODUCT_SQL_OBJECT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRODUCT_PROGRAM_SYMBOL_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Z][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*"
+    r"(?<![A-Za-z0-9_.])(?:[A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*"
     r"(?:\([^\n)]*\))?"
 )
 _PRODUCT_BACKTICK_CALL_RE = re.compile(
     r"`((?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*\([^`\n]*\))`"
 )
+_SIMPLE_MODE_ARG_RE = re.compile(r"^[A-Za-z0-9_/-]+$")
+_CONFIG_FILE_SUFFIXES = {
+    "json", "json5", "yaml", "yml", "toml", "ini", "xml",
+    "conf", "cfg", "md", "txt", "csv", "env",
+}
 _PRODUCT_FEATURE_LINK_RE = re.compile(
     r"\[([^\]]+)\]\((?:\./)?(功能_[^/)#\s]+\.md)(?:#[^)]+)?\)"
 )
@@ -995,8 +1000,28 @@ def _table_rows_with_headers(section: str | None, expected: list[str]) -> list[l
     return None
 
 
+def _is_config_file_field(token: str) -> bool:
+    """识别 session.json.stale_steps 这类带文件后缀的配置路径，不误判为数据库字段。"""
+    parts = token.split(".")
+    return len(parts) >= 3 and any(part.lower() in _CONFIG_FILE_SUFFIXES for part in parts[1:-1])
+
+
+def _is_non_code_backtick_label(token: str) -> bool:
+    """排除文件名括号注释（errors.json(BUG-nnn)）与单模式枚举记法（project_migrate(full)）。"""
+    open_idx = token.find("(")
+    if open_idx <= 0 or not token.endswith(")"):
+        return False
+    callee = token[:open_idx]
+    arg_text = token[open_idx + 1 : -1].strip()
+    if "." in callee and callee.rsplit(".", 1)[-1].lower() in _NON_SYMBOL_SUFFIXES:
+        return True
+    if "." not in callee and arg_text and _SIMPLE_MODE_ARG_RE.fullmatch(arg_text):
+        return True
+    return False
+
+
 def validate_product_design_documents(project_root: str) -> tuple[bool, str]:
-    """拒绝产品文档中的高确定性内部实现定位，不误拦用户文件格式。"""
+    """拒绝产品文档中的高确定性内部实现定位，不误拦用户文件格式与示例。"""
     document_paths = get_linked_product_design_paths(project_root)
     failures: list[str] = []
     checked: list[str] = []
@@ -1013,7 +1038,21 @@ def validate_product_design_documents(project_root: str) -> tuple[bool, str]:
             continue
         checked.append(rel_path)
         content = _read_text(project_root, rel_path)
+        in_fenced_code = False
+        skip_overview_meta_section = False
+        is_overview = rel_path == artifact_paths_mod.PRODUCT_OVERVIEW_DOC
         for line_number, line in enumerate(content.splitlines(), start=1):
+            stripped = line.lstrip()
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                in_fenced_code = not in_fenced_code
+                continue
+            if in_fenced_code:
+                continue
+            if is_overview and re.match(r"^##\s+", stripped):
+                skip_overview_meta_section = bool(re.match(r"^##\s+[89]\.\s+", stripped))
+                continue
+            if skip_overview_meta_section:
+                continue
             findings: list[tuple[int, str, str]] = []
             for kind, pattern in patterns:
                 for match in pattern.finditer(line):
@@ -1023,6 +1062,10 @@ def validate_product_design_documents(project_root: str) -> tuple[bool, str]:
             seen: set[tuple[str, str]] = set()
             for _, kind, token in sorted(findings, key=lambda item: (item[0], item[1], item[2])):
                 if kind == "程序类或方法" and token.rsplit(".", 1)[-1].lower() in _NON_SYMBOL_SUFFIXES:
+                    continue
+                if kind == "数据库字段" and _is_config_file_field(token):
+                    continue
+                if kind == "程序函数调用" and _is_non_code_backtick_label(token):
                     continue
                 key = (kind, token)
                 if key in seen:
@@ -1070,10 +1113,11 @@ def _product_feature_records(project_root: str) -> tuple[list[str], list[tuple[s
     records: list[tuple[str, str]] = []
     if section is not None:
         for headers, rows in _markdown_tables(section):
-            if "功能" not in headers or "详细文档" not in headers:
+            doc_col = "详细文档" if "详细文档" in headers else ("详细功能文档" if "详细功能文档" in headers else None)
+            if "功能" not in headers or doc_col is None:
                 continue
             name_index = headers.index("功能")
-            document_index = headers.index("详细文档")
+            document_index = headers.index(doc_col)
             for row_number, row in enumerate(rows, start=1):
                 feature_name = row[name_index].strip()
                 links = _PRODUCT_FEATURE_LINK_RE.findall(row[document_index])

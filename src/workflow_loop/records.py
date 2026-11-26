@@ -2829,8 +2829,106 @@ def regenerate_workflow_indexes(project_root: str, workflow_id: str) -> list[str
     return results
 
 
+def _normalize_feature_doc_rel(path: str) -> str:
+    """将工作记录表或第 7 章表格中的功能文档路径统一规范化为 spec/功能_*.md。"""
+    cleaned = str(path or "").strip().split("#", 1)[0].replace("\\", "/")
+    if cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    if cleaned.startswith("功能_"):
+        cleaned = f"spec/{cleaned}"
+    return cleaned
+
+
+def _parse_overview_feature_table(section_body: str) -> tuple[list[str], list[tuple[str, str]], list[str]] | None:
+    """解析产品总说明第 7 章的第一张功能表；未找到表时返回 None。"""
+    from .artifact_validation import _PRODUCT_FEATURE_LINK_RE, _markdown_tables
+
+    for headers, rows in _markdown_tables(section_body):
+        doc_col = None
+        if "详细文档" in headers:
+            doc_col = "详细文档"
+        elif "详细功能文档" in headers:
+            doc_col = "详细功能文档"
+        if "功能" not in headers or doc_col is None:
+            continue
+        name_index = headers.index("功能")
+        doc_index = headers.index(doc_col)
+        entries: list[tuple[str, str]] = []
+        issues: list[str] = []
+        for row_number, row in enumerate(rows, start=1):
+            name = row[name_index].strip() if name_index < len(row) else ""
+            doc_cell = row[doc_index].strip() if doc_index < len(row) else ""
+            links = _PRODUCT_FEATURE_LINK_RE.findall(doc_cell)
+            if not name:
+                issues.append(f"产品总说明第 7 章功能表第 {row_number} 行缺少功能名称")
+                continue
+            if len(links) != 1:
+                issues.append(
+                    f"产品总说明第 7 章功能“{name}”必须链接 1 份 功能_*.md 文档，实际 {len(links)} 份"
+                )
+                continue
+            entries.append((name, _normalize_feature_doc_rel(links[0][1])))
+        return headers, entries, issues
+    return None
+
+
+def _check_preserved_feature_table_matches(
+    table: dict,
+    doc_entries: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """核对保留原排版的第 7 章功能表与 product_features 工作记录表是否完全一致。"""
+    problems: list[tuple[str, str]] = []
+    record_entries = [
+        (
+            str(row.get("功能名称", "")).strip(),
+            _normalize_feature_doc_rel(str(row.get("功能文档路径", ""))),
+        )
+        for row in table.get("功能", [])
+    ]
+    doc_by_name: dict[str, list[str]] = {}
+    for name, rel in doc_entries:
+        doc_by_name.setdefault(name, []).append(rel)
+    record_by_name: dict[str, list[str]] = {}
+    for name, rel in record_entries:
+        record_by_name.setdefault(name, []).append(rel)
+
+    dup_doc = sorted(name for name, rels in doc_by_name.items() if len(rels) > 1)
+    if dup_doc:
+        problems.append((CONTENT_CATEGORY, f"产品总说明第 7 章存在重复功能名称：{dup_doc}"))
+
+    missing_in_doc = [name for name in record_by_name if name not in doc_by_name]
+    extra_in_doc = [name for name in doc_by_name if name not in record_by_name]
+    if missing_in_doc:
+        problems.append(
+            (
+                CONTENT_CATEGORY,
+                f"产品总说明第 7 章缺少工作记录表已登记的功能：{missing_in_doc}；请保持第 7 章与 product_features 表一致",
+            )
+        )
+    if extra_in_doc:
+        problems.append(
+            (
+                CONTENT_CATEGORY,
+                f"产品总说明第 7 章包含工作记录表未登记的功能：{extra_in_doc}；请同步补入 product_features 表",
+            )
+        )
+    for name, rec_rels in record_by_name.items():
+        if name not in doc_by_name:
+            continue
+        doc_rel = doc_by_name[name][0]
+        rec_rel = rec_rels[0]
+        if doc_rel != rec_rel:
+            problems.append(
+                (
+                    CONTENT_CATEGORY,
+                    f"功能“{name}”的文档路径不一致：第 7 章为 {doc_rel}，工作记录表为 {rec_rel}",
+                )
+            )
+    return problems
+
+
 def _sync_product_features(project_root: str, workflow_id: str) -> tuple[list[tuple[str, str]], list[str]]:
-    """产品功能清单：校验表并把产品总说明的功能清单小节按表重写。"""
+    """产品功能清单：校验表并把产品总说明的功能清单小节按表重写或保留扩展列核对。"""
     relative = table_relative_path(project_root, workflow_id, "product_features", "")
     full = os.path.join(project_root, relative)
     problems: list[tuple[str, str]] = []
@@ -2848,21 +2946,47 @@ def _sync_product_features(project_root: str, workflow_id: str) -> tuple[list[tu
         problems.append((CONTENT_CATEGORY, f"{overview_rel} 不存在，无法写入功能清单"))
         return problems, documents
     content = open(overview_full, "r", encoding="utf-8").read()
-    block = generate_document("product_features", table, project_root=project_root)
     pattern = _FEATURES_SECTION_RE
-    if not pattern.search(content):
+    current_section = pattern.search(content)
+    if not current_section:
         problems.append((CONTENT_CATEGORY, f"{overview_rel} 缺少“## 7. 产品功能”章节，无法按表写入功能清单"))
         return problems, documents
+    current_block_hash = hashlib.sha256(
+        (current_section.group(0)).encode("utf-8")
+    ).hexdigest()
+
+    wf_state = state_mod.load_state(project_root)
+    keep_existing_spec = bool(
+        wf_state is not None
+        and wf_state.workflow_id == workflow_id
+        and wf_state.keep_existing_spec
+    )
+    parsed_existing = _parse_overview_feature_table(current_section.group(2))
+    standard_headers = {"功能", "一句话说明", "对应场景", "详细文档"}
+    preserve_custom_section = parsed_existing is not None and (
+        keep_existing_spec or set(parsed_existing[0]) != standard_headers
+    )
+    if preserve_custom_section:
+        assert parsed_existing is not None
+        _headers, doc_entries, table_issues = parsed_existing
+        for issue in table_issues:
+            problems.append((CONTENT_CATEGORY, issue))
+        problems.extend(_check_preserved_feature_table_matches(table, doc_entries))
+        if problems:
+            return problems, documents
+        table[DOC_HASH_KEY] = current_block_hash
+        table[GENERATED_DOC_PATH_KEY] = overview_rel
+        _atomic_write(full, table)
+        _save_generation_receipt(project_root, "product_features", table, {overview_rel: content})
+        return problems, documents
+
+    block = generate_document("product_features", table, project_root=project_root)
     new_content = pattern.sub(lambda match: match.group(1) + "\n" + block + "\n\n", content, count=1)
     # R19 第③项（修复轮）：记录与手改比对一律用"功能清单章节块"指纹。
     # 之前记录的是整文件哈希，产品总说明其他章节变化（修改记录追加、上下游文档更新）
     # 会让下次同步误报"文档被直接修改"。块级口径保证只对本节内容负责：
     # 当前块既不是上次生成的结果也不是本次要生成的结果 → 本节被手改，报告并保留；
     # 当前块等于上次登记 → 其他章节变化，正常重新写入本块。
-    current_section = pattern.search(content)
-    current_block_hash = hashlib.sha256(
-        (current_section.group(0)).encode("utf-8")
-    ).hexdigest()
     expected_hash = hashlib.sha256(
         (current_section.group(1) + "\n" + block + "\n\n").encode("utf-8")
     ).hexdigest()

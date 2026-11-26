@@ -16,6 +16,7 @@ from pathlib import PurePosixPath
 from . import artifact_paths as artifact_paths_mod
 from . import diagnostics as diagnostics_mod
 from . import project as project_mod
+from . import snapshots as snapshots_mod
 from . import state as state_mod
 from . import test_entry as test_entry_mod
 from . import verification as verification_mod
@@ -1481,6 +1482,7 @@ def list_actual_working_tree_changes(
     if candidates is None:
         return None, detail
     extra_suffixes = verification_mod.project_extra_code_suffixes(project_root)
+    build_sources = snapshots_mod.declared_build_source_dirs(project_root)
     _, test_entry_path = verification_mod._project_test_entry(project_root)
     managed_roots = {".workflow_loop", "spec", "acceptance", "qa", "impl", "bug"}
     selected: list[str] = []
@@ -1489,10 +1491,13 @@ def list_actual_working_tree_changes(
         normalized = path.strip().replace("\\", "/")
         if not normalized or normalized.split("/", 1)[0] in managed_roots:
             continue
+        if snapshots_mod.non_core_directory(PurePosixPath(normalized), build_sources):
+            continue
         if verification_mod.is_implementation_related_path(
             normalized,
             test_entry_path,
             extra_suffixes,
+            build_sources=build_sources,
         ):
             selected.append(normalized)
             continue
